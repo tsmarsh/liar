@@ -32,7 +32,8 @@ async fn given_expression(world: &mut LirWorld, expr: String) {
 async fn then_result_is(world: &mut LirWorld, expected: String) {
     if world.exit_code != 0 {
         // Non-zero exit = pending (not implemented)
-        cucumber::codegen::Pending::new("not implemented").pend();
+        // Use panic with special message that cucumber recognizes
+        panic!("PENDING: not implemented (exit code {})", world.exit_code);
     }
     assert_eq!(
         world.stdout, expected,
