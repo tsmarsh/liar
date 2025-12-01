@@ -6,7 +6,7 @@ use inkwell::builder::Builder;
 use inkwell::types::{BasicTypeEnum, IntType};
 use inkwell::values::BasicValueEnum;
 
-use lir_core::ast::{Expr, ScalarType, Type};
+use lir_core::ast::{Expr, FloatValue, ScalarType, Type};
 use lir_core::types::TypeChecker;
 use lir_core::error::TypeError;
 
@@ -138,6 +138,57 @@ impl<'ctx> CodeGen<'ctx> {
                 let lhs_val = self.compile_expr(lhs)?.into_int_value();
                 let rhs_val = self.compile_expr(rhs)?.into_int_value();
                 Ok(self.builder.build_int_unsigned_rem(lhs_val, rhs_val, "urem")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+
+            // Float literal
+            Expr::FloatLit { ty: scalar_ty, value } => {
+                let fval = match value {
+                    FloatValue::Number(n) => *n,
+                    FloatValue::Inf => f64::INFINITY,
+                    FloatValue::NegInf => f64::NEG_INFINITY,
+                    FloatValue::Nan => f64::NAN,
+                };
+                match scalar_ty {
+                    ScalarType::Float => {
+                        Ok(self.context.f32_type().const_float(fval).into())
+                    }
+                    ScalarType::Double => {
+                        Ok(self.context.f64_type().const_float(fval).into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("invalid float type".to_string())),
+                }
+            }
+
+            // Float arithmetic
+            Expr::FAdd(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_float_value();
+                let rhs_val = self.compile_expr(rhs)?.into_float_value();
+                Ok(self.builder.build_float_add(lhs_val, rhs_val, "fadd")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+            Expr::FSub(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_float_value();
+                let rhs_val = self.compile_expr(rhs)?.into_float_value();
+                Ok(self.builder.build_float_sub(lhs_val, rhs_val, "fsub")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+            Expr::FMul(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_float_value();
+                let rhs_val = self.compile_expr(rhs)?.into_float_value();
+                Ok(self.builder.build_float_mul(lhs_val, rhs_val, "fmul")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+            Expr::FDiv(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_float_value();
+                let rhs_val = self.compile_expr(rhs)?.into_float_value();
+                Ok(self.builder.build_float_div(lhs_val, rhs_val, "fdiv")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+            Expr::FRem(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_float_value();
+                let rhs_val = self.compile_expr(rhs)?.into_float_value();
+                Ok(self.builder.build_float_rem(lhs_val, rhs_val, "frem")
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
             }
 

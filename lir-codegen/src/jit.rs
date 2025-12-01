@@ -112,7 +112,7 @@ impl<'ctx> JitEngine<'ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lir_core::ast::ScalarType;
+    use lir_core::ast::{FloatValue, ScalarType};
 
     #[test]
     fn test_integer_literal() {
@@ -252,5 +252,148 @@ mod tests {
         let expr = Expr::IntLit { ty: ScalarType::I1, value: 1 };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
+    }
+
+    // Float tests
+
+    #[test]
+    fn test_double_literal() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.14) };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Double(3.14));
+    }
+
+    #[test]
+    fn test_float_literal() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FloatLit { ty: ScalarType::Float, value: FloatValue::Number(2.5) };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Float(2.5));
+    }
+
+    #[test]
+    fn test_fadd() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FAdd(
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(5.0) }),
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(6.0) }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Double(11.0));
+    }
+
+    #[test]
+    fn test_fsub() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FSub(
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(10.0) }),
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.0) }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Double(7.0));
+    }
+
+    #[test]
+    fn test_fmul() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FMul(
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(6.0) }),
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(7.0) }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Double(42.0));
+    }
+
+    #[test]
+    fn test_fdiv() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FDiv(
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(10.0) }),
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(4.0) }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Double(2.5));
+    }
+
+    #[test]
+    fn test_frem() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FRem(
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(10.0) }),
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.0) }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Double(1.0));
+    }
+
+    #[test]
+    fn test_float_inf() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Inf };
+        let result = jit.eval(&expr).unwrap();
+        match result {
+            Value::Double(v) => assert!(v.is_infinite() && v.is_sign_positive()),
+            _ => panic!("expected Double"),
+        }
+    }
+
+    #[test]
+    fn test_float_neg_inf() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::NegInf };
+        let result = jit.eval(&expr).unwrap();
+        match result {
+            Value::Double(v) => assert!(v.is_infinite() && v.is_sign_negative()),
+            _ => panic!("expected Double"),
+        }
+    }
+
+    #[test]
+    fn test_float_nan() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan };
+        let result = jit.eval(&expr).unwrap();
+        match result {
+            Value::Double(v) => assert!(v.is_nan()),
+            _ => panic!("expected Double"),
+        }
+    }
+
+    #[test]
+    fn test_fdiv_by_zero() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // Division by zero produces infinity in IEEE 754
+        let expr = Expr::FDiv(
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
+            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(0.0) }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        match result {
+            Value::Double(v) => assert!(v.is_infinite()),
+            _ => panic!("expected Double"),
+        }
     }
 }
