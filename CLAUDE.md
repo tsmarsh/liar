@@ -1,3 +1,137 @@
+# lIR (liar)
+
+An S-expression assembler for LLVM IR. Not a Lisp—just LLVM IR in parens.
+
+## Philosophy
+
+**Spec-first BDD development.** Feature files define the language specification. Tests have three states:
+- **Green**: Implemented correctly
+- **Yellow/Pending**: Not implemented yet (runtime exits non-zero)
+- **Red**: Implemented wrong (runtime gives wrong answer)
+
+The distinction between "not yet implemented" and "broken" is critical. A non-zero exit code from the runtime means WIP, not failure.
+
+## Core Design
+
+This is a 1:1 mapping to LLVM IR. No sugar, no promotion, no Lisp semantics. S-expressions are just the syntax.
+
+```lisp
+(fadd (double 5.0) (double 6.0))
+```
+
+Maps directly to:
+```llvm
+%0 = fadd double 5.0, 6.0
+```
+
+### Types
+
+Use LLVM's type names exactly:
+
+- **Integers:** `i1`, `i8`, `i16`, `i32`, `i64`
+- **Floats:** `float`, `double`
+- **Vectors:** `<4 x i32>`, `<2 x double>`, etc.
+
+No `bool`—use `i1`. No `f32`/`f64`—use `float`/`double`.
+
+```lisp
+(i1 1)        ; true
+(i1 0)        ; false
+(i32 42)
+(double 3.14)
+```
+
+### No Type Promotion
+
+Types must match exactly. This is an error:
+```lisp
+(add (i8 1) (i32 2))  ; ERROR: type mismatch
+```
+
+You must explicitly convert:
+```lisp
+(add (sext i32 (i8 1)) (i32 2))  ; OK
+```
+
+### Operations
+
+**Integer Arithmetic:**
+- `add`, `sub`, `mul`
+- `sdiv`, `udiv` (signed/unsigned division)
+- `srem`, `urem` (signed/unsigned remainder)
+
+**Float Arithmetic:**
+- `fadd`, `fsub`, `fmul`, `fdiv`, `frem`
+
+**Bitwise:**
+- `and`, `or`, `xor`
+- `shl` (shift left)
+- `lshr` (logical shift right)
+- `ashr` (arithmetic shift right)
+
+**Integer Comparison (icmp):**
+```lisp
+(icmp eq (i32 5) (i32 5))   ; => (i1 1)
+(icmp ne (i32 5) (i32 6))   ; => (i1 1)
+(icmp slt (i32 -1) (i32 1)) ; => (i1 1) signed less than
+(icmp ult (i32 -1) (i32 1)) ; => (i1 0) unsigned less than (-1 is MAX_UINT)
+```
+Predicates: `eq`, `ne`, `slt`, `sle`, `sgt`, `sge`, `ult`, `ule`, `ugt`, `uge`
+
+**Float Comparison (fcmp):**
+```lisp
+(fcmp oeq (double 1.0) (double 1.0))  ; => (i1 1) ordered equal
+(fcmp olt (double 1.0) (double 2.0))  ; => (i1 1) ordered less than
+(fcmp uno (double nan) (double 1.0))  ; => (i1 1) unordered (either is NaN)
+```
+Predicates: `oeq`, `one`, `olt`, `ole`, `ogt`, `oge`, `ord`, `uno`, `ueq`, `une`, `ult`, `ule`, `ugt`, `uge`
+
+**Conversions:**
+- `trunc` — truncate to smaller int
+- `zext` — zero extend to larger int
+- `sext` — sign extend to larger int
+- `fptrunc` — truncate to smaller float
+- `fpext` — extend to larger float
+- `fptoui` — float to unsigned int
+- `fptosi` — float to signed int
+- `uitofp` — unsigned int to float
+- `sitofp` — signed int to float
+
+**Select:**
+```lisp
+(select (icmp slt (i32 5) (i32 10)) (i32 1) (i32 2))  ; => (i32 1)
+```
+
+**Vectors:**
+- `extractelement`
+- `insertelement`
+- `shufflevector`
+
+## What This Is Not
+
+- No `if`/`then`/`else` — use `select`, or eventually `br`/`phi`/blocks
+- No implicit conversions
+- No `bool` type
+- No operator overloading (int `add` vs float `fadd`)
+- No `and`/`or` on booleans — use bitwise `and`/`or` on `i1`
+
+## Project Structure
+
+```
+lir/
+├── CLAUDE.md
+├── cert/
+│   └── features
+```
+
+Note: The current feature files need rewriting to match this spec. They were written with Lisp sugar (type promotion, `bool`, combined `add` for int/float, invented comparison ops). Delete them and start fresh.
+
+
+## Why
+
+We're building a real Lisp on top of this. lIR is the foundation—an assembler layer. The language above will have the sugar, the promotion rules, the ergonomics. This layer is just LLVM IR with S-expression syntax.
+
+
 # Moth Agent Guide
 
 This guide helps LLM agents work effectively with moth, a git-based file issue tracker.

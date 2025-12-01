@@ -1,0 +1,12 @@
+statuses:
+  - name: ready
+    dir: ready
+    prioritized: true
+  - name: doing
+    dir: doing
+  - name: done
+    dir: done
+
+default_severity: med
+id_length: 5
+no_edit: false
