@@ -703,4 +703,138 @@ mod tests {
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
     }
+
+    // Conversion tests
+
+    #[test]
+    fn test_trunc() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // i32 258 truncated to i8 = 2 (loses high bits)
+        let expr = Expr::Trunc {
+            ty: ScalarType::I8,
+            value: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 258 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I8(2));
+    }
+
+    #[test]
+    fn test_zext() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // i8 200 zero-extended to i32 = 200 (not sign extended to negative)
+        let expr = Expr::ZExt {
+            ty: ScalarType::I32,
+            value: Box::new(Expr::IntLit { ty: ScalarType::I8, value: 200_u8 as i128 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(200));
+    }
+
+    #[test]
+    fn test_sext() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // i8 -1 sign-extended to i32 = -1
+        let expr = Expr::SExt {
+            ty: ScalarType::I32,
+            value: Box::new(Expr::IntLit { ty: ScalarType::I8, value: -1 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(-1));
+    }
+
+    #[test]
+    fn test_fptrunc() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // double to float
+        let expr = Expr::FPTrunc {
+            ty: ScalarType::Float,
+            value: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.14) }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        match result {
+            Value::Float(v) => assert!((v - 3.14_f32).abs() < 0.001),
+            _ => panic!("expected Float"),
+        }
+    }
+
+    #[test]
+    fn test_fpext() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // float to double
+        let expr = Expr::FPExt {
+            ty: ScalarType::Double,
+            value: Box::new(Expr::FloatLit { ty: ScalarType::Float, value: FloatValue::Number(3.14) }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        match result {
+            Value::Double(v) => assert!((v - 3.14).abs() < 0.001),
+            _ => panic!("expected Double"),
+        }
+    }
+
+    #[test]
+    fn test_fptoui() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // double 42.7 to i32 = 42
+        let expr = Expr::FPToUI {
+            ty: ScalarType::I32,
+            value: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(42.7) }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(42));
+    }
+
+    #[test]
+    fn test_fptosi() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // double -42.7 to i32 = -42
+        let expr = Expr::FPToSI {
+            ty: ScalarType::I32,
+            value: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(-42.7) }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(-42));
+    }
+
+    #[test]
+    fn test_uitofp() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // i32 42 to double = 42.0
+        let expr = Expr::UIToFP {
+            ty: ScalarType::Double,
+            value: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 42 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Double(42.0));
+    }
+
+    #[test]
+    fn test_sitofp() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // i32 -42 to double = -42.0
+        let expr = Expr::SIToFP {
+            ty: ScalarType::Double,
+            value: Box::new(Expr::IntLit { ty: ScalarType::I32, value: -42 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Double(-42.0));
+    }
 }
