@@ -192,6 +192,44 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
             }
 
+            // Bitwise operations
+            Expr::And(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_int_value();
+                let rhs_val = self.compile_expr(rhs)?.into_int_value();
+                Ok(self.builder.build_and(lhs_val, rhs_val, "and")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+            Expr::Or(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_int_value();
+                let rhs_val = self.compile_expr(rhs)?.into_int_value();
+                Ok(self.builder.build_or(lhs_val, rhs_val, "or")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+            Expr::Xor(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_int_value();
+                let rhs_val = self.compile_expr(rhs)?.into_int_value();
+                Ok(self.builder.build_xor(lhs_val, rhs_val, "xor")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+            Expr::Shl(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_int_value();
+                let rhs_val = self.compile_expr(rhs)?.into_int_value();
+                Ok(self.builder.build_left_shift(lhs_val, rhs_val, "shl")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+            Expr::LShr(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_int_value();
+                let rhs_val = self.compile_expr(rhs)?.into_int_value();
+                Ok(self.builder.build_right_shift(lhs_val, rhs_val, false, "lshr")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+            Expr::AShr(lhs, rhs) => {
+                let lhs_val = self.compile_expr(lhs)?.into_int_value();
+                let rhs_val = self.compile_expr(rhs)?.into_int_value();
+                Ok(self.builder.build_right_shift(lhs_val, rhs_val, true, "ashr")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+
             // Not yet implemented
             _ => Err(CodeGenError::NotImplemented(format!("expression type not yet supported"))),
         }

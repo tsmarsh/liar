@@ -396,4 +396,147 @@ mod tests {
             _ => panic!("expected Double"),
         }
     }
+
+    // Bitwise tests
+
+    #[test]
+    fn test_and() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // 0b1100 & 0b1010 = 0b1000 = 8
+        let expr = Expr::And(
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1100 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1010 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(0b1000));
+    }
+
+    #[test]
+    fn test_or() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // 0b1100 | 0b1010 = 0b1110 = 14
+        let expr = Expr::Or(
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1100 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1010 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(0b1110));
+    }
+
+    #[test]
+    fn test_xor() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // 0b1100 ^ 0b1010 = 0b0110 = 6
+        let expr = Expr::Xor(
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1100 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1010 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(0b0110));
+    }
+
+    #[test]
+    fn test_shl() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // 1 << 4 = 16
+        let expr = Expr::Shl(
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 4 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(16));
+    }
+
+    #[test]
+    fn test_lshr() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // 16 >> 2 (logical) = 4
+        let expr = Expr::LShr(
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 16 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(4));
+    }
+
+    #[test]
+    fn test_ashr_positive() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // 16 >> 2 (arithmetic, positive) = 4
+        let expr = Expr::AShr(
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 16 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(4));
+    }
+
+    #[test]
+    fn test_ashr_negative() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // -8 >> 2 (arithmetic) = -2 (sign-extended)
+        let expr = Expr::AShr(
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: -8 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(-2));
+    }
+
+    #[test]
+    fn test_lshr_negative() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // -1 >> 1 (logical) = large positive (zero-extended)
+        // -1 in i32 is 0xFFFFFFFF, logical right shift by 1 = 0x7FFFFFFF = 2147483647
+        let expr = Expr::LShr(
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: -1 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(0x7FFFFFFF));
+    }
+
+    #[test]
+    fn test_i1_and() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // i1: 1 & 0 = 0
+        let expr = Expr::And(
+            Box::new(Expr::IntLit { ty: ScalarType::I1, value: 1 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I1, value: 0 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(false));
+    }
+
+    #[test]
+    fn test_i1_or() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // i1: 1 | 0 = 1
+        let expr = Expr::Or(
+            Box::new(Expr::IntLit { ty: ScalarType::I1, value: 1 }),
+            Box::new(Expr::IntLit { ty: ScalarType::I1, value: 0 }),
+        );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
 }
