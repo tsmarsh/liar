@@ -6,9 +6,10 @@ use inkwell::builder::Builder;
 use inkwell::types::{BasicTypeEnum, IntType};
 use inkwell::values::BasicValueEnum;
 
-use lir_core::ast::{Expr, FloatValue, ScalarType, Type};
+use lir_core::ast::{Expr, FloatValue, ICmpPred, FCmpPred, ScalarType, Type};
 use lir_core::types::TypeChecker;
 use lir_core::error::TypeError;
+use inkwell::{IntPredicate, FloatPredicate};
 
 use thiserror::Error;
 
@@ -227,6 +228,50 @@ impl<'ctx> CodeGen<'ctx> {
                 let lhs_val = self.compile_expr(lhs)?.into_int_value();
                 let rhs_val = self.compile_expr(rhs)?.into_int_value();
                 Ok(self.builder.build_right_shift(lhs_val, rhs_val, true, "ashr")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+
+            // Integer comparison
+            Expr::ICmp { pred, lhs, rhs } => {
+                let lhs_val = self.compile_expr(lhs)?.into_int_value();
+                let rhs_val = self.compile_expr(rhs)?.into_int_value();
+                let llvm_pred = match pred {
+                    ICmpPred::Eq => IntPredicate::EQ,
+                    ICmpPred::Ne => IntPredicate::NE,
+                    ICmpPred::Slt => IntPredicate::SLT,
+                    ICmpPred::Sle => IntPredicate::SLE,
+                    ICmpPred::Sgt => IntPredicate::SGT,
+                    ICmpPred::Sge => IntPredicate::SGE,
+                    ICmpPred::Ult => IntPredicate::ULT,
+                    ICmpPred::Ule => IntPredicate::ULE,
+                    ICmpPred::Ugt => IntPredicate::UGT,
+                    ICmpPred::Uge => IntPredicate::UGE,
+                };
+                Ok(self.builder.build_int_compare(llvm_pred, lhs_val, rhs_val, "icmp")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+
+            // Float comparison
+            Expr::FCmp { pred, lhs, rhs } => {
+                let lhs_val = self.compile_expr(lhs)?.into_float_value();
+                let rhs_val = self.compile_expr(rhs)?.into_float_value();
+                let llvm_pred = match pred {
+                    FCmpPred::Oeq => FloatPredicate::OEQ,
+                    FCmpPred::One => FloatPredicate::ONE,
+                    FCmpPred::Olt => FloatPredicate::OLT,
+                    FCmpPred::Ole => FloatPredicate::OLE,
+                    FCmpPred::Ogt => FloatPredicate::OGT,
+                    FCmpPred::Oge => FloatPredicate::OGE,
+                    FCmpPred::Ord => FloatPredicate::ORD,
+                    FCmpPred::Ueq => FloatPredicate::UEQ,
+                    FCmpPred::Une => FloatPredicate::UNE,
+                    FCmpPred::Ult => FloatPredicate::ULT,
+                    FCmpPred::Ule => FloatPredicate::ULE,
+                    FCmpPred::Ugt => FloatPredicate::UGT,
+                    FCmpPred::Uge => FloatPredicate::UGE,
+                    FCmpPred::Uno => FloatPredicate::UNO,
+                };
+                Ok(self.builder.build_float_compare(llvm_pred, lhs_val, rhs_val, "fcmp")
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
             }
 

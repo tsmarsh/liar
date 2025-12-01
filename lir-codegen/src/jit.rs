@@ -112,7 +112,7 @@ impl<'ctx> JitEngine<'ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lir_core::ast::{FloatValue, ScalarType};
+    use lir_core::ast::{FloatValue, ICmpPred, FCmpPred, ScalarType};
 
     #[test]
     fn test_integer_literal() {
@@ -536,6 +536,170 @@ mod tests {
             Box::new(Expr::IntLit { ty: ScalarType::I1, value: 1 }),
             Box::new(Expr::IntLit { ty: ScalarType::I1, value: 0 }),
         );
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
+
+    // ICmp tests
+
+    #[test]
+    fn test_icmp_eq() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::ICmp {
+            pred: ICmpPred::Eq,
+            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
+            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
+
+    #[test]
+    fn test_icmp_ne() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::ICmp {
+            pred: ICmpPred::Ne,
+            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
+            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 6 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
+
+    #[test]
+    fn test_icmp_slt() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // Signed: -1 < 1
+        let expr = Expr::ICmp {
+            pred: ICmpPred::Slt,
+            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: -1 }),
+            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
+
+    #[test]
+    fn test_icmp_ult() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // Unsigned: -1 (0xFFFFFFFF) > 1, so ult is false
+        let expr = Expr::ICmp {
+            pred: ICmpPred::Ult,
+            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: -1 }),
+            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(false));
+    }
+
+    #[test]
+    fn test_icmp_sge() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::ICmp {
+            pred: ICmpPred::Sge,
+            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
+            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
+
+    // FCmp tests
+
+    #[test]
+    fn test_fcmp_oeq() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FCmp {
+            pred: FCmpPred::Oeq,
+            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
+            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
+
+    #[test]
+    fn test_fcmp_olt() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        let expr = Expr::FCmp {
+            pred: FCmpPred::Olt,
+            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
+            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(2.0) }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
+
+    #[test]
+    fn test_fcmp_uno() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // uno is true if either is NaN
+        let expr = Expr::FCmp {
+            pred: FCmpPred::Uno,
+            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
+            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
+
+    #[test]
+    fn test_fcmp_ord() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // ord is true if neither is NaN
+        let expr = Expr::FCmp {
+            pred: FCmpPred::Ord,
+            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
+            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(2.0) }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(true));
+    }
+
+    #[test]
+    fn test_fcmp_oeq_nan() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // Ordered comparisons return false when NaN is involved
+        let expr = Expr::FCmp {
+            pred: FCmpPred::Oeq,
+            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
+            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I1(false));
+    }
+
+    #[test]
+    fn test_fcmp_ueq_nan() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // Unordered eq returns true if either is NaN
+        let expr = Expr::FCmp {
+            pred: FCmpPred::Ueq,
+            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
+            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
+        };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
     }
