@@ -83,10 +83,21 @@ A conforming backend must:
    - Type error
    - Runtime error (div by zero, etc.)
 
-## Tasks
+## Implementation Notes
 
-- [ ] Create `lir-test` crate with harness
-- [ ] Define `LirBackend` trait
-- [ ] Implement step definitions
-- [ ] Wire up cucumber runner
-- [ ] Test against stub backend that returns non-zero for everything (all pending)
+Created `cert/` crate with:
+
+1. **cert/Cargo.toml** - Cucumber dependencies
+2. **cert/src/lib.rs** - `LirBackend` trait and `execute()` function
+3. **cert/tests/features.rs** - Step definitions and runner
+
+Step definitions:
+- `given the expression X` - Evaluates X through backend
+- `then the result is Y` - Checks output (pending if non-zero exit)
+- `then it should error with "msg"` - Checks error message
+
+StubBackend provided for initial testing (all tests pending).
+
+To use with a real backend:
+1. Implement `LirBackend` trait
+2. Change `type Backend = StubBackend` to your backend
