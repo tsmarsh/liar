@@ -313,13 +313,14 @@ Output includes: commit info, story changes (created, moved, edited, deleted), a
 
 1. Check current issues: `moth ls`
 2. Find issue to work on or check current: `moth show`
-3. Start working: `moth start {id}`
+3. Let team mates know what you are working on by `moth start {id}`, and then commiting and pushing
+3. Start working
 
 ### During Development
 
 1. Make changes and commit frequently
-2. Prefix commits with issue ID: `[{id}] description`
-3. Keep issue content updated if requirements change
+2. Keep issue content updated if requirements change
+3. Commit code frequently. 
 
 ### Completing Work
 
@@ -333,6 +334,8 @@ When user requests new work:
 1. Create issue: `moth new "Title" -s {severity} --no-edit`
 2. Optionally start immediately with `--start` flag
 3. Update issue file with detailed requirements if needed
+
+IMPORTANT: Do not start work unless you know which moth it is associated with, and prompt to start a new moth if you believe the request is out of scope of the current moth.
 
 ### Checking Status
 

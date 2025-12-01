@@ -1,0 +1,10 @@
+[package]
+name = "lir-repl"
+version.workspace = true
+edition.workspace = true
+description = "Interactive REPL for lIR"
+
+[dependencies]
+lir-core = { path = "../lir-core" }
+lir-codegen = { path = "../lir-codegen" }
+rustyline = "13.0"

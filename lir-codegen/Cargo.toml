@@ -1,0 +1,10 @@
+[package]
+name = "lir-codegen"
+version.workspace = true
+edition.workspace = true
+description = "LLVM code generation and JIT execution for lIR"
+
+[dependencies]
+lir-core = { path = "../lir-core" }
+inkwell = { version = "0.7.0", features = ["llvm21-1"] }
+thiserror = "1.0"

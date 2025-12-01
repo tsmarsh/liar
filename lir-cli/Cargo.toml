@@ -1,0 +1,13 @@
+[package]
+name = "lir-cli"
+version.workspace = true
+edition.workspace = true
+description = "Command-line evaluator for lIR expressions"
+
+[[bin]]
+name = "lir"
+path = "src/main.rs"
+
+[dependencies]
+lir-core = { path = "../lir-core" }
+lir-codegen = { path = "../lir-codegen" }
