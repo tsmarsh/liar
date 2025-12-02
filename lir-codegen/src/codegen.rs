@@ -5,7 +5,8 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, VectorType as LLVMVectorType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, VectorValue as LLVMVectorValue,
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PhiValue,
+    VectorValue as LLVMVectorValue,
 };
 
 use inkwell::{FloatPredicate, IntPredicate};
@@ -29,6 +30,9 @@ pub enum CodeGenError {
 }
 
 pub type Result<T> = std::result::Result<T, CodeGenError>;
+
+/// Deferred phi incoming edges: (phi_node, [(block_label, value_expr), ...])
+type DeferredPhis<'ctx> = Vec<(PhiValue<'ctx>, Vec<(String, Box<Expr>)>)>;
 
 pub struct CodeGen<'ctx> {
     pub context: &'ctx Context,
@@ -232,13 +236,32 @@ impl<'ctx> CodeGen<'ctx> {
             locals.insert(param.name.clone(), param_value);
         }
 
-        // Compile each block
+        // Store deferred phi incoming edges
+        let mut deferred_phis: DeferredPhis<'ctx> = Vec::new();
+
+        // Compile each block (phi nodes will be created but edges deferred)
         for block in &func.blocks {
             let bb = block_map[&block.label];
             self.builder.position_at_end(bb);
 
             for expr in &block.instructions {
-                self.compile_expr_with_block_context(expr, &locals, &block_map)?;
+                self.compile_expr_with_deferred_phis(
+                    expr,
+                    &mut locals,
+                    &block_map,
+                    &mut deferred_phis,
+                )?;
+            }
+        }
+
+        // Resolve deferred phi incoming edges
+        for (phi, incoming) in &deferred_phis {
+            for (label, value_expr) in incoming {
+                let bb = block_map.get(label).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("undefined block in phi: {}", label))
+                })?;
+                let value = self.compile_expr_recursive(value_expr, &locals)?;
+                phi.add_incoming(&[(&value, *bb)]);
             }
         }
 
@@ -363,12 +386,14 @@ impl<'ctx> CodeGen<'ctx> {
         Ok(global_val)
     }
 
-    /// Compile expression with block context for branch targets
-    fn compile_expr_with_block_context(
+    /// Compile expression with deferred phi handling
+    /// Creates phi nodes but defers adding incoming edges until all locals are defined
+    fn compile_expr_with_deferred_phis(
         &self,
         expr: &Expr,
-        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+        locals: &mut HashMap<String, BasicValueEnum<'ctx>>,
         blocks: &HashMap<String, inkwell::basic_block::BasicBlock<'ctx>>,
+        deferred_phis: &mut DeferredPhis<'ctx>,
     ) -> Result<Option<BasicValueEnum<'ctx>>> {
         match expr {
             Expr::Br(target) => {
@@ -402,6 +427,7 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(None)
             }
 
+            // Phi - create the node but defer incoming edges
             Expr::Phi { ty, incoming } => {
                 let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
                     CodeGenError::CodeGen("cannot create phi for void type".to_string())
@@ -412,63 +438,52 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_phi(llvm_ty, "phi")
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
-                for (label, value_expr) in incoming {
-                    let bb = blocks.get(label).ok_or_else(|| {
-                        CodeGenError::CodeGen(format!("undefined block: {}", label))
-                    })?;
-                    let value = self.compile_expr_recursive(value_expr, locals)?;
-                    phi.add_incoming(&[(&value, *bb)]);
-                }
+                // Defer the incoming edges until all locals are defined
+                deferred_phis.push((phi, incoming.clone()));
 
                 Ok(Some(phi.as_basic_value()))
             }
 
             Expr::Call { name, args } => {
-                // Look up the function in the module
                 let function = self.module.get_function(name).ok_or_else(|| {
                     CodeGenError::CodeGen(format!("undefined function: {}", name))
                 })?;
 
-                // Compile arguments
                 let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
                 for arg in args {
                     let val = self.compile_expr_recursive(arg, locals)?;
                     compiled_args.push(val.into());
                 }
 
-                // Build the call
                 let call_site = self
                     .builder
                     .build_call(function, &compiled_args, "call")
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
-                // Return the result if non-void (Basic = value, Instruction = void)
                 Ok(call_site.try_as_basic_value().basic())
             }
 
-            // Let bindings - thread block context through for phi nodes
+            // Let bindings - thread through deferred_phis
             Expr::Let { bindings, body } => {
-                let mut new_locals = locals.clone();
-
-                // Evaluate each binding with block context
-                for (name, expr) in bindings {
+                // Evaluate each binding
+                for (name, bind_expr) in bindings {
                     if let Some(value) =
-                        self.compile_expr_with_block_context(expr, &new_locals, blocks)?
+                        self.compile_expr_with_deferred_phis(bind_expr, locals, blocks, deferred_phis)?
                     {
-                        new_locals.insert(name.clone(), value);
+                        locals.insert(name.clone(), value);
                     }
                 }
 
-                // Evaluate body expressions with block context, return last
+                // Evaluate body expressions
                 let mut result = None;
-                for expr in body {
-                    result = self.compile_expr_with_block_context(expr, &new_locals, blocks)?;
+                for body_expr in body {
+                    result = self.compile_expr_with_deferred_phis(body_expr, locals, blocks, deferred_phis)?;
                 }
 
                 Ok(result)
             }
 
-            // Alloca - needs to be handled here for functions
+            // Alloca
             Expr::Alloca { ty, count } => {
                 let llvm_ty = self.param_type_to_basic_type(ty).ok_or_else(|| {
                     CodeGenError::CodeGen(format!("invalid alloca type: {:?}", ty))
@@ -476,7 +491,7 @@ impl<'ctx> CodeGen<'ctx> {
 
                 let ptr = if let Some(count_expr) = count {
                     let count_val = self
-                        .compile_expr_with_block_context(count_expr, locals, blocks)?
+                        .compile_expr_with_deferred_phis(count_expr, locals, blocks, deferred_phis)?
                         .ok_or_else(|| CodeGenError::CodeGen("count must produce a value".into()))?
                         .into_int_value();
                     self.builder
@@ -491,10 +506,10 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(Some(ptr.into()))
             }
 
-            // Load - needs function context
+            // Load
             Expr::Load { ty, ptr } => {
                 let ptr_val = self
-                    .compile_expr_with_block_context(ptr, locals, blocks)?
+                    .compile_expr_with_deferred_phis(ptr, locals, blocks, deferred_phis)?
                     .ok_or_else(|| CodeGenError::CodeGen("load pointer must produce a value".into()))?
                     .into_pointer_value();
 
@@ -510,13 +525,13 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(Some(val))
             }
 
-            // Store - needs function context
+            // Store
             Expr::Store { value, ptr } => {
                 let val = self
-                    .compile_expr_with_block_context(value, locals, blocks)?
+                    .compile_expr_with_deferred_phis(value, locals, blocks, deferred_phis)?
                     .ok_or_else(|| CodeGenError::CodeGen("store value must produce a value".into()))?;
                 let ptr_val = self
-                    .compile_expr_with_block_context(ptr, locals, blocks)?
+                    .compile_expr_with_deferred_phis(ptr, locals, blocks, deferred_phis)?
                     .ok_or_else(|| CodeGenError::CodeGen("store pointer must produce a value".into()))?
                     .into_pointer_value();
 
@@ -527,12 +542,12 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(None)
             }
 
-            // Ret - needs function context
+            // Ret
             Expr::Ret(maybe_val) => {
                 match maybe_val {
                     Some(val_expr) => {
                         let val = self
-                            .compile_expr_with_block_context(val_expr, locals, blocks)?
+                            .compile_expr_with_deferred_phis(val_expr, locals, blocks, deferred_phis)?
                             .ok_or_else(|| {
                                 CodeGenError::CodeGen("ret value must produce a value".into())
                             })?;
