@@ -311,9 +311,9 @@ impl<'a> Parser<'a> {
 
     /// Parse alloca: (alloca type) or (alloca type count)
     fn parse_alloca(&mut self) -> Result<Expr, ParseError> {
-        // Parse the type to allocate
+        // Parse the type to allocate (supports ptr and scalars)
         let ty = match self.lexer.next_token_peeked()? {
-            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(Token::Ident(ref s)) => self.param_type_from_name(s)?,
             Some(tok) => {
                 return Err(ParseError::Expected {
                     expected: "type".to_string(),
@@ -334,9 +334,9 @@ impl<'a> Parser<'a> {
 
     /// Parse load: (load type ptr)
     fn parse_load(&mut self) -> Result<Expr, ParseError> {
-        // Parse the type to load
+        // Parse the type to load (supports ptr and scalars)
         let ty = match self.lexer.next_token_peeked()? {
-            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(Token::Ident(ref s)) => self.param_type_from_name(s)?,
             Some(tok) => {
                 return Err(ParseError::Expected {
                     expected: "type".to_string(),
@@ -1302,6 +1302,21 @@ impl<'a> Parser<'a> {
             "float" => Ok(ScalarType::Float),
             "double" => Ok(ScalarType::Double),
             "void" => Ok(ScalarType::Void),
+            _ => Err(ParseError::UnknownType(name.to_string())),
+        }
+    }
+
+    fn param_type_from_name(&self, name: &str) -> Result<ParamType, ParseError> {
+        match name {
+            "ptr" => Ok(ParamType::Ptr),
+            "i1" => Ok(ParamType::Scalar(ScalarType::I1)),
+            "i8" => Ok(ParamType::Scalar(ScalarType::I8)),
+            "i16" => Ok(ParamType::Scalar(ScalarType::I16)),
+            "i32" => Ok(ParamType::Scalar(ScalarType::I32)),
+            "i64" => Ok(ParamType::Scalar(ScalarType::I64)),
+            "float" => Ok(ParamType::Scalar(ScalarType::Float)),
+            "double" => Ok(ParamType::Scalar(ScalarType::Double)),
+            "void" => Ok(ParamType::Scalar(ScalarType::Void)),
             _ => Err(ParseError::UnknownType(name.to_string())),
         }
     }

@@ -120,6 +120,17 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    fn param_type_to_basic_type(&self, ty: &ParamType) -> Option<BasicTypeEnum<'ctx>> {
+        match ty {
+            ParamType::Scalar(s) => self.scalar_to_basic_type(s),
+            ParamType::Ptr => Some(
+                self.context
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .into(),
+            ),
+        }
+    }
+
     /// Compile a function definition
     pub fn compile_function(&self, func: &FunctionDef) -> Result<FunctionValue<'ctx>> {
         // Build parameter types
@@ -754,7 +765,7 @@ impl<'ctx> CodeGen<'ctx> {
 
             // Memory operations
             Expr::Alloca { ty, count } => {
-                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                let llvm_ty = self.param_type_to_basic_type(ty).ok_or_else(|| {
                     CodeGenError::CodeGen("cannot allocate void type".to_string())
                 })?;
                 let alloca = if let Some(count_expr) = count {
@@ -775,7 +786,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let ptr_val = self.compile_expr_recursive(ptr, locals)?;
                 let ptr_val = ptr_val.into_pointer_value();
                 let llvm_ty = self
-                    .scalar_to_basic_type(ty)
+                    .param_type_to_basic_type(ty)
                     .ok_or_else(|| CodeGenError::CodeGen("cannot load void type".to_string()))?;
                 let loaded = self
                     .builder

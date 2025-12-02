@@ -385,7 +385,10 @@ impl TypeChecker {
                     return Err(TypeError::LoadRequiresPointer);
                 }
                 // Load returns the specified type
-                Ok(Type::Scalar(ty.clone()))
+                match ty {
+                    ParamType::Scalar(s) => Ok(Type::Scalar(s.clone())),
+                    ParamType::Ptr => Ok(Type::Ptr),
+                }
             }
 
             Expr::Store { value, ptr } => {

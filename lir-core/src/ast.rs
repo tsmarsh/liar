@@ -366,11 +366,11 @@ pub enum Expr {
 
     // Memory operations
     Alloca {
-        ty: ScalarType,
+        ty: ParamType,
         count: Option<Box<Expr>>,
     },
     Load {
-        ty: ScalarType,
+        ty: ParamType,
         ptr: Box<Expr>,
     },
     Store {
