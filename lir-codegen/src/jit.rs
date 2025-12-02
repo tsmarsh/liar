@@ -837,4 +837,70 @@ mod tests {
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Double(-42.0));
     }
+
+    // Select tests
+
+    #[test]
+    fn test_select_true() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // select true 1 2 = 1
+        let expr = Expr::Select {
+            cond: Box::new(Expr::IntLit { ty: ScalarType::I1, value: 1 }),
+            true_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+            false_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(1));
+    }
+
+    #[test]
+    fn test_select_false() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // select false 1 2 = 2
+        let expr = Expr::Select {
+            cond: Box::new(Expr::IntLit { ty: ScalarType::I1, value: 0 }),
+            true_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+            false_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(2));
+    }
+
+    #[test]
+    fn test_select_with_icmp() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // select (icmp slt 5 10) 1 2 = 1
+        let expr = Expr::Select {
+            cond: Box::new(Expr::ICmp {
+                pred: ICmpPred::Slt,
+                lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
+                rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 10 }),
+            }),
+            true_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+            false_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(1));
+    }
+
+    #[test]
+    fn test_select_float() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // select true 3.14 2.71 = 3.14
+        let expr = Expr::Select {
+            cond: Box::new(Expr::IntLit { ty: ScalarType::I1, value: 1 }),
+            true_val: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.14) }),
+            false_val: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(2.71) }),
+        };
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::Double(3.14));
+    }
 }

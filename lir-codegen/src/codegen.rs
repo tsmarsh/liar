@@ -351,6 +351,15 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
             }
 
+            // Select
+            Expr::Select { cond, true_val, false_val } => {
+                let cond_val = self.compile_expr(cond)?.into_int_value();
+                let true_v = self.compile_expr(true_val)?;
+                let false_v = self.compile_expr(false_val)?;
+                Ok(self.builder.build_select(cond_val, true_v, false_v, "select")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+
             // Not yet implemented
             _ => Err(CodeGenError::NotImplemented(format!("expression type not yet supported"))),
         }
