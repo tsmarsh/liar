@@ -14,7 +14,6 @@ use lir_core::ast::{
     ICmpPred, ParamType, ReturnType, ScalarType, Type, VectorType,
 };
 use lir_core::error::TypeError;
-use lir_core::types::TypeChecker;
 use std::collections::HashMap;
 
 use thiserror::Error;
@@ -950,11 +949,10 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Compile expression to LLVM value
+    /// Note: Type checking should be done at a higher level (JIT's eval/eval_function)
+    /// before calling this. This allows function bodies to compile correctly since
+    /// the type checker needs function context for parameters.
     pub fn compile_expr(&self, expr: &Expr) -> Result<BasicValueEnum<'ctx>> {
-        // Type check first
-        let mut checker = TypeChecker::new();
-        let _ty = checker.check(expr)?;
-
         match expr {
             // Integer literal
             Expr::IntLit {
@@ -1876,12 +1874,9 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Create a JIT function that evaluates the expression and returns the result
-    pub fn create_eval_function(&self, expr: &Expr) -> Result<()> {
-        // Type check to get result type
-        let mut checker = TypeChecker::new();
-        let ty = checker.check(expr)?;
-
-        let fn_type = match &ty {
+    /// The type should be pre-computed by the caller via type checking.
+    pub fn create_eval_function(&self, expr: &Expr, ty: &Type) -> Result<()> {
+        let fn_type = match ty {
             Type::Scalar(ScalarType::Float) => self.context.f32_type().fn_type(&[], false),
             Type::Scalar(ScalarType::Double) => self.context.f64_type().fn_type(&[], false),
             Type::Scalar(s) => {

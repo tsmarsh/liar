@@ -262,7 +262,7 @@ impl<'ctx> JitEngine<'ctx> {
 
         // Create codegen and compile
         let codegen = CodeGen::new(self.context, "lir_eval");
-        codegen.create_eval_function(expr)?;
+        codegen.create_eval_function(expr, &ty)?;
 
         // Create execution engine
         let execution_engine = codegen
