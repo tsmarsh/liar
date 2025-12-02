@@ -453,6 +453,63 @@ impl TypeChecker {
                 // For now, assume i32 - this will be refined when we have a module context
                 Ok(Type::Scalar(ScalarType::I32))
             }
+
+            // Struct literal
+            Expr::StructLit(fields) => {
+                // Check all field types - each field is a valid expression
+                for field in fields {
+                    self.check(field)?;
+                }
+                // For now, return i32 as a placeholder. The actual type is determined
+                // by the context (extractvalue/insertvalue will look at the fields directly)
+                Ok(Type::Scalar(ScalarType::I32))
+            }
+
+            // Aggregate operations
+            Expr::ExtractValue { aggregate, indices } => {
+                // Check aggregate is valid
+                self.check(aggregate)?;
+
+                // For struct literals, we can determine the field type directly
+                if let Expr::StructLit(fields) = aggregate.as_ref() {
+                    if let Some(&idx) = indices.first() {
+                        if let Some(field) = fields.get(idx as usize) {
+                            return self.check(field);
+                        }
+                    }
+                }
+
+                // For insertvalue chains, recurse to find the innermost struct
+                if let Expr::InsertValue {
+                    aggregate: inner_agg,
+                    value,
+                    indices: insert_indices,
+                } = aggregate.as_ref()
+                {
+                    // If extracting from the field that was just inserted, return that field's type
+                    if indices == insert_indices {
+                        return self.check(value);
+                    }
+                    // Otherwise, recurse to the inner aggregate
+                    return self.check(&Expr::ExtractValue {
+                        aggregate: inner_agg.clone(),
+                        indices: indices.clone(),
+                    });
+                }
+
+                // Default fallback - return i32 as placeholder
+                Ok(Type::Scalar(ScalarType::I32))
+            }
+
+            Expr::InsertValue {
+                aggregate, value, ..
+            } => {
+                // Check both aggregate and value are valid
+                self.check(aggregate)?;
+                self.check(value)?;
+                // Returns the same type as the input aggregate
+                self.check(aggregate)
+            }
         }
     }
 }

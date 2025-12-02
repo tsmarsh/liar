@@ -112,6 +112,7 @@ impl<'a> Parser<'a> {
         match self.lexer.peek()? {
             Some(Token::LParen) => self.parse_sexpr(),
             Some(Token::LAngle) => self.parse_vector_literal(),
+            Some(Token::LBrace) => self.parse_struct_literal(),
             Some(Token::Ident(ref s)) if s.starts_with('%') => {
                 // Local variable reference
                 let name = s.clone();
@@ -244,6 +245,10 @@ impl<'a> Parser<'a> {
             "extractelement" => self.parse_extractelement(),
             "insertelement" => self.parse_insertelement(),
             "shufflevector" => self.parse_shufflevector(),
+
+            // Aggregate operations
+            "extractvalue" => self.parse_extractvalue(),
+            "insertvalue" => self.parse_insertvalue(),
 
             // Return instruction
             "ret" => self.parse_ret(),
@@ -394,6 +399,98 @@ impl<'a> Parser<'a> {
             ptr: Box::new(ptr),
             indices,
             inbounds,
+        })
+    }
+
+    /// Parse struct literal: { expr expr ... }
+    fn parse_struct_literal(&mut self) -> Result<Expr, ParseError> {
+        self.expect(Token::LBrace)?;
+        let mut fields = Vec::new();
+
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RBrace {
+                break;
+            }
+            fields.push(self.parse_expr()?);
+        }
+        self.expect(Token::RBrace)?;
+
+        Ok(Expr::StructLit(fields))
+    }
+
+    /// Parse extractvalue: (extractvalue aggregate index...)
+    fn parse_extractvalue(&mut self) -> Result<Expr, ParseError> {
+        let aggregate = self.parse_expr()?;
+
+        // Parse indices (integers)
+        let mut indices = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            match self.lexer.next_token_peeked()? {
+                Some(Token::Integer(n)) => {
+                    indices.push(n as u32);
+                }
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "index".to_string(),
+                        found: format!("{}", tok),
+                    })
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            }
+        }
+
+        if indices.is_empty() {
+            return Err(ParseError::Expected {
+                expected: "at least one index".to_string(),
+                found: ")".to_string(),
+            });
+        }
+
+        Ok(Expr::ExtractValue {
+            aggregate: Box::new(aggregate),
+            indices,
+        })
+    }
+
+    /// Parse insertvalue: (insertvalue aggregate value index...)
+    fn parse_insertvalue(&mut self) -> Result<Expr, ParseError> {
+        let aggregate = self.parse_expr()?;
+        let value = self.parse_expr()?;
+
+        // Parse indices (integers)
+        let mut indices = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            match self.lexer.next_token_peeked()? {
+                Some(Token::Integer(n)) => {
+                    indices.push(n as u32);
+                }
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "index".to_string(),
+                        found: format!("{}", tok),
+                    })
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            }
+        }
+
+        if indices.is_empty() {
+            return Err(ParseError::Expected {
+                expected: "at least one index".to_string(),
+                found: ")".to_string(),
+            });
+        }
+
+        Ok(Expr::InsertValue {
+            aggregate: Box::new(aggregate),
+            value: Box::new(value),
+            indices,
         })
     }
 

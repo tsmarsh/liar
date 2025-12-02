@@ -1524,6 +1524,65 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::Call { .. } => Err(CodeGenError::CodeGen(
                 "call requires function context".to_string(),
             )),
+
+            // Struct literal: { val1 val2 ... }
+            Expr::StructLit(fields) => {
+                // Compile all field values
+                let mut compiled_fields: Vec<BasicValueEnum<'ctx>> = Vec::new();
+                for field in fields {
+                    compiled_fields.push(self.compile_expr(field)?);
+                }
+
+                // Build a struct type based on the field types
+                let field_types: Vec<BasicTypeEnum<'ctx>> =
+                    compiled_fields.iter().map(|v| v.get_type()).collect();
+                let struct_type = self.context.struct_type(&field_types, false);
+
+                // Build struct value
+                let mut struct_val = struct_type.get_undef();
+                for (i, val) in compiled_fields.iter().enumerate() {
+                    struct_val = self
+                        .builder
+                        .build_insert_value(struct_val, *val, i as u32, "struct_field")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into_struct_value();
+                }
+                Ok(struct_val.into())
+            }
+
+            // Extract a value from a struct
+            Expr::ExtractValue { aggregate, indices } => {
+                let agg_val = self.compile_expr(aggregate)?.into_struct_value();
+                // For now, we only support single-level indices
+                let idx = indices.first().ok_or_else(|| {
+                    CodeGenError::CodeGen("extractvalue requires at least one index".to_string())
+                })?;
+                let result = self
+                    .builder
+                    .build_extract_value(agg_val, *idx, "extractvalue")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                Ok(result)
+            }
+
+            // Insert a value into a struct
+            Expr::InsertValue {
+                aggregate,
+                value,
+                indices,
+            } => {
+                let agg_val = self.compile_expr(aggregate)?.into_struct_value();
+                let val = self.compile_expr(value)?;
+                // For now, we only support single-level indices
+                let idx = indices.first().ok_or_else(|| {
+                    CodeGenError::CodeGen("insertvalue requires at least one index".to_string())
+                })?;
+                let result = self
+                    .builder
+                    .build_insert_value(agg_val, val, *idx, "insertvalue")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                // Convert AggregateValueEnum to BasicValueEnum
+                Ok(result.into_struct_value().into())
+            }
         }
     }
 
@@ -1634,6 +1693,8 @@ pub enum Value {
     VecI64(Vec<i64>),
     VecFloat(Vec<f32>),
     VecDouble(Vec<f64>),
+    // Struct type - stored as Vec of boxed Values
+    Struct(Vec<Value>),
 }
 
 impl PartialEq for Value {
@@ -1664,6 +1725,7 @@ impl PartialEq for Value {
                         .zip(b.iter())
                         .all(|(x, y)| x == y || (x.is_nan() && y.is_nan()))
             }
+            (Value::Struct(a), Value::Struct(b)) => a == b,
             _ => false,
         }
     }
@@ -1775,6 +1837,17 @@ impl std::fmt::Display for Value {
                     write!(f, " {}", format_double(*v))?;
                 }
                 write!(f, ")")
+            }
+            // Struct display: { val1 val2 ... }
+            Value::Struct(fields) => {
+                write!(f, "{{")?;
+                for (i, val) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, " {}", val)?;
+                }
+                write!(f, " }}")
             }
         }
     }

@@ -247,6 +247,20 @@ pub enum Expr {
     // String literal (null-terminated [N x i8] array)
     StringLit(String),
 
+    // Struct literal: { val1, val2, ... }
+    StructLit(Vec<Expr>),
+
+    // Aggregate operations
+    ExtractValue {
+        aggregate: Box<Expr>,
+        indices: Vec<u32>,
+    },
+    InsertValue {
+        aggregate: Box<Expr>,
+        value: Box<Expr>,
+        indices: Vec<u32>,
+    },
+
     // Integer arithmetic
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),

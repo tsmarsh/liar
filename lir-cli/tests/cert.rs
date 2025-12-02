@@ -67,6 +67,19 @@ async fn then_result_is_pointer(world: &mut LirWorld) {
     );
 }
 
+#[then(regex = r"^the result is (\{.+\})$")]
+async fn then_result_is_struct(world: &mut LirWorld, expected: String) {
+    if world.exit_code != 0 {
+        // Non-zero exit = pending (not implemented)
+        panic!("PENDING: not implemented (exit code {})", world.exit_code);
+    }
+    assert_eq!(
+        world.stdout, expected,
+        "Expected struct '{}' but got '{}'",
+        expected, world.stdout
+    );
+}
+
 #[then(regex = r"^the struct (\w+) is defined$")]
 async fn then_struct_is_defined(world: &mut LirWorld, name: String) {
     if world.exit_code != 0 {
