@@ -1,4 +1,21 @@
-# lIR (liar)
+# lIR + liar
+
+Two languages, one goal: a memory-safe Lisp without garbage collection.
+
+```
+liar source → liar compiler → lIR → LLVM IR → native
+```
+
+## The Two Layers
+
+| Layer | What it is | File |
+|-------|------------|------|
+| **lIR** | S-expression assembler for LLVM IR. 1:1 mapping, no sugar. | [CLAUDE.md](#lir) |
+| **liar** | Borrow-checked Lisp with closures, atoms, threading. User-facing. | [LIAR.md](LIAR.md) |
+
+---
+
+# lIR
 
 An S-expression assembler for LLVM IR. Not a Lisp—just LLVM IR in parens.
 
@@ -107,7 +124,7 @@ Predicates: `oeq`, `one`, `olt`, `ole`, `ogt`, `oge`, `ord`, `uno`, `ueq`, `une`
 - `insertelement`
 - `shufflevector`
 
-## What This Is Not
+## What lIR Is Not
 
 - No `if`/`then`/`else` — use `select`, or eventually `br`/`phi`/blocks
 - No implicit conversions
@@ -115,21 +132,26 @@ Predicates: `oeq`, `one`, `olt`, `ole`, `ogt`, `oge`, `ord`, `uno`, `ueq`, `une`
 - No operator overloading (int `add` vs float `fadd`)
 - No `and`/`or` on booleans — use bitwise `and`/`or` on `i1`
 
-## Project Structure
+---
 
-```
-lir/
-├── CLAUDE.md
-├── cert/
-│   └── features
-```
+# liar
 
-Note: The current feature files need rewriting to match this spec. They were written with Lisp sugar (type promotion, `bool`, combined `add` for int/float, invented comparison ops). Delete them and start fresh.
+See [LIAR.md](LIAR.md) for the full language definition.
 
+**Key concepts:**
 
-## Why
+| Concept | Summary |
+|---------|---------|
+| Immutability | Values immutable by default |
+| Mutation | `&` sigil for mutable references |
+| Ownership | Lexical scope |
+| Closures | Own their captured state |
+| Threading | `let` (single-threaded) vs `plet` (thread-safe with atoms) |
+| Async | Requires `plet` (continuation may resume on different thread) |
+| FFI | `unsafe` blocks, same ownership rules apply inside |
 
-We're building a real Lisp on top of this. lIR is the foundation—an assembler layer. The language above will have the sugar, the promotion rules, the ergonomics. This layer is just LLVM IR with S-expression syntax.
+**Design decisions:** See [docs/adr/](docs/adr/) for Architecture Decision Records.
+
 
 
 # Moth Agent Guide
