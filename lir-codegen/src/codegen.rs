@@ -446,6 +446,109 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(call_site.try_as_basic_value().basic())
             }
 
+            // Let bindings - thread block context through for phi nodes
+            Expr::Let { bindings, body } => {
+                let mut new_locals = locals.clone();
+
+                // Evaluate each binding with block context
+                for (name, expr) in bindings {
+                    if let Some(value) =
+                        self.compile_expr_with_block_context(expr, &new_locals, blocks)?
+                    {
+                        new_locals.insert(name.clone(), value);
+                    }
+                }
+
+                // Evaluate body expressions with block context, return last
+                let mut result = None;
+                for expr in body {
+                    result = self.compile_expr_with_block_context(expr, &new_locals, blocks)?;
+                }
+
+                Ok(result)
+            }
+
+            // Alloca - needs to be handled here for functions
+            Expr::Alloca { ty, count } => {
+                let llvm_ty = self.param_type_to_basic_type(ty).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("invalid alloca type: {:?}", ty))
+                })?;
+
+                let ptr = if let Some(count_expr) = count {
+                    let count_val = self
+                        .compile_expr_with_block_context(count_expr, locals, blocks)?
+                        .ok_or_else(|| CodeGenError::CodeGen("count must produce a value".into()))?
+                        .into_int_value();
+                    self.builder
+                        .build_array_alloca(llvm_ty, count_val, "alloca")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                } else {
+                    self.builder
+                        .build_alloca(llvm_ty, "alloca")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+
+                Ok(Some(ptr.into()))
+            }
+
+            // Load - needs function context
+            Expr::Load { ty, ptr } => {
+                let ptr_val = self
+                    .compile_expr_with_block_context(ptr, locals, blocks)?
+                    .ok_or_else(|| CodeGenError::CodeGen("load pointer must produce a value".into()))?
+                    .into_pointer_value();
+
+                let llvm_ty = self.param_type_to_basic_type(ty).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("invalid load type: {:?}", ty))
+                })?;
+
+                let val = self
+                    .builder
+                    .build_load(llvm_ty, ptr_val, "load")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(Some(val))
+            }
+
+            // Store - needs function context
+            Expr::Store { value, ptr } => {
+                let val = self
+                    .compile_expr_with_block_context(value, locals, blocks)?
+                    .ok_or_else(|| CodeGenError::CodeGen("store value must produce a value".into()))?;
+                let ptr_val = self
+                    .compile_expr_with_block_context(ptr, locals, blocks)?
+                    .ok_or_else(|| CodeGenError::CodeGen("store pointer must produce a value".into()))?
+                    .into_pointer_value();
+
+                self.builder
+                    .build_store(ptr_val, val)
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(None)
+            }
+
+            // Ret - needs function context
+            Expr::Ret(maybe_val) => {
+                match maybe_val {
+                    Some(val_expr) => {
+                        let val = self
+                            .compile_expr_with_block_context(val_expr, locals, blocks)?
+                            .ok_or_else(|| {
+                                CodeGenError::CodeGen("ret value must produce a value".into())
+                            })?;
+                        self.builder
+                            .build_return(Some(&val))
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                    }
+                    None => {
+                        self.builder
+                            .build_return(None)
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                    }
+                }
+                Ok(None)
+            }
+
             // Delegate to existing function for other expressions
             _ => self.compile_expr_with_locals(expr, locals),
         }
