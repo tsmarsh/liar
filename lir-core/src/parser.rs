@@ -8,6 +8,13 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
 }
 
+/// Result of parsing: either an expression or a function definition
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParseResult {
+    Expr(Expr),
+    Function(FunctionDef),
+}
+
 impl<'a> Parser<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
@@ -24,10 +31,69 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    /// Parse a top-level item: either an expression or a function definition
+    pub fn parse_item(&mut self) -> Result<ParseResult, ParseError> {
+        // Peek to see if this is a function definition
+        self.expect(Token::LParen)?;
+
+        let token = self.lexer.peek()?.ok_or(ParseError::UnexpectedEof)?.clone();
+
+        if let Token::Ident(ref name) = token {
+            if name == "define" {
+                self.lexer.next_token_peeked()?; // consume "define"
+                let func = self.parse_function_def()?;
+                self.expect(Token::RParen)?;
+                // Ensure we consumed all input
+                if self.lexer.peek()?.is_some() {
+                    return Err(ParseError::UnexpectedToken("trailing input".to_string()));
+                }
+                return Ok(ParseResult::Function(func));
+            }
+        }
+
+        // Not a function - parse as expression
+        // We already consumed LParen, so parse the form directly
+        let token = self
+            .lexer
+            .next_token_peeked()?
+            .ok_or(ParseError::UnexpectedEof)?;
+
+        let expr = match token {
+            Token::Ident(ref name) => self.parse_form(name)?,
+            _ => {
+                return Err(ParseError::Expected {
+                    expected: "identifier".to_string(),
+                    found: format!("{}", token),
+                })
+            }
+        };
+
+        self.expect(Token::RParen)?;
+
+        // Ensure we consumed all input
+        if self.lexer.peek()?.is_some() {
+            return Err(ParseError::UnexpectedToken("trailing input".to_string()));
+        }
+
+        Ok(ParseResult::Expr(expr))
+    }
+
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
         match self.lexer.peek()? {
             Some(Token::LParen) => self.parse_sexpr(),
             Some(Token::LAngle) => self.parse_vector_literal(),
+            Some(Token::Ident(ref s)) if s.starts_with('%') => {
+                // Local variable reference
+                let name = s.clone();
+                self.lexer.next_token_peeked()?; // consume the token
+                Ok(Expr::LocalRef(name[1..].to_string())) // strip the %
+            }
+            Some(Token::Ident(ref s)) => {
+                // Could be a bare parameter name (without %)
+                let name = s.clone();
+                self.lexer.next_token_peeked()?;
+                Ok(Expr::LocalRef(name))
+            }
             _ => Err(ParseError::Expected {
                 expected: "expression".to_string(),
                 found: format!("{:?}", self.lexer.peek()?),
@@ -145,8 +211,108 @@ impl<'a> Parser<'a> {
             "insertelement" => self.parse_insertelement(),
             "shufflevector" => self.parse_shufflevector(),
 
+            // Return instruction
+            "ret" => self.parse_ret(),
+
             _ => Err(ParseError::UnknownOperation(name.to_string())),
         }
+    }
+
+    /// Parse a return instruction: (ret) or (ret value)
+    fn parse_ret(&mut self) -> Result<Expr, ParseError> {
+        // Check if there's a value or just void return
+        match self.lexer.peek()? {
+            Some(Token::RParen) => {
+                // void return - don't consume the RParen, caller handles it
+                Ok(Expr::Ret(None))
+            }
+            _ => {
+                // return with value
+                let value = self.parse_expr()?;
+                Ok(Expr::Ret(Some(Box::new(value))))
+            }
+        }
+    }
+
+    /// Parse function definition body: (name return-type) (params...) body...
+    fn parse_function_def(&mut self) -> Result<FunctionDef, ParseError> {
+        // Parse (name return-type)
+        self.expect(Token::LParen)?;
+        let name = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => s,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "function name".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        let return_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "return type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+        self.expect(Token::RParen)?;
+
+        // Parse parameters: ((type name) ...)
+        self.expect(Token::LParen)?;
+        let mut params = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            // Parse (type name)
+            self.expect(Token::LParen)?;
+            let param_type = match self.lexer.next_token_peeked()? {
+                Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "parameter type".to_string(),
+                        found: format!("{}", tok),
+                    })
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            };
+            let param_name = match self.lexer.next_token_peeked()? {
+                Some(Token::Ident(s)) => s,
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "parameter name".to_string(),
+                        found: format!("{}", tok),
+                    })
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            };
+            self.expect(Token::RParen)?;
+            params.push(Param {
+                ty: param_type,
+                name: param_name,
+            });
+        }
+        self.expect(Token::RParen)?;
+
+        // Parse body expressions
+        let mut body = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            body.push(self.parse_expr()?);
+        }
+
+        Ok(FunctionDef {
+            name,
+            return_type,
+            params,
+            body,
+        })
     }
 
     fn parse_int_literal(&mut self, type_name: &str) -> Result<Expr, ParseError> {
@@ -441,6 +607,7 @@ impl<'a> Parser<'a> {
             "i64" => Ok(ScalarType::I64),
             "float" => Ok(ScalarType::Float),
             "double" => Ok(ScalarType::Double),
+            "void" => Ok(ScalarType::Void),
             _ => Err(ParseError::UnknownType(name.to_string())),
         }
     }

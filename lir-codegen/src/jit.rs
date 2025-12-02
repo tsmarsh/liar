@@ -4,7 +4,7 @@ use inkwell::context::Context;
 use inkwell::execution_engine::JitFunction;
 use inkwell::OptimizationLevel;
 
-use lir_core::ast::{Expr, ScalarType, Type, VectorType};
+use lir_core::ast::{Expr, FunctionDef, ScalarType, Type, VectorType};
 use lir_core::types::TypeChecker;
 
 use crate::codegen::{CodeGen, CodeGenError, Value};
@@ -30,6 +30,181 @@ pub struct JitEngine<'ctx> {
 impl<'ctx> JitEngine<'ctx> {
     pub fn new(context: &'ctx Context) -> Self {
         Self { context }
+    }
+
+    /// Compile and evaluate a function, calling it with the given arguments
+    pub fn eval_function(&self, func: &FunctionDef, args: &[Value]) -> Result<Value> {
+        // Type check the function
+        let checker = TypeChecker::new();
+        checker.check_function(func)?;
+
+        // Create codegen and compile
+        let codegen = CodeGen::new(self.context, "lir_func");
+        codegen.compile_function(func)?;
+
+        // Create execution engine
+        let execution_engine = codegen
+            .module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Call based on signature
+        self.call_function(&execution_engine, &func.name, &func.return_type, args)
+    }
+
+    /// Call a compiled function by name
+    fn call_function(
+        &self,
+        execution_engine: &inkwell::execution_engine::ExecutionEngine<'ctx>,
+        name: &str,
+        return_type: &ScalarType,
+        args: &[Value],
+    ) -> Result<Value> {
+        // For now, we support specific signatures. This is a simplified implementation.
+        match (return_type, args.len()) {
+            // No args
+            (ScalarType::I32, 0) => {
+                let func: JitFunction<I32Func> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let result = unsafe { func.call() };
+                Ok(Value::I32(result))
+            }
+            (ScalarType::I64, 0) => {
+                let func: JitFunction<I64Func> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let result = unsafe { func.call() };
+                Ok(Value::I64(result))
+            }
+            (ScalarType::I8, 0) => {
+                let func: JitFunction<I8Func> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let result = unsafe { func.call() };
+                Ok(Value::I8(result))
+            }
+            (ScalarType::I1, 0) => {
+                let func: JitFunction<I1Func> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let result = unsafe { func.call() };
+                Ok(Value::I1(result))
+            }
+            (ScalarType::Float, 0) => {
+                let func: JitFunction<FloatFunc> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let result = unsafe { func.call() };
+                Ok(Value::Float(result))
+            }
+            (ScalarType::Double, 0) => {
+                let func: JitFunction<DoubleFunc> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let result = unsafe { func.call() };
+                Ok(Value::Double(result))
+            }
+            (ScalarType::Void, 0) => {
+                type VoidFunc = unsafe extern "C" fn();
+                let func: JitFunction<VoidFunc> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                unsafe { func.call() };
+                Ok(Value::I32(0)) // Return 0 for void functions (success indicator)
+            }
+
+            // One i32 arg
+            (ScalarType::I32, 1) => {
+                type I32ToI32 = unsafe extern "C" fn(i32) -> i32;
+                let func: JitFunction<I32ToI32> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let arg = match args[0] {
+                    Value::I32(v) => v,
+                    _ => return Err(CodeGenError::CodeGen("expected i32 argument".to_string())),
+                };
+                let result = unsafe { func.call(arg) };
+                Ok(Value::I32(result))
+            }
+
+            (ScalarType::I1, 1) => {
+                type I32ToI1 = unsafe extern "C" fn(i32) -> bool;
+                let func: JitFunction<I32ToI1> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let arg = match args[0] {
+                    Value::I32(v) => v,
+                    _ => return Err(CodeGenError::CodeGen("expected i32 argument".to_string())),
+                };
+                let result = unsafe { func.call(arg) };
+                Ok(Value::I1(result))
+            }
+
+            // One double arg
+            (ScalarType::Double, 1) => {
+                type DoubleToDouble = unsafe extern "C" fn(f64) -> f64;
+                let func: JitFunction<DoubleToDouble> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let arg = match args[0] {
+                    Value::Double(v) => v,
+                    _ => {
+                        return Err(CodeGenError::CodeGen(
+                            "expected double argument".to_string(),
+                        ))
+                    }
+                };
+                let result = unsafe { func.call(arg) };
+                Ok(Value::Double(result))
+            }
+
+            // Two i32 args
+            (ScalarType::I32, 2) => {
+                type I32I32ToI32 = unsafe extern "C" fn(i32, i32) -> i32;
+                let func: JitFunction<I32I32ToI32> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let arg1 = match args[0] {
+                    Value::I32(v) => v,
+                    _ => return Err(CodeGenError::CodeGen("expected i32 argument".to_string())),
+                };
+                let arg2 = match args[1] {
+                    Value::I32(v) => v,
+                    _ => return Err(CodeGenError::CodeGen("expected i32 argument".to_string())),
+                };
+                let result = unsafe { func.call(arg1, arg2) };
+                Ok(Value::I32(result))
+            }
+
+            _ => Err(CodeGenError::CodeGen(format!(
+                "unsupported function signature: {:?}({} args)",
+                return_type,
+                args.len()
+            ))),
+        }
     }
 
     /// Evaluate an expression using JIT compilation
@@ -114,6 +289,9 @@ impl<'ctx> JitEngine<'ctx> {
                 Ok(Value::Double(result))
             }
             Type::Vector(vt) => self.eval_vector(&execution_engine, &vt),
+            Type::Scalar(ScalarType::Void) => Err(CodeGenError::CodeGen(
+                "cannot eval void expression".to_string(),
+            )),
         }
     }
 
@@ -182,6 +360,9 @@ impl<'ctx> JitEngine<'ctx> {
                 }
                 Ok(Value::VecDouble(buf))
             }
+            ScalarType::Void => Err(CodeGenError::CodeGen(
+                "cannot have void element type in vector".to_string(),
+            )),
         }
     }
 }
@@ -1282,5 +1463,149 @@ mod tests {
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Double(3.25));
+    }
+
+    // Function tests
+    use lir_core::ast::Param;
+
+    #[test]
+    fn test_function_no_params() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // (define (get-42 i32) () (ret (i32 42)))
+        let func = FunctionDef {
+            name: "get-42".to_string(),
+            return_type: ScalarType::I32,
+            params: vec![],
+            body: vec![Expr::Ret(Some(Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 42,
+            })))],
+        };
+
+        let result = jit.eval_function(&func, &[]).unwrap();
+        assert_eq!(result, Value::I32(42));
+    }
+
+    #[test]
+    fn test_function_one_param() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // (define (add-one i32) ((i32 x)) (ret (add x (i32 1))))
+        let func = FunctionDef {
+            name: "add-one".to_string(),
+            return_type: ScalarType::I32,
+            params: vec![Param {
+                ty: ScalarType::I32,
+                name: "x".to_string(),
+            }],
+            body: vec![Expr::Ret(Some(Box::new(Expr::Add(
+                Box::new(Expr::LocalRef("x".to_string())),
+                Box::new(Expr::IntLit {
+                    ty: ScalarType::I32,
+                    value: 1,
+                }),
+            ))))],
+        };
+
+        let result = jit.eval_function(&func, &[Value::I32(5)]).unwrap();
+        assert_eq!(result, Value::I32(6));
+    }
+
+    #[test]
+    fn test_function_two_params() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // (define (add-two i32) ((i32 a) (i32 b)) (ret (add a b)))
+        let func = FunctionDef {
+            name: "add-two".to_string(),
+            return_type: ScalarType::I32,
+            params: vec![
+                Param {
+                    ty: ScalarType::I32,
+                    name: "a".to_string(),
+                },
+                Param {
+                    ty: ScalarType::I32,
+                    name: "b".to_string(),
+                },
+            ],
+            body: vec![Expr::Ret(Some(Box::new(Expr::Add(
+                Box::new(Expr::LocalRef("a".to_string())),
+                Box::new(Expr::LocalRef("b".to_string())),
+            ))))],
+        };
+
+        let result = jit
+            .eval_function(&func, &[Value::I32(3), Value::I32(4)])
+            .unwrap();
+        assert_eq!(result, Value::I32(7));
+    }
+
+    #[test]
+    fn test_function_with_computation() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // (define (square i32) ((i32 x)) (ret (mul x x)))
+        let func = FunctionDef {
+            name: "square".to_string(),
+            return_type: ScalarType::I32,
+            params: vec![Param {
+                ty: ScalarType::I32,
+                name: "x".to_string(),
+            }],
+            body: vec![Expr::Ret(Some(Box::new(Expr::Mul(
+                Box::new(Expr::LocalRef("x".to_string())),
+                Box::new(Expr::LocalRef("x".to_string())),
+            ))))],
+        };
+
+        let result = jit.eval_function(&func, &[Value::I32(7)]).unwrap();
+        assert_eq!(result, Value::I32(49));
+    }
+
+    #[test]
+    fn test_function_with_icmp_select() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // (define (max i32) ((i32 a) (i32 b)) (ret (select (icmp sgt a b) a b)))
+        let func = FunctionDef {
+            name: "max".to_string(),
+            return_type: ScalarType::I32,
+            params: vec![
+                Param {
+                    ty: ScalarType::I32,
+                    name: "a".to_string(),
+                },
+                Param {
+                    ty: ScalarType::I32,
+                    name: "b".to_string(),
+                },
+            ],
+            body: vec![Expr::Ret(Some(Box::new(Expr::Select {
+                cond: Box::new(Expr::ICmp {
+                    pred: ICmpPred::Sgt,
+                    lhs: Box::new(Expr::LocalRef("a".to_string())),
+                    rhs: Box::new(Expr::LocalRef("b".to_string())),
+                }),
+                true_val: Box::new(Expr::LocalRef("a".to_string())),
+                false_val: Box::new(Expr::LocalRef("b".to_string())),
+            })))],
+        };
+
+        let result = jit
+            .eval_function(&func, &[Value::I32(10), Value::I32(20)])
+            .unwrap();
+        assert_eq!(result, Value::I32(20));
+
+        let result2 = jit
+            .eval_function(&func, &[Value::I32(30), Value::I32(5)])
+            .unwrap();
+        assert_eq!(result2, Value::I32(30));
     }
 }

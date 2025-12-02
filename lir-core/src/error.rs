@@ -85,6 +85,12 @@ pub enum TypeError {
 
     #[error("vector index must be i32")]
     VectorIndexMustBeI32,
+
+    #[error("undefined variable: {0}")]
+    UndefinedVariable(String),
+
+    #[error("ret outside function")]
+    RetOutsideFunction,
 }
 
 pub type Result<T> = std::result::Result<T, LirError>;

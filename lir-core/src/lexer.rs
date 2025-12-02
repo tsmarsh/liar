@@ -134,7 +134,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             '0'..='9' => self.read_number().map(Some),
-            'a'..='z' | 'A'..='Z' | '_' => {
+            'a'..='z' | 'A'..='Z' | '_' | '%' | '@' => {
                 let ident = self.read_ident();
                 match ident.as_str() {
                     "inf" => Ok(Some(Token::Inf)),
@@ -152,7 +152,8 @@ impl<'a> Lexer<'a> {
     fn read_ident(&mut self) -> String {
         let mut ident = String::new();
         while let Some(&c) = self.chars.peek() {
-            if c.is_alphanumeric() || c == '_' {
+            // Allow alphanumeric, underscore, hyphen, and @ (for function references)
+            if c.is_alphanumeric() || c == '_' || c == '-' || c == '@' {
                 ident.push(c);
                 self.chars.next();
             } else {

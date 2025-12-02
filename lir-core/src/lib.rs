@@ -10,5 +10,5 @@ pub mod types;
 
 pub use ast::*;
 pub use error::{LirError, ParseError, TypeError};
-pub use parser::Parser;
+pub use parser::{ParseResult, Parser};
 pub use types::TypeChecker;

@@ -10,6 +10,7 @@ pub enum ScalarType {
     I64,
     Float,
     Double,
+    Void, // For void return type
 }
 
 impl ScalarType {
@@ -24,6 +25,10 @@ impl ScalarType {
         matches!(self, Self::Float | Self::Double)
     }
 
+    pub fn is_void(&self) -> bool {
+        matches!(self, Self::Void)
+    }
+
     pub fn bit_width(&self) -> u32 {
         match self {
             Self::I1 => 1,
@@ -33,6 +38,7 @@ impl ScalarType {
             Self::I64 => 64,
             Self::Float => 32,
             Self::Double => 64,
+            Self::Void => 0,
         }
     }
 }
@@ -47,6 +53,7 @@ impl std::fmt::Display for ScalarType {
             Self::I64 => write!(f, "i64"),
             Self::Float => write!(f, "float"),
             Self::Double => write!(f, "double"),
+            Self::Void => write!(f, "void"),
         }
     }
 }
@@ -322,4 +329,32 @@ pub enum Expr {
         vec2: Box<Expr>,
         mask: Box<Expr>,
     },
+
+    // Local variable reference
+    LocalRef(String),
+
+    // Return instruction
+    Ret(Option<Box<Expr>>),
+}
+
+/// Function parameter
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub ty: ScalarType,
+    pub name: String,
+}
+
+/// Function definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionDef {
+    pub name: String,
+    pub return_type: ScalarType,
+    pub params: Vec<Param>,
+    pub body: Vec<Expr>,
+}
+
+/// Top-level module item
+#[derive(Debug, Clone, PartialEq)]
+pub enum Item {
+    Function(FunctionDef),
 }

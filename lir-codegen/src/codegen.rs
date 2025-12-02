@@ -3,13 +3,16 @@
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::{BasicTypeEnum, IntType, VectorType as LLVMVectorType};
-use inkwell::values::{BasicValueEnum, VectorValue as LLVMVectorValue};
+use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, VectorType as LLVMVectorType};
+use inkwell::values::{BasicValueEnum, FunctionValue, VectorValue as LLVMVectorValue};
 
 use inkwell::{FloatPredicate, IntPredicate};
-use lir_core::ast::{Expr, FCmpPred, FloatValue, ICmpPred, ScalarType, Type, VectorType};
+use lir_core::ast::{
+    Expr, FCmpPred, FloatValue, FunctionDef, ICmpPred, ScalarType, Type, VectorType,
+};
 use lir_core::error::TypeError;
 use lir_core::types::TypeChecker;
+use std::collections::HashMap;
 
 use thiserror::Error;
 
@@ -93,6 +96,422 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                 }
             }
+        }
+    }
+
+    /// Get LLVM type from ScalarType (for function signatures)
+    fn scalar_to_basic_type(&self, ty: &ScalarType) -> Option<BasicTypeEnum<'ctx>> {
+        match ty {
+            ScalarType::I1 => Some(self.context.bool_type().into()),
+            ScalarType::I8 => Some(self.context.i8_type().into()),
+            ScalarType::I16 => Some(self.context.i16_type().into()),
+            ScalarType::I32 => Some(self.context.i32_type().into()),
+            ScalarType::I64 => Some(self.context.i64_type().into()),
+            ScalarType::Float => Some(self.context.f32_type().into()),
+            ScalarType::Double => Some(self.context.f64_type().into()),
+            ScalarType::Void => None,
+        }
+    }
+
+    /// Compile a function definition
+    pub fn compile_function(&self, func: &FunctionDef) -> Result<FunctionValue<'ctx>> {
+        // Build parameter types
+        let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
+            .params
+            .iter()
+            .filter_map(|p| self.scalar_to_basic_type(&p.ty))
+            .map(|t| t.into())
+            .collect();
+
+        // Build function type
+        let fn_type = match &func.return_type {
+            ScalarType::Void => self.context.void_type().fn_type(&param_types, false),
+            ScalarType::I1 => self.context.bool_type().fn_type(&param_types, false),
+            ScalarType::I8 => self.context.i8_type().fn_type(&param_types, false),
+            ScalarType::I16 => self.context.i16_type().fn_type(&param_types, false),
+            ScalarType::I32 => self.context.i32_type().fn_type(&param_types, false),
+            ScalarType::I64 => self.context.i64_type().fn_type(&param_types, false),
+            ScalarType::Float => self.context.f32_type().fn_type(&param_types, false),
+            ScalarType::Double => self.context.f64_type().fn_type(&param_types, false),
+        };
+
+        // Create function
+        let function = self.module.add_function(&func.name, fn_type, None);
+
+        // Create entry block
+        let entry_block = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry_block);
+
+        // Build locals map from parameters
+        let mut locals: HashMap<String, BasicValueEnum<'ctx>> = HashMap::new();
+        for (i, param) in func.params.iter().enumerate() {
+            let param_value = function.get_nth_param(i as u32).unwrap();
+            locals.insert(param.name.clone(), param_value);
+        }
+
+        // Compile body expressions
+        for expr in &func.body {
+            self.compile_expr_with_locals(expr, &locals)?;
+        }
+
+        Ok(function)
+    }
+
+    /// Compile expression with local variable context
+    pub fn compile_expr_with_locals(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        match expr {
+            // Local variable reference
+            Expr::LocalRef(name) => {
+                let value = locals.get(name).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("undefined variable: {}", name))
+                })?;
+                Ok(Some(*value))
+            }
+
+            // Return instruction
+            Expr::Ret(value) => {
+                match value {
+                    Some(v) => {
+                        let val = self.compile_expr_with_locals(v, locals)?.ok_or_else(|| {
+                            CodeGenError::CodeGen("ret value has no result".to_string())
+                        })?;
+                        self.builder
+                            .build_return(Some(&val))
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                    }
+                    None => {
+                        self.builder
+                            .build_return(None)
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                    }
+                }
+                Ok(None) // ret doesn't produce a value
+            }
+
+            // For other expressions, delegate to the original compile_expr
+            // but we need to handle sub-expressions with locals
+            _ => {
+                let val = self.compile_expr_recursive(expr, locals)?;
+                Ok(Some(val))
+            }
+        }
+    }
+
+    /// Compile expression recursively with locals context
+    fn compile_expr_recursive(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        match expr {
+            // Local variable reference
+            Expr::LocalRef(name) => locals
+                .get(name)
+                .copied()
+                .ok_or_else(|| CodeGenError::CodeGen(format!("undefined variable: {}", name))),
+
+            // Delegate literals and operations
+            _ => self.compile_expr_inner(expr, locals),
+        }
+    }
+
+    /// Inner expression compilation with locals support
+    fn compile_expr_inner(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        match expr {
+            // Integer literal
+            Expr::IntLit {
+                ty: scalar_ty,
+                value,
+            } => {
+                let llvm_ty = self.int_type(scalar_ty);
+                let val = *value as u64;
+                Ok(llvm_ty
+                    .const_int(val, scalar_ty != &ScalarType::I1 && *value < 0)
+                    .into())
+            }
+
+            // Local variable reference
+            Expr::LocalRef(name) => locals
+                .get(name)
+                .copied()
+                .ok_or_else(|| CodeGenError::CodeGen(format!("undefined variable: {}", name))),
+
+            // Binary operations - recurse with locals
+            Expr::Add(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_add(l, r, "add")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_int_add(l, r, "vadd")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in add".to_string())),
+                }
+            }
+
+            Expr::Sub(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_sub(l, r, "sub")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_int_sub(l, r, "vsub")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in sub".to_string())),
+                }
+            }
+
+            Expr::Mul(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_mul(l, r, "mul")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_int_mul(l, r, "vmul")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in mul".to_string())),
+                }
+            }
+
+            Expr::SDiv(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_signed_div(l, r, "sdiv")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in sdiv".to_string())),
+                }
+            }
+
+            Expr::UDiv(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_unsigned_div(l, r, "udiv")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in udiv".to_string())),
+                }
+            }
+
+            Expr::SRem(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_signed_rem(l, r, "srem")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in srem".to_string())),
+                }
+            }
+
+            Expr::URem(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_unsigned_rem(l, r, "urem")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in urem".to_string())),
+                }
+            }
+
+            // Float literal
+            Expr::FloatLit {
+                ty: scalar_ty,
+                value,
+            } => {
+                let fval = match value {
+                    FloatValue::Number(n) => *n,
+                    FloatValue::Inf => f64::INFINITY,
+                    FloatValue::NegInf => f64::NEG_INFINITY,
+                    FloatValue::Nan => f64::NAN,
+                };
+                match scalar_ty {
+                    ScalarType::Float => Ok(self.context.f32_type().const_float(fval).into()),
+                    ScalarType::Double => Ok(self.context.f64_type().const_float(fval).into()),
+                    _ => Err(CodeGenError::CodeGen("invalid float type".to_string())),
+                }
+            }
+
+            // Float arithmetic
+            Expr::FAdd(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_add(l, r, "fadd")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fadd".to_string())),
+                }
+            }
+
+            Expr::FSub(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_sub(l, r, "fsub")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fsub".to_string())),
+                }
+            }
+
+            Expr::FMul(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_mul(l, r, "fmul")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fmul".to_string())),
+                }
+            }
+
+            Expr::FDiv(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_div(l, r, "fdiv")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fdiv".to_string())),
+                }
+            }
+
+            Expr::FRem(lhs, rhs) => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_rem(l, r, "frem")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in frem".to_string())),
+                }
+            }
+
+            // Comparisons
+            Expr::ICmp { pred, lhs, rhs } => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                let llvm_pred = match pred {
+                    ICmpPred::Eq => IntPredicate::EQ,
+                    ICmpPred::Ne => IntPredicate::NE,
+                    ICmpPred::Slt => IntPredicate::SLT,
+                    ICmpPred::Sle => IntPredicate::SLE,
+                    ICmpPred::Sgt => IntPredicate::SGT,
+                    ICmpPred::Sge => IntPredicate::SGE,
+                    ICmpPred::Ult => IntPredicate::ULT,
+                    ICmpPred::Ule => IntPredicate::ULE,
+                    ICmpPred::Ugt => IntPredicate::UGT,
+                    ICmpPred::Uge => IntPredicate::UGE,
+                };
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_compare(llvm_pred, l, r, "icmp")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in icmp".to_string())),
+                }
+            }
+
+            Expr::FCmp { pred, lhs, rhs } => {
+                let lhs_val = self.compile_expr_recursive(lhs, locals)?;
+                let rhs_val = self.compile_expr_recursive(rhs, locals)?;
+                let llvm_pred = match pred {
+                    FCmpPred::Oeq => FloatPredicate::OEQ,
+                    FCmpPred::One => FloatPredicate::ONE,
+                    FCmpPred::Olt => FloatPredicate::OLT,
+                    FCmpPred::Ole => FloatPredicate::OLE,
+                    FCmpPred::Ogt => FloatPredicate::OGT,
+                    FCmpPred::Oge => FloatPredicate::OGE,
+                    FCmpPred::Ord => FloatPredicate::ORD,
+                    FCmpPred::Ueq => FloatPredicate::UEQ,
+                    FCmpPred::Une => FloatPredicate::UNE,
+                    FCmpPred::Ult => FloatPredicate::ULT,
+                    FCmpPred::Ule => FloatPredicate::ULE,
+                    FCmpPred::Ugt => FloatPredicate::UGT,
+                    FCmpPred::Uge => FloatPredicate::UGE,
+                    FCmpPred::Uno => FloatPredicate::UNO,
+                };
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_compare(llvm_pred, l, r, "fcmp")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fcmp".to_string())),
+                }
+            }
+
+            // Select
+            Expr::Select {
+                cond,
+                true_val,
+                false_val,
+            } => {
+                let cond_val = self.compile_expr_recursive(cond, locals)?.into_int_value();
+                let true_v = self.compile_expr_recursive(true_val, locals)?;
+                let false_v = self.compile_expr_recursive(false_val, locals)?;
+                Ok(self
+                    .builder
+                    .build_select(cond_val, true_v, false_v, "select")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?)
+            }
+
+            // Ret - handled at higher level
+            Expr::Ret(_) => Err(CodeGenError::CodeGen(
+                "ret should be handled at statement level".to_string(),
+            )),
+
+            // For any other expressions, fall back to compile_expr
+            _ => self.compile_expr(expr),
         }
     }
 
@@ -660,6 +1079,14 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                     .into())
             }
+
+            // These are handled at function level, not expression level
+            Expr::LocalRef(_) => Err(CodeGenError::CodeGen(
+                "local references require function context".to_string(),
+            )),
+            Expr::Ret(_) => Err(CodeGenError::CodeGen(
+                "ret requires function context".to_string(),
+            )),
         }
     }
 

@@ -2,12 +2,44 @@
 
 use crate::ast::*;
 use crate::error::TypeError;
+use std::collections::HashMap;
 
-pub struct TypeChecker;
+pub struct TypeChecker {
+    /// Types of local variables in scope
+    locals: HashMap<String, Type>,
+    /// Expected return type of the current function
+    return_type: Option<ScalarType>,
+}
 
 impl TypeChecker {
     pub fn new() -> Self {
-        Self
+        Self {
+            locals: HashMap::new(),
+            return_type: None,
+        }
+    }
+
+    /// Create a type checker with function context
+    pub fn with_function(params: &[Param], return_type: ScalarType) -> Self {
+        let mut locals = HashMap::new();
+        for param in params {
+            locals.insert(param.name.clone(), Type::Scalar(param.ty.clone()));
+        }
+        Self {
+            locals,
+            return_type: Some(return_type),
+        }
+    }
+
+    /// Check a function definition
+    pub fn check_function(&self, func: &FunctionDef) -> Result<(), TypeError> {
+        let checker = TypeChecker::with_function(&func.params, func.return_type.clone());
+
+        for expr in &func.body {
+            checker.check(expr)?;
+        }
+
+        Ok(())
     }
 
     /// Check an expression and return its result type
@@ -295,6 +327,35 @@ impl TypeChecker {
                         }))
                     }
                     _ => Err(TypeError::TypeMismatch),
+                }
+            }
+
+            // Local variable reference
+            Expr::LocalRef(name) => self
+                .locals
+                .get(name)
+                .cloned()
+                .ok_or(TypeError::UndefinedVariable(name.clone())),
+
+            // Return instruction
+            Expr::Ret(value) => {
+                if let Some(ref ret_ty) = self.return_type {
+                    match (ret_ty, value) {
+                        (ScalarType::Void, None) => Ok(Type::Scalar(ScalarType::Void)),
+                        (ScalarType::Void, Some(_)) => Err(TypeError::TypeMismatch),
+                        (_, None) => Err(TypeError::TypeMismatch),
+                        (ty, Some(v)) => {
+                            let value_ty = self.check(v)?;
+                            if value_ty == Type::Scalar(ty.clone()) {
+                                Ok(Type::Scalar(ScalarType::Void)) // ret itself is void
+                            } else {
+                                Err(TypeError::TypeMismatch)
+                            }
+                        }
+                    }
+                } else {
+                    // No function context - ret not valid
+                    Err(TypeError::RetOutsideFunction)
                 }
             }
         }
