@@ -8,13 +8,14 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
 }
 
-/// Result of parsing: either an expression, function definition, extern declaration, or global
+/// Result of parsing: either an expression, function definition, extern declaration, global, or struct
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseResult {
     Expr(Expr),
     Function(FunctionDef),
     ExternDecl(ExternDecl),
     Global(GlobalDef),
+    Struct(StructDef),
 }
 
 impl<'a> Parser<'a> {
@@ -68,6 +69,15 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::UnexpectedToken("trailing input".to_string()));
                 }
                 return Ok(ParseResult::Global(global));
+            } else if name == "defstruct" {
+                self.lexer.next_token_peeked()?; // consume "defstruct"
+                let struct_def = self.parse_struct_def()?;
+                self.expect(Token::RParen)?;
+                // Ensure we consumed all input
+                if self.lexer.peek()?.is_some() {
+                    return Err(ParseError::UnexpectedToken("trailing input".to_string()));
+                }
+                return Ok(ParseResult::Struct(struct_def));
             }
         }
 
@@ -669,6 +679,52 @@ impl<'a> Parser<'a> {
             param_types,
             varargs,
         })
+    }
+
+    /// Parse struct definition: name (field-types...)
+    /// (defstruct point (double double))
+    /// (defstruct person (ptr i32 double))
+    fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {
+        // Parse name
+        let name = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => s,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "struct name".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse field types: (type type ...)
+        self.expect(Token::LParen)?;
+        let mut fields = Vec::new();
+
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            match self.lexer.next_token_peeked()? {
+                Some(Token::Ident(ref s)) if s == "ptr" => {
+                    fields.push(ParamType::Ptr);
+                }
+                Some(Token::Ident(ref s)) => {
+                    let ty = self.type_from_name(s)?;
+                    fields.push(ParamType::Scalar(ty));
+                }
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "field type".to_string(),
+                        found: format!("{}", tok),
+                    })
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            }
+        }
+        self.expect(Token::RParen)?;
+
+        Ok(StructDef { name, fields })
     }
 
     /// Parse global definition: name type initializer [:constant]
@@ -1297,6 +1353,39 @@ mod tests {
                 assert!(inbounds);
             }
             _ => panic!("expected GetElementPtr"),
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_def() {
+        let result = Parser::new("(defstruct point (double double))")
+            .parse_item()
+            .unwrap();
+        match result {
+            ParseResult::Struct(def) => {
+                assert_eq!(def.name, "point");
+                assert_eq!(def.fields.len(), 2);
+                assert_eq!(def.fields[0], ParamType::Scalar(ScalarType::Double));
+                assert_eq!(def.fields[1], ParamType::Scalar(ScalarType::Double));
+            }
+            _ => panic!("expected Struct"),
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_def_mixed_types() {
+        let result = Parser::new("(defstruct person (ptr i32 double))")
+            .parse_item()
+            .unwrap();
+        match result {
+            ParseResult::Struct(def) => {
+                assert_eq!(def.name, "person");
+                assert_eq!(def.fields.len(), 3);
+                assert_eq!(def.fields[0], ParamType::Ptr);
+                assert_eq!(def.fields[1], ParamType::Scalar(ScalarType::I32));
+                assert_eq!(def.fields[2], ParamType::Scalar(ScalarType::Double));
+            }
+            _ => panic!("expected Struct"),
         }
     }
 }

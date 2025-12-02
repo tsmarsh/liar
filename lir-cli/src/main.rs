@@ -5,29 +5,50 @@
 
 use inkwell::context::Context;
 use lir_codegen::JitEngine;
-use lir_core::{parser::Parser, types::TypeChecker};
+use lir_core::{
+    parser::{ParseResult, Parser},
+    types::TypeChecker,
+};
 use std::env;
 use std::io::{self, Read};
 
 fn eval(input: &str) -> Result<String, String> {
-    // Parse
+    // Parse as item (handles expressions, functions, structs, etc.)
     let mut parser = Parser::new(input);
-    let expr = parser.parse().map_err(|e| format!("parse error: {}", e))?;
+    let result = parser
+        .parse_item()
+        .map_err(|e| format!("parse error: {}", e))?;
 
-    // Type check
-    let checker = TypeChecker::new();
-    checker
-        .check(&expr)
-        .map_err(|e| format!("type error: {}", e))?;
+    match result {
+        ParseResult::Expr(expr) => {
+            // Type check
+            let checker = TypeChecker::new();
+            checker
+                .check(&expr)
+                .map_err(|e| format!("type error: {}", e))?;
 
-    // JIT execute
-    let context = Context::create();
-    let jit = JitEngine::new(&context);
-    let value = jit
-        .eval(&expr)
-        .map_err(|e| format!("evaluation error: {}", e))?;
+            // JIT execute
+            let context = Context::create();
+            let jit = JitEngine::new(&context);
+            let value = jit
+                .eval(&expr)
+                .map_err(|e| format!("evaluation error: {}", e))?;
 
-    Ok(format!("{}", value))
+            Ok(format!("{}", value))
+        }
+        ParseResult::Struct(def) => {
+            // For struct definitions, just output the LLVM IR type representation
+            let fields: Vec<String> = def.fields.iter().map(|f| format!("{}", f)).collect();
+            Ok(format!("%{} = type {{ {} }}", def.name, fields.join(", ")))
+        }
+        ParseResult::Function(_) => {
+            Err("function definitions not yet supported in CLI".to_string())
+        }
+        ParseResult::ExternDecl(_) => {
+            Err("extern declarations not yet supported in CLI".to_string())
+        }
+        ParseResult::Global(_) => Err("global definitions not yet supported in CLI".to_string()),
+    }
 }
 
 fn main() {

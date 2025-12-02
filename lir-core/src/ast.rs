@@ -470,10 +470,18 @@ pub struct GlobalDef {
     pub is_constant: bool, // true for constant (immutable), false for global (mutable)
 }
 
+/// Struct type definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<ParamType>, // Field types (can be scalar or ptr)
+}
+
 /// Top-level module item
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Function(FunctionDef),
     ExternDecl(ExternDecl),
     Global(GlobalDef),
+    Struct(StructDef),
 }
