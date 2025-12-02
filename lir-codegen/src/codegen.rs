@@ -228,52 +228,57 @@ impl<'ctx> CodeGen<'ctx> {
 
     /// Compile a global variable definition
     pub fn compile_global(&self, global: &GlobalDef) -> Result<inkwell::values::GlobalValue<'ctx>> {
-        // Get the LLVM type for the global
-        let global_type = match &global.ty {
-            ParamType::Scalar(s) => self.scalar_to_basic_type(s).ok_or_else(|| {
-                CodeGenError::CodeGen("void type not allowed for global".to_string())
-            })?,
-            ParamType::Ptr => self
-                .context
-                .ptr_type(inkwell::AddressSpace::default())
-                .into(),
-        };
-
         // Compile the initializer to get a constant value
         // For now, we only support simple literal initializers
-        let initializer: BasicValueEnum<'ctx> = match &global.initializer {
-            Expr::IntLit { ty, value } => {
-                let int_type = self.int_type(ty);
-                int_type.const_int(*value as u64, *value < 0).into()
-            }
-            Expr::FloatLit { ty, value } => {
-                let float_val = match value {
-                    FloatValue::Number(n) => *n,
-                    FloatValue::Inf => f64::INFINITY,
-                    FloatValue::NegInf => f64::NEG_INFINITY,
-                    FloatValue::Nan => f64::NAN,
-                };
-                match ty {
-                    ScalarType::Float => self.context.f32_type().const_float(float_val).into(),
-                    ScalarType::Double => self.context.f64_type().const_float(float_val).into(),
-                    _ => {
-                        return Err(CodeGenError::CodeGen(
-                            "invalid float type for global".to_string(),
-                        ))
+        let (global_type, initializer): (BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>) =
+            match &global.initializer {
+                Expr::IntLit { ty, value } => {
+                    let int_type = self.int_type(ty);
+                    (
+                        int_type.into(),
+                        int_type.const_int(*value as u64, *value < 0).into(),
+                    )
+                }
+                Expr::FloatLit { ty, value } => {
+                    let float_val = match value {
+                        FloatValue::Number(n) => *n,
+                        FloatValue::Inf => f64::INFINITY,
+                        FloatValue::NegInf => f64::NEG_INFINITY,
+                        FloatValue::Nan => f64::NAN,
+                    };
+                    match ty {
+                        ScalarType::Float => (
+                            self.context.f32_type().into(),
+                            self.context.f32_type().const_float(float_val).into(),
+                        ),
+                        ScalarType::Double => (
+                            self.context.f64_type().into(),
+                            self.context.f64_type().const_float(float_val).into(),
+                        ),
+                        _ => {
+                            return Err(CodeGenError::CodeGen(
+                                "invalid float type for global".to_string(),
+                            ))
+                        }
                     }
                 }
-            }
-            Expr::NullPtr => self
-                .context
-                .ptr_type(inkwell::AddressSpace::default())
-                .const_null()
-                .into(),
-            _ => {
-                return Err(CodeGenError::NotImplemented(
-                    "complex global initializers".to_string(),
-                ))
-            }
-        };
+                Expr::NullPtr => {
+                    let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                    (ptr_type.into(), ptr_type.const_null().into())
+                }
+                Expr::StringLit(s) => {
+                    // String literal becomes a constant [N x i8] array
+                    // Use context.const_string which handles the array creation
+                    let const_array = self.context.const_string(s.as_bytes(), true);
+                    let array_type = const_array.get_type();
+                    (array_type.into(), const_array.into())
+                }
+                _ => {
+                    return Err(CodeGenError::NotImplemented(
+                        "complex global initializers".to_string(),
+                    ))
+                }
+            };
 
         // Add the global variable
         let global_val = self.module.add_global(global_type, None, &global.name);
@@ -464,6 +469,21 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::NullPtr => {
                 let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
                 Ok(ptr_type.const_null().into())
+            }
+
+            // String literal - creates a global constant and returns pointer
+            Expr::StringLit(s) => {
+                // Create a global string constant with null terminator
+                let const_array = self.context.const_string(s.as_bytes(), true);
+                let array_type = const_array.get_type();
+
+                // Create a private global for this string
+                let global = self.module.add_global(array_type, None, ".str");
+                global.set_initializer(&const_array);
+                global.set_constant(true);
+
+                // Return pointer to the first element
+                Ok(global.as_pointer_value().into())
             }
 
             // Binary operations - recurse with locals
@@ -840,6 +860,21 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::NullPtr => {
                 let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
                 Ok(ptr_type.const_null().into())
+            }
+
+            // String literal - creates a global constant and returns pointer
+            Expr::StringLit(s) => {
+                // Create a global string constant with null terminator
+                let const_array = self.context.const_string(s.as_bytes(), true);
+                let array_type = const_array.get_type();
+
+                // Create a private global for this string
+                let global = self.module.add_global(array_type, None, ".str");
+                global.set_initializer(&const_array);
+                global.set_constant(true);
+
+                // Return pointer to the first element
+                Ok(global.as_pointer_value().into())
             }
 
             // Integer arithmetic - handle both scalars and vectors

@@ -244,6 +244,9 @@ pub enum Expr {
     // Null pointer literal
     NullPtr,
 
+    // String literal (null-terminated [N x i8] array)
+    StringLit(String),
+
     // Integer arithmetic
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),

@@ -51,6 +51,7 @@ impl TypeChecker {
             Expr::IntLit { ty, .. } => Ok(Type::Scalar(ty.clone())),
             Expr::FloatLit { ty, .. } => Ok(Type::Scalar(ty.clone())),
             Expr::NullPtr => Ok(Type::Ptr),
+            Expr::StringLit(_) => Ok(Type::Ptr), // String literals are pointers to char arrays
             Expr::VectorLit { ty, elements } => {
                 // Verify element count matches
                 if elements.len() != ty.count as usize {

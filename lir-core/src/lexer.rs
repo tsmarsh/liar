@@ -13,6 +13,7 @@ pub enum Token {
     Integer(i128),
     Float(f64),
     Ident(String),
+    StringLit(String),
     Inf,
     NegInf,
     Nan,
@@ -28,6 +29,7 @@ impl std::fmt::Display for Token {
             Token::Integer(n) => write!(f, "{}", n),
             Token::Float(n) => write!(f, "{}", n),
             Token::Ident(s) => write!(f, "{}", s),
+            Token::StringLit(s) => write!(f, "\"{}\"", s),
             Token::Inf => write!(f, "inf"),
             Token::NegInf => write!(f, "-inf"),
             Token::Nan => write!(f, "nan"),
@@ -149,6 +151,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             '0'..='9' => self.read_number().map(Some),
+            '"' => self.read_string().map(Some),
             'a'..='z' | 'A'..='Z' | '_' | '%' | '@' | ':' => {
                 let ident = self.read_ident();
                 match ident.as_str() {
@@ -248,6 +251,48 @@ impl<'a> Lexer<'a> {
             Ok(Token::Integer(value))
         }
     }
+
+    fn read_string(&mut self) -> Result<Token, ParseError> {
+        // Consume opening quote
+        self.chars.next();
+
+        let mut s = String::new();
+        loop {
+            match self.chars.next() {
+                Some('"') => break,
+                Some('\\') => {
+                    // Escape sequence
+                    match self.chars.next() {
+                        Some('n') => s.push('\n'),
+                        Some('t') => s.push('\t'),
+                        Some('r') => s.push('\r'),
+                        Some('0') => s.push('\0'),
+                        Some('\\') => s.push('\\'),
+                        Some('"') => s.push('"'),
+                        Some(c) => {
+                            return Err(ParseError::UnexpectedToken(format!(
+                                "invalid escape sequence: \\{}",
+                                c
+                            )))
+                        }
+                        None => {
+                            return Err(ParseError::UnexpectedToken(
+                                "unterminated string".to_string(),
+                            ))
+                        }
+                    }
+                }
+                Some(c) => s.push(c),
+                None => {
+                    return Err(ParseError::UnexpectedToken(
+                        "unterminated string".to_string(),
+                    ))
+                }
+            }
+        }
+
+        Ok(Token::StringLit(s))
+    }
 }
 
 #[cfg(test)]
@@ -309,5 +354,32 @@ mod tests {
             Some(Token::Ident("i32".to_string()))
         );
         assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::RAngle));
+    }
+
+    #[test]
+    fn test_string_literal() {
+        let mut lex = Lexer::new("\"hello world\"");
+        assert_eq!(
+            lex.next_token_peeked().unwrap(),
+            Some(Token::StringLit("hello world".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_string_escapes() {
+        let mut lex = Lexer::new("\"hello\\nworld\\t!\\0\"");
+        assert_eq!(
+            lex.next_token_peeked().unwrap(),
+            Some(Token::StringLit("hello\nworld\t!\0".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_string_with_quotes() {
+        let mut lex = Lexer::new("\"say \\\"hello\\\"\"");
+        assert_eq!(
+            lex.next_token_peeked().unwrap(),
+            Some(Token::StringLit("say \"hello\"".to_string()))
+        );
     }
 }

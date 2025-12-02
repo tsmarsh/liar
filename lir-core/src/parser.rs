@@ -158,6 +158,9 @@ impl<'a> Parser<'a> {
             "float" | "double" => self.parse_float_literal(name),
             "ptr" => self.parse_ptr_literal(),
 
+            // String literal
+            "string" => self.parse_string_literal(),
+
             // Integer arithmetic
             "add" => self.parse_binop(|l, r| Expr::Add(Box::new(l), Box::new(r))),
             "sub" => self.parse_binop(|l, r| Expr::Sub(Box::new(l), Box::new(r))),
@@ -753,6 +756,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_string_literal(&mut self) -> Result<Expr, ParseError> {
+        // Expect a string token
+        match self.lexer.next_token_peeked()? {
+            Some(Token::StringLit(s)) => Ok(Expr::StringLit(s)),
+            Some(tok) => Err(ParseError::Expected {
+                expected: "string literal".to_string(),
+                found: format!("{}", tok),
+            }),
+            None => Err(ParseError::UnexpectedEof),
+        }
+    }
+
     fn parse_vector_literal(&mut self) -> Result<Expr, ParseError> {
         let ty = self.parse_vector_type()?;
         let mut elements = Vec::with_capacity(ty.count as usize);
@@ -1172,5 +1187,17 @@ mod tests {
             }
             _ => panic!("expected Global"),
         }
+    }
+
+    #[test]
+    fn test_parse_string_literal() {
+        let result = Parser::new("(string \"hello world\")").parse().unwrap();
+        assert_eq!(result, Expr::StringLit("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_parse_string_with_escapes() {
+        let result = Parser::new("(string \"hello\\nworld\")").parse().unwrap();
+        assert_eq!(result, Expr::StringLit("hello\nworld".to_string()));
     }
 }

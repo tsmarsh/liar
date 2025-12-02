@@ -40,7 +40,7 @@ async fn given_expression(world: &mut LirWorld, expr: String) {
     world.stderr = result.stderr;
 }
 
-#[then(regex = r"^the result is (.+)$")]
+#[then(regex = r"^the result is (\(.+)$")]
 async fn then_result_is(world: &mut LirWorld, expected: String) {
     if world.exit_code != 0 {
         // Non-zero exit = pending (not implemented)
@@ -50,6 +50,20 @@ async fn then_result_is(world: &mut LirWorld, expected: String) {
         world.stdout, expected,
         "Expected '{}' but got '{}'",
         expected, world.stdout
+    );
+}
+
+#[then(regex = r"^the result is a pointer$")]
+async fn then_result_is_pointer(world: &mut LirWorld) {
+    if world.exit_code != 0 {
+        // Non-zero exit = pending (not implemented)
+        panic!("PENDING: not implemented (exit code {})", world.exit_code);
+    }
+    // Check that the result starts with "(ptr " and ends with ")"
+    assert!(
+        world.stdout.starts_with("(ptr ") && world.stdout.ends_with(')'),
+        "Expected a pointer result like '(ptr ...)' but got '{}'",
+        world.stdout
     );
 }
 
