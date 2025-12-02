@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Corsair needs to interact with the outside world:
+liar needs to interact with the outside world:
 - System calls (file I/O, networking)
 - C libraries
 - Raw memory operations

@@ -3,15 +3,22 @@
 Two languages, one goal: a memory-safe Lisp without garbage collection.
 
 ```
-liar source → liar compiler → lIR → LLVM IR → native
+liar source → liar → lIR → lair → LLVM IR → native
 ```
+
+## The Toolchain
+
+| Tool | What | Input | Output |
+|------|------|-------|--------|
+| `liar` | high-level compiler | liar source | lIR |
+| `lair` | lIR assembler | lIR source | LLVM IR / native |
 
 ## The Two Layers
 
 | Layer | What it is | File |
 |-------|------------|------|
-| **lIR** | S-expression assembler for LLVM IR. 1:1 mapping, no sugar. | [CLAUDE.md](#lir) |
-| **liar** | Borrow-checked Lisp with closures, atoms, threading. User-facing. | [LIAR.md](LIAR.md) |
+| **lIR** | S-expression assembler for LLVM IR. 1:1 mapping, no sugar. | [lIR.md](doc/lIR.md) |
+| **liar** | Borrow-checked Lisp with closures, atoms, threading. User-facing. | [LIAR.md](doc/LIAR.md) |
 
 ---
 
@@ -150,7 +157,7 @@ See [LIAR.md](LIAR.md) for the full language definition.
 | Async | Requires `plet` (continuation may resume on different thread) |
 | FFI | `unsafe` blocks, same ownership rules apply inside |
 
-**Design decisions:** See [docs/adr/](docs/adr/) for Architecture Decision Records.
+**Design decisions:** See [doc/adr/](doc/adr/) for Architecture Decision Records.
 
 
 

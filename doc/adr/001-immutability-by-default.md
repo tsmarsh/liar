@@ -15,7 +15,7 @@ The fundamental tension:
 
 ## Decision
 
-Values in Corsair are **immutable by default**. A value cannot be modified unless explicitly marked as mutable.
+Values in liar are **immutable by default**. A value cannot be modified unless explicitly marked as mutable.
 
 ```lisp
 (let ((x [1 2 3]))

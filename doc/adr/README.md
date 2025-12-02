@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This directory contains the Architecture Decision Records (ADRs) for Corsair.
+This directory contains the Architecture Decision Records (ADRs) for liar.
 
 ## Index
 
@@ -20,3 +20,9 @@ This directory contains the Architecture Decision Records (ADRs) for Corsair.
 | [012](012-dosync-transactions.md) | dosync for Coordinated Updates | Accepted |
 | [013](013-unsafe-blocks.md) | unsafe Blocks for FFI | Accepted |
 | [014](014-async-requires-plet.md) | async/await Requires plet | Accepted |
+| [015](015-numeric-primitives.md) | Numeric Primitives | Accepted |
+| [016](016-simd-vectors.md) | SIMD Vectors | Accepted |
+| [017](017-type-promotion.md) | Numeric Type Promotion | Accepted |
+| [018](018-collections.md) | Collections — Persistent vs Conventional | Accepted |
+| [019](019-lir-universal-backend.md) | lIR as Universal Backend | Accepted |
+| [020](020-toolchain-architecture.md) | Toolchain Architecture | Accepted |

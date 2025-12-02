@@ -18,7 +18,7 @@ This is essential for Rust's memory safety in concurrent code. But it adds compl
 
 ## Decision
 
-**Aliasing is allowed in Corsair.** The same value can be passed to multiple mutable parameters.
+**Aliasing is allowed in liar.** The same value can be passed to multiple mutable parameters.
 
 ```lisp
 (defun bar (&a &b)
@@ -30,7 +30,7 @@ This is essential for Rust's memory safety in concurrent code. But it adds compl
 ```
 
 This is safe because:
-1. Corsair is single-threaded by default (no data races)
+1. liar is single-threaded by default (no data races)
 2. Evaluation order is defined (ADR-008)
 
 ## Consequences

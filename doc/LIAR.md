@@ -3,7 +3,7 @@
 A borrow-checked Lisp built on lIR. Rust's memory safety, Lisp's metaprogramming.
 
 ```
-liar source → liar compiler → lIR → LLVM IR → native
+liar source → liar → lIR → lair → LLVM IR → native
 ```
 
 ## Goals
@@ -15,21 +15,61 @@ liar source → liar compiler → lIR → LLVM IR → native
 
 ## Core Types
 
+### Primitives
+
 ```lisp
-; Atoms
-42              ; i64 (default integer)
-3.14            ; f64 (default float)
+; Integers (i64 default)
+42              ; i64
+(i32 42)        ; explicit i32
+(i64 42)        ; explicit i64
+
+; Floats (f64 default)  
+3.14            ; f64
+(f32 3.14)      ; explicit f32
+
+; Overflow handling
+(boxed (* BIG BIGGER))   ; promotes to biginteger, never overflows
+(wrapping (* x y))       ; C-style silent wrap
+
+; Other primitives
 true false      ; boolean
-'foo            ; symbol
-"hello"         ; string
+"hello"         ; string (immutable, UTF-8)
+\a              ; character
+'foo            ; symbol (interned)
+:foo            ; keyword
+#[0x48 0x65]    ; byte array
+#r"pattern"     ; regex (reader macro)
+```
 
-; Compound
-(cons 1 2)      ; pair
-'(1 2 3)        ; list (sugar for nested cons)
-[1 2 3]         ; vector (contiguous, indexable)
-{:a 1 :b 2}     ; map
+### SIMD Vectors
 
-; Functions
+```lisp
+<<1 2 3 4>>              ; v4 i64 (inferred)
+<<1.0 2.0 3.0 4.0>>      ; v4 f64 (inferred)
+<i8<1 2 3 4>>            ; v4 i8 (explicit type)
+<f32<1.0 2.0 3.0 4.0>>   ; v4 f32 (explicit type)
+
+; Operations - normal arithmetic, scalar broadcast
+(+ <<1 2 3 4>> <<5 6 7 8>>)   ; => <<6 8 10 12>>
+(* 2 <<1 2 3 4>>)             ; => <<2 4 6 8>>
+```
+
+### Collections
+
+```lisp
+; Persistent (default) — immutable, structural sharing
+[1 2 3]         ; persistent vector
+{:a 1 :b 2}     ; persistent map
+'(1 2 3)        ; list (linked)
+
+; Conventional — mutable, O(1) access
+<[1 2 3]>       ; conventional vector
+<{:a 1 :b 2}>   ; conventional map
+```
+
+### Functions
+
+```lisp
 (fn (x) x)      ; anonymous function (closure)
 ```
 

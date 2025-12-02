@@ -15,7 +15,7 @@ Rust uses move semantics by default, requiring explicit borrowing or cloning. Th
 
 ## Decision
 
-Corsair uses **pass by reference** for compound types (cons cells, vectors, maps, closures) and **pass by value (copy)** for primitives (numbers, booleans).
+liar uses **pass by reference** for compound types (cons cells, vectors, maps, closures) and **pass by value (copy)** for primitives (numbers, booleans).
 
 ```lisp
 (defun foo (x)    ; x is an immutable reference to caller's data

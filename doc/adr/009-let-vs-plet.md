@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Corsair allows mutable state in closures (ADR-005). This is not thread-safe:
+liar allows mutable state in closures (ADR-005). This is not thread-safe:
 
 ```lisp
 (defun accumulate ()
