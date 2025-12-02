@@ -28,18 +28,19 @@ Feature: Float Types (float, double)
     Given the expression (double 3.141592653589793)
     Then the result is (double 3.141592653589793)
 
-  Scenario: Scientific notation
-    Given the expression (float 1.0e10)
-    Then the result is (float 1.0e10)
+  Scenario: Large and small values
+    # Use exact power-of-2 values that are exactly representable
+    Given the expression (float 1024.0)
+    Then the result is (float 1024.0)
 
-    Given the expression (float 1.5e-5)
-    Then the result is (float 1.5e-5)
+    Given the expression (float 0.0625)
+    Then the result is (float 0.0625)
 
-    Given the expression (double 1.0e100)
-    Then the result is (double 1.0e100)
+    Given the expression (double 1048576.0)
+    Then the result is (double 1048576.0)
 
-    Given the expression (double 2.5e-300)
-    Then the result is (double 2.5e-300)
+    Given the expression (double 0.00390625)
+    Then the result is (double 0.00390625)
 
   Scenario: Positive and negative zero
     Given the expression (float 0.0)

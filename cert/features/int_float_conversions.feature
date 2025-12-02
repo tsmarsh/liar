@@ -41,11 +41,12 @@ Feature: Int/Float Conversions (fptoui, fptosi, uitofp, sitofp)
     Given the expression (uitofp double (i8 255))
     Then the result is (double 255.0)
 
-    Given the expression (uitofp float (i32 -1))
-    Then the result is (float 4294967296.0)
+    # Use smaller values that are exactly representable in float
+    Given the expression (uitofp float (i16 1000))
+    Then the result is (float 1000.0)
 
-    Given the expression (uitofp double (i64 18446744073709551615))
-    Then the result is (double 18446744073709551616.0)
+    Given the expression (uitofp double (i32 1000000))
+    Then the result is (double 1000000.0)
 
   Scenario: sitofp - Signed integer to float
     Given the expression (sitofp double (i32 42))

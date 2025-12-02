@@ -426,7 +426,13 @@ impl std::fmt::Display for Value {
                         write!(f, "(float -inf)")
                     }
                 } else {
-                    write!(f, "(float {})", v)
+                    // Ensure float values always have decimal point
+                    let s = format!("{}", v);
+                    if s.contains('.') || s.contains('e') {
+                        write!(f, "(float {})", s)
+                    } else {
+                        write!(f, "(float {}.0)", s)
+                    }
                 }
             }
             Value::Double(v) => {
@@ -439,7 +445,13 @@ impl std::fmt::Display for Value {
                         write!(f, "(double -inf)")
                     }
                 } else {
-                    write!(f, "(double {})", v)
+                    // Ensure double values always have decimal point
+                    let s = format!("{}", v);
+                    if s.contains('.') || s.contains('e') {
+                        write!(f, "(double {})", s)
+                    } else {
+                        write!(f, "(double {}.0)", s)
+                    }
                 }
             }
         }

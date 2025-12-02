@@ -8,6 +8,16 @@ description = "Command-line evaluator for lIR expressions"
 name = "lir"
 path = "src/main.rs"
 
+[[test]]
+name = "cert"
+harness = false
+
 [dependencies]
 lir-core = { path = "../lir-core" }
 lir-codegen = { path = "../lir-codegen" }
+inkwell = { version = "0.7.0", features = ["llvm21-1"] }
+
+[dev-dependencies]
+lir-cert = { path = "../cert" }
+cucumber = "0.21"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

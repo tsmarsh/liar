@@ -1,4 +1,6 @@
-//! Cucumber feature test runner for lIR
+//! Certification tests for lir-cli
+//!
+//! Uses cert features to verify lir-cli correctly implements lIR semantics.
 //!
 //! Test semantics:
 //! - Exit code != 0: Pending (yellow) — not implemented yet
@@ -6,7 +8,7 @@
 //! - Exit code == 0, output matches: Passed (green) — works
 
 use cucumber::{given, then, World};
-use lir_cert::{execute, LirBackend, StubBackend};
+use lir_cert::{execute, LirBackend};
 
 #[derive(Debug, Default, World)]
 pub struct LirWorld {
@@ -16,14 +18,23 @@ pub struct LirWorld {
     stderr: String,
 }
 
-// Use StubBackend - this test shows all features as pending
-// Real backends (like lir-cli) run their own cert tests
-type Backend = StubBackend;
+/// Backend using the lir CLI binary
+pub struct CliBackend;
+
+impl LirBackend for CliBackend {
+    fn eval_command(expr: &str) -> String {
+        // Shell-escape the expression by wrapping in single quotes
+        // and escaping any single quotes within
+        let escaped = expr.replace('\'', "'\"'\"'");
+        // Tests run from lir-cli dir, binary is at workspace root's target
+        format!("../target/debug/lir '{}'", escaped)
+    }
+}
 
 #[given(regex = r"^the expression (.+)$")]
 async fn given_expression(world: &mut LirWorld, expr: String) {
     world.expression = expr.clone();
-    let result = execute::<Backend>(&expr);
+    let result = execute::<CliBackend>(&expr);
     world.exit_code = result.exit_code;
     world.stdout = result.stdout;
     world.stderr = result.stderr;
@@ -33,7 +44,6 @@ async fn given_expression(world: &mut LirWorld, expr: String) {
 async fn then_result_is(world: &mut LirWorld, expected: String) {
     if world.exit_code != 0 {
         // Non-zero exit = pending (not implemented)
-        // Use panic with special message that cucumber recognizes
         panic!("PENDING: not implemented (exit code {})", world.exit_code);
     }
     assert_eq!(
@@ -61,5 +71,6 @@ async fn then_error_with(world: &mut LirWorld, expected_msg: String) {
 
 #[tokio::main]
 async fn main() {
-    LirWorld::run("features").await;
+    // Use features from the cert crate
+    LirWorld::run("../cert/features").await;
 }

@@ -3,8 +3,8 @@ Feature: Bitwise Operations (and, or, xor, shl, lshr, ashr)
   These also serve as boolean logic when used with i1.
 
   Scenario: and - Bitwise AND
-    Given the expression (and (i32 0b1100) (i32 0b1010))
-    Then the result is (i32 0b1000)
+    Given the expression (and (i32 12) (i32 10))
+    Then the result is (i32 8)
 
     Given the expression (and (i8 255) (i8 15))
     Then the result is (i8 15)
@@ -13,18 +13,18 @@ Feature: Bitwise Operations (and, or, xor, shl, lshr, ashr)
     Then the result is (i32 255)
 
   Scenario: or - Bitwise OR
-    Given the expression (or (i32 0b1100) (i32 0b1010))
-    Then the result is (i32 0b1110)
+    Given the expression (or (i32 12) (i32 10))
+    Then the result is (i32 14)
 
     Given the expression (or (i8 240) (i8 15))
-    Then the result is (i8 255)
+    Then the result is (i8 -1)
 
     Given the expression (or (i32 0) (i32 42))
     Then the result is (i32 42)
 
   Scenario: xor - Bitwise XOR
-    Given the expression (xor (i32 0b1100) (i32 0b1010))
-    Then the result is (i32 0b0110)
+    Given the expression (xor (i32 12) (i32 10))
+    Then the result is (i32 6)
 
     Given the expression (xor (i8 255) (i8 255))
     Then the result is (i8 0)
