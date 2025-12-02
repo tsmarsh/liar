@@ -46,7 +46,10 @@ impl<'a> Parser<'a> {
             return Ok(expr);
         }
 
-        let token = self.lexer.next()?.ok_or(ParseError::UnexpectedEof)?;
+        let token = self
+            .lexer
+            .next_token_peeked()?
+            .ok_or(ParseError::UnexpectedEof)?;
 
         let expr = match token {
             Token::Ident(ref name) => self.parse_form(name)?,
@@ -148,7 +151,7 @@ impl<'a> Parser<'a> {
 
     fn parse_int_literal(&mut self, type_name: &str) -> Result<Expr, ParseError> {
         let ty = self.type_from_name(type_name)?;
-        let value = match self.lexer.next()? {
+        let value = match self.lexer.next_token_peeked()? {
             Some(Token::Integer(n)) => n,
             Some(tok) => {
                 return Err(ParseError::Expected {
@@ -163,7 +166,7 @@ impl<'a> Parser<'a> {
 
     fn parse_float_literal(&mut self, type_name: &str) -> Result<Expr, ParseError> {
         let ty = self.type_from_name(type_name)?;
-        let value = match self.lexer.next()? {
+        let value = match self.lexer.next_token_peeked()? {
             Some(Token::Float(n)) => FloatValue::Number(n),
             Some(Token::Integer(n)) => FloatValue::Number(n as f64),
             Some(Token::Inf) => FloatValue::Inf,
@@ -187,8 +190,11 @@ impl<'a> Parser<'a> {
         for _ in 0..ty.count {
             // Each element is either a bare number or a sub-expression
             match self.lexer.peek()? {
-                Some(Token::Integer(_)) | Some(Token::Float(_)) | Some(Token::Inf)
-                | Some(Token::NegInf) | Some(Token::Nan) => {
+                Some(Token::Integer(_))
+                | Some(Token::Float(_))
+                | Some(Token::Inf)
+                | Some(Token::NegInf)
+                | Some(Token::Nan) => {
                     let value = self.parse_scalar_value(&ty.element)?;
                     elements.push(value);
                 }
@@ -210,7 +216,7 @@ impl<'a> Parser<'a> {
 
     fn parse_scalar_value(&mut self, ty: &ScalarType) -> Result<Expr, ParseError> {
         if ty.is_integer() {
-            match self.lexer.next()? {
+            match self.lexer.next_token_peeked()? {
                 Some(Token::Integer(n)) => Ok(Expr::IntLit {
                     ty: ty.clone(),
                     value: n,
@@ -222,7 +228,7 @@ impl<'a> Parser<'a> {
                 None => Err(ParseError::UnexpectedEof),
             }
         } else {
-            let value = match self.lexer.next()? {
+            let value = match self.lexer.next_token_peeked()? {
                 Some(Token::Float(n)) => FloatValue::Number(n),
                 Some(Token::Integer(n)) => FloatValue::Number(n as f64),
                 Some(Token::Inf) => FloatValue::Inf,
@@ -245,7 +251,7 @@ impl<'a> Parser<'a> {
 
     fn parse_vector_type(&mut self) -> Result<VectorType, ParseError> {
         self.expect(Token::LAngle)?;
-        let count = match self.lexer.next()? {
+        let count = match self.lexer.next_token_peeked()? {
             Some(Token::Integer(n)) => n as u32,
             Some(tok) => {
                 return Err(ParseError::Expected {
@@ -257,7 +263,7 @@ impl<'a> Parser<'a> {
         };
 
         // Expect 'x'
-        match self.lexer.next()? {
+        match self.lexer.next_token_peeked()? {
             Some(Token::Ident(ref s)) if s == "x" => {}
             Some(tok) => {
                 return Err(ParseError::Expected {
@@ -269,7 +275,7 @@ impl<'a> Parser<'a> {
         }
 
         // Parse element type
-        let element = match self.lexer.next()? {
+        let element = match self.lexer.next_token_peeked()? {
             Some(Token::Ident(ref s)) => self.type_from_name(s)?,
             Some(tok) => {
                 return Err(ParseError::Expected {
@@ -317,7 +323,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_icmp_pred(&mut self) -> Result<ICmpPred, ParseError> {
-        match self.lexer.next()? {
+        match self.lexer.next_token_peeked()? {
             Some(Token::Ident(s)) => match s.as_str() {
                 "eq" => Ok(ICmpPred::Eq),
                 "ne" => Ok(ICmpPred::Ne),
@@ -340,7 +346,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_fcmp_pred(&mut self) -> Result<FCmpPred, ParseError> {
-        match self.lexer.next()? {
+        match self.lexer.next_token_peeked()? {
             Some(Token::Ident(s)) => match s.as_str() {
                 "oeq" => Ok(FCmpPred::Oeq),
                 "one" => Ok(FCmpPred::One),
@@ -370,7 +376,7 @@ impl<'a> Parser<'a> {
     where
         F: FnOnce(ScalarType, Expr) -> Expr,
     {
-        let ty = match self.lexer.next()? {
+        let ty = match self.lexer.next_token_peeked()? {
             Some(Token::Ident(ref s)) => self.type_from_name(s)?,
             Some(tok) => {
                 return Err(ParseError::Expected {
@@ -440,7 +446,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect(&mut self, expected: Token) -> Result<(), ParseError> {
-        match self.lexer.next()? {
+        match self.lexer.next_token_peeked()? {
             Some(tok) if tok == expected => Ok(()),
             Some(tok) => Err(ParseError::Expected {
                 expected: format!("{}", expected),
@@ -458,7 +464,13 @@ mod tests {
     #[test]
     fn test_parse_int_literal() {
         let expr = Parser::new("(i32 42)").parse().unwrap();
-        assert!(matches!(expr, Expr::IntLit { ty: ScalarType::I32, value: 42 }));
+        assert!(matches!(
+            expr,
+            Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 42
+            }
+        ));
     }
 
     #[test]

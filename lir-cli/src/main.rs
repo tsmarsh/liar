@@ -16,12 +16,16 @@ fn eval(input: &str) -> Result<String, String> {
 
     // Type check
     let checker = TypeChecker::new();
-    checker.check(&expr).map_err(|e| format!("type error: {}", e))?;
+    checker
+        .check(&expr)
+        .map_err(|e| format!("type error: {}", e))?;
 
     // JIT execute
     let context = Context::create();
     let jit = JitEngine::new(&context);
-    let value = jit.eval(&expr).map_err(|e| format!("evaluation error: {}", e))?;
+    let value = jit
+        .eval(&expr)
+        .map_err(|e| format!("evaluation error: {}", e))?;
 
     Ok(format!("{}", value))
 }

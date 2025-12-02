@@ -55,7 +55,7 @@ impl<'a> Lexer<'a> {
         Ok(self.peeked.as_ref())
     }
 
-    pub fn next(&mut self) -> Result<Option<Token>, ParseError> {
+    pub fn next_token_peeked(&mut self) -> Result<Option<Token>, ParseError> {
         if self.peeked.is_some() {
             Ok(self.peeked.take())
         } else {
@@ -118,7 +118,7 @@ impl<'a> Lexer<'a> {
                             return Ok(Some(Token::NegInf));
                         }
                         // Otherwise it's an error or some other ident
-                        return Err(ParseError::UnexpectedToken(format!("-{}", ident)));
+                        Err(ParseError::UnexpectedToken(format!("-{}", ident)))?
                     } else if next.is_ascii_digit() || next == '.' {
                         let num = self.read_number()?;
                         match num {
@@ -241,42 +241,57 @@ mod tests {
     #[test]
     fn test_basic_tokens() {
         let mut lex = Lexer::new("(add (i32 42) (i32 -5))");
-        assert_eq!(lex.next().unwrap(), Some(Token::LParen));
-        assert_eq!(lex.next().unwrap(), Some(Token::Ident("add".to_string())));
-        assert_eq!(lex.next().unwrap(), Some(Token::LParen));
-        assert_eq!(lex.next().unwrap(), Some(Token::Ident("i32".to_string())));
-        assert_eq!(lex.next().unwrap(), Some(Token::Integer(42)));
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::LParen));
+        assert_eq!(
+            lex.next_token_peeked().unwrap(),
+            Some(Token::Ident("add".to_string()))
+        );
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::LParen));
+        assert_eq!(
+            lex.next_token_peeked().unwrap(),
+            Some(Token::Ident("i32".to_string()))
+        );
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::Integer(42)));
     }
 
     #[test]
     fn test_float_tokens() {
-        let mut lex = Lexer::new("3.14 1.0e10 -2.5e-3");
-        assert_eq!(lex.next().unwrap(), Some(Token::Float(3.14)));
-        assert_eq!(lex.next().unwrap(), Some(Token::Float(1.0e10)));
-        assert_eq!(lex.next().unwrap(), Some(Token::Float(-2.5e-3)));
+        let mut lex = Lexer::new("3.25 1.0e10 -2.5e-3");
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::Float(3.25)));
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::Float(1.0e10)));
+        assert_eq!(
+            lex.next_token_peeked().unwrap(),
+            Some(Token::Float(-2.5e-3))
+        );
     }
 
     #[test]
     fn test_special_floats() {
         let mut lex = Lexer::new("inf -inf nan");
-        assert_eq!(lex.next().unwrap(), Some(Token::Inf));
-        assert_eq!(lex.next().unwrap(), Some(Token::NegInf));
-        assert_eq!(lex.next().unwrap(), Some(Token::Nan));
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::Inf));
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::NegInf));
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::Nan));
     }
 
     #[test]
     fn test_binary_literal() {
         let mut lex = Lexer::new("0b1100");
-        assert_eq!(lex.next().unwrap(), Some(Token::Integer(12)));
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::Integer(12)));
     }
 
     #[test]
     fn test_vector_angle_brackets() {
         let mut lex = Lexer::new("<4 x i32>");
-        assert_eq!(lex.next().unwrap(), Some(Token::LAngle));
-        assert_eq!(lex.next().unwrap(), Some(Token::Integer(4)));
-        assert_eq!(lex.next().unwrap(), Some(Token::Ident("x".to_string())));
-        assert_eq!(lex.next().unwrap(), Some(Token::Ident("i32".to_string())));
-        assert_eq!(lex.next().unwrap(), Some(Token::RAngle));
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::LAngle));
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::Integer(4)));
+        assert_eq!(
+            lex.next_token_peeked().unwrap(),
+            Some(Token::Ident("x".to_string()))
+        );
+        assert_eq!(
+            lex.next_token_peeked().unwrap(),
+            Some(Token::Ident("i32".to_string()))
+        );
+        assert_eq!(lex.next_token_peeked().unwrap(), Some(Token::RAngle));
     }
 }

@@ -11,6 +11,7 @@ impl TypeChecker {
     }
 
     /// Check an expression and return its result type
+    #[allow(clippy::only_used_in_recursion)]
     pub fn check(&self, expr: &Expr) -> Result<Type, TypeError> {
         match expr {
             Expr::IntLit { ty, .. } => Ok(Type::Scalar(ty.clone())),

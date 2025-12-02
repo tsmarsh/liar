@@ -43,7 +43,8 @@ impl<'ctx> JitEngine<'ctx> {
         codegen.create_eval_function(expr)?;
 
         // Create execution engine
-        let execution_engine = codegen.module
+        let execution_engine = codegen
+            .module
             .create_jit_execution_engine(OptimizationLevel::None)
             .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
@@ -51,7 +52,8 @@ impl<'ctx> JitEngine<'ctx> {
         match ty {
             Type::Scalar(ScalarType::I1) => {
                 let func: JitFunction<I1Func> = unsafe {
-                    execution_engine.get_function("__lir_eval")
+                    execution_engine
+                        .get_function("__lir_eval")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                 };
                 let result = unsafe { func.call() };
@@ -59,7 +61,8 @@ impl<'ctx> JitEngine<'ctx> {
             }
             Type::Scalar(ScalarType::I8) => {
                 let func: JitFunction<I8Func> = unsafe {
-                    execution_engine.get_function("__lir_eval")
+                    execution_engine
+                        .get_function("__lir_eval")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                 };
                 let result = unsafe { func.call() };
@@ -67,7 +70,8 @@ impl<'ctx> JitEngine<'ctx> {
             }
             Type::Scalar(ScalarType::I16) => {
                 let func: JitFunction<I16Func> = unsafe {
-                    execution_engine.get_function("__lir_eval")
+                    execution_engine
+                        .get_function("__lir_eval")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                 };
                 let result = unsafe { func.call() };
@@ -75,7 +79,8 @@ impl<'ctx> JitEngine<'ctx> {
             }
             Type::Scalar(ScalarType::I32) => {
                 let func: JitFunction<I32Func> = unsafe {
-                    execution_engine.get_function("__lir_eval")
+                    execution_engine
+                        .get_function("__lir_eval")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                 };
                 let result = unsafe { func.call() };
@@ -83,7 +88,8 @@ impl<'ctx> JitEngine<'ctx> {
             }
             Type::Scalar(ScalarType::I64) => {
                 let func: JitFunction<I64Func> = unsafe {
-                    execution_engine.get_function("__lir_eval")
+                    execution_engine
+                        .get_function("__lir_eval")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                 };
                 let result = unsafe { func.call() };
@@ -91,7 +97,8 @@ impl<'ctx> JitEngine<'ctx> {
             }
             Type::Scalar(ScalarType::Float) => {
                 let func: JitFunction<FloatFunc> = unsafe {
-                    execution_engine.get_function("__lir_eval")
+                    execution_engine
+                        .get_function("__lir_eval")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                 };
                 let result = unsafe { func.call() };
@@ -99,15 +106,14 @@ impl<'ctx> JitEngine<'ctx> {
             }
             Type::Scalar(ScalarType::Double) => {
                 let func: JitFunction<DoubleFunc> = unsafe {
-                    execution_engine.get_function("__lir_eval")
+                    execution_engine
+                        .get_function("__lir_eval")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                 };
                 let result = unsafe { func.call() };
                 Ok(Value::Double(result))
             }
-            Type::Vector(vt) => {
-                self.eval_vector(&execution_engine, &vt)
-            }
+            Type::Vector(vt) => self.eval_vector(&execution_engine, &vt),
         }
     }
 
@@ -118,7 +124,8 @@ impl<'ctx> JitEngine<'ctx> {
         vt: &VectorType,
     ) -> Result<Value> {
         let func: JitFunction<VecFunc> = unsafe {
-            execution_engine.get_function("__lir_eval")
+            execution_engine
+                .get_function("__lir_eval")
                 .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
         };
 
@@ -128,37 +135,51 @@ impl<'ctx> JitEngine<'ctx> {
         match vt.element {
             ScalarType::I1 => {
                 let mut buf: Vec<u8> = vec![0; count]; // i1 stored as i8
-                unsafe { func.call(buf.as_mut_ptr()); }
+                unsafe {
+                    func.call(buf.as_mut_ptr());
+                }
                 Ok(Value::VecI1(buf.into_iter().map(|v| v != 0).collect()))
             }
             ScalarType::I8 => {
                 let mut buf: Vec<i8> = vec![0; count];
-                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                unsafe {
+                    func.call(buf.as_mut_ptr() as *mut u8);
+                }
                 Ok(Value::VecI8(buf))
             }
             ScalarType::I16 => {
                 let mut buf: Vec<i16> = vec![0; count];
-                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                unsafe {
+                    func.call(buf.as_mut_ptr() as *mut u8);
+                }
                 Ok(Value::VecI16(buf))
             }
             ScalarType::I32 => {
                 let mut buf: Vec<i32> = vec![0; count];
-                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                unsafe {
+                    func.call(buf.as_mut_ptr() as *mut u8);
+                }
                 Ok(Value::VecI32(buf))
             }
             ScalarType::I64 => {
                 let mut buf: Vec<i64> = vec![0; count];
-                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                unsafe {
+                    func.call(buf.as_mut_ptr() as *mut u8);
+                }
                 Ok(Value::VecI64(buf))
             }
             ScalarType::Float => {
                 let mut buf: Vec<f32> = vec![0.0; count];
-                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                unsafe {
+                    func.call(buf.as_mut_ptr() as *mut u8);
+                }
                 Ok(Value::VecFloat(buf))
             }
             ScalarType::Double => {
                 let mut buf: Vec<f64> = vec![0.0; count];
-                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                unsafe {
+                    func.call(buf.as_mut_ptr() as *mut u8);
+                }
                 Ok(Value::VecDouble(buf))
             }
         }
@@ -168,14 +189,17 @@ impl<'ctx> JitEngine<'ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lir_core::ast::{FloatValue, ICmpPred, FCmpPred, ScalarType};
+    use lir_core::ast::{FCmpPred, FloatValue, ICmpPred, ScalarType};
 
     #[test]
     fn test_integer_literal() {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        let expr = Expr::IntLit { ty: ScalarType::I32, value: 42 };
+        let expr = Expr::IntLit {
+            ty: ScalarType::I32,
+            value: 42,
+        };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(42));
     }
@@ -186,8 +210,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::Add(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 7 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 5,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 7,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(12));
@@ -199,8 +229,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::Sub(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 10 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 3 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 10,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 3,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(7));
@@ -212,8 +248,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::Mul(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 6 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 7 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 6,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 7,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(42));
@@ -226,8 +268,14 @@ mod tests {
 
         // Signed division: -10 / 3 = -3
         let expr = Expr::SDiv(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: -10 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 3 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: -10,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 3,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(-3));
@@ -239,8 +287,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::UDiv(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 10 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 3 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 10,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 3,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(3));
@@ -253,8 +307,14 @@ mod tests {
 
         // Signed remainder: -10 % 3 = -1
         let expr = Expr::SRem(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: -10 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 3 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: -10,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 3,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(-1));
@@ -266,8 +326,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::URem(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 10 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 3 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 10,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 3,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(1));
@@ -280,8 +346,14 @@ mod tests {
 
         // 127 + 1 wraps to -128 for i8
         let expr = Expr::Add(
-            Box::new(Expr::IntLit { ty: ScalarType::I8, value: 127 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I8, value: 1 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I8,
+                value: 127,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I8,
+                value: 1,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I8(-128));
@@ -293,8 +365,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::Add(
-            Box::new(Expr::IntLit { ty: ScalarType::I64, value: 1_000_000_000_000 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I64, value: 1 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I64,
+                value: 1_000_000_000_000,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I64,
+                value: 1,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I64(1_000_000_000_001));
@@ -305,7 +383,10 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        let expr = Expr::IntLit { ty: ScalarType::I1, value: 1 };
+        let expr = Expr::IntLit {
+            ty: ScalarType::I1,
+            value: 1,
+        };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
     }
@@ -317,9 +398,12 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        let expr = Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.14) };
+        let expr = Expr::FloatLit {
+            ty: ScalarType::Double,
+            value: FloatValue::Number(3.25),
+        };
         let result = jit.eval(&expr).unwrap();
-        assert_eq!(result, Value::Double(3.14));
+        assert_eq!(result, Value::Double(3.25));
     }
 
     #[test]
@@ -327,7 +411,10 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        let expr = Expr::FloatLit { ty: ScalarType::Float, value: FloatValue::Number(2.5) };
+        let expr = Expr::FloatLit {
+            ty: ScalarType::Float,
+            value: FloatValue::Number(2.5),
+        };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Float(2.5));
     }
@@ -338,8 +425,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::FAdd(
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(5.0) }),
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(6.0) }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(5.0),
+            }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(6.0),
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Double(11.0));
@@ -351,8 +444,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::FSub(
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(10.0) }),
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.0) }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(10.0),
+            }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(3.0),
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Double(7.0));
@@ -364,8 +463,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::FMul(
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(6.0) }),
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(7.0) }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(6.0),
+            }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(7.0),
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Double(42.0));
@@ -377,8 +482,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::FDiv(
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(10.0) }),
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(4.0) }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(10.0),
+            }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(4.0),
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Double(2.5));
@@ -390,8 +501,14 @@ mod tests {
         let jit = JitEngine::new(&context);
 
         let expr = Expr::FRem(
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(10.0) }),
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.0) }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(10.0),
+            }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(3.0),
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Double(1.0));
@@ -402,7 +519,10 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        let expr = Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Inf };
+        let expr = Expr::FloatLit {
+            ty: ScalarType::Double,
+            value: FloatValue::Inf,
+        };
         let result = jit.eval(&expr).unwrap();
         match result {
             Value::Double(v) => assert!(v.is_infinite() && v.is_sign_positive()),
@@ -415,7 +535,10 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        let expr = Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::NegInf };
+        let expr = Expr::FloatLit {
+            ty: ScalarType::Double,
+            value: FloatValue::NegInf,
+        };
         let result = jit.eval(&expr).unwrap();
         match result {
             Value::Double(v) => assert!(v.is_infinite() && v.is_sign_negative()),
@@ -428,7 +551,10 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        let expr = Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan };
+        let expr = Expr::FloatLit {
+            ty: ScalarType::Double,
+            value: FloatValue::Nan,
+        };
         let result = jit.eval(&expr).unwrap();
         match result {
             Value::Double(v) => assert!(v.is_nan()),
@@ -443,8 +569,14 @@ mod tests {
 
         // Division by zero produces infinity in IEEE 754
         let expr = Expr::FDiv(
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
-            Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(0.0) }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(1.0),
+            }),
+            Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(0.0),
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         match result {
@@ -462,8 +594,14 @@ mod tests {
 
         // 0b1100 & 0b1010 = 0b1000 = 8
         let expr = Expr::And(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1100 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1010 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 0b1100,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 0b1010,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(0b1000));
@@ -476,8 +614,14 @@ mod tests {
 
         // 0b1100 | 0b1010 = 0b1110 = 14
         let expr = Expr::Or(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1100 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1010 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 0b1100,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 0b1010,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(0b1110));
@@ -490,8 +634,14 @@ mod tests {
 
         // 0b1100 ^ 0b1010 = 0b0110 = 6
         let expr = Expr::Xor(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1100 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 0b1010 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 0b1100,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 0b1010,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(0b0110));
@@ -504,8 +654,14 @@ mod tests {
 
         // 1 << 4 = 16
         let expr = Expr::Shl(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 4 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 1,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 4,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(16));
@@ -518,8 +674,14 @@ mod tests {
 
         // 16 >> 2 (logical) = 4
         let expr = Expr::LShr(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 16 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 16,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 2,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(4));
@@ -532,8 +694,14 @@ mod tests {
 
         // 16 >> 2 (arithmetic, positive) = 4
         let expr = Expr::AShr(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 16 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 16,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 2,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(4));
@@ -546,8 +714,14 @@ mod tests {
 
         // -8 >> 2 (arithmetic) = -2 (sign-extended)
         let expr = Expr::AShr(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: -8 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: -8,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 2,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(-2));
@@ -561,8 +735,14 @@ mod tests {
         // -1 >> 1 (logical) = large positive (zero-extended)
         // -1 in i32 is 0xFFFFFFFF, logical right shift by 1 = 0x7FFFFFFF = 2147483647
         let expr = Expr::LShr(
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: -1 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: -1,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 1,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(0x7FFFFFFF));
@@ -575,8 +755,14 @@ mod tests {
 
         // i1: 1 & 0 = 0
         let expr = Expr::And(
-            Box::new(Expr::IntLit { ty: ScalarType::I1, value: 1 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I1, value: 0 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I1,
+                value: 1,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I1,
+                value: 0,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(false));
@@ -589,8 +775,14 @@ mod tests {
 
         // i1: 1 | 0 = 1
         let expr = Expr::Or(
-            Box::new(Expr::IntLit { ty: ScalarType::I1, value: 1 }),
-            Box::new(Expr::IntLit { ty: ScalarType::I1, value: 0 }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I1,
+                value: 1,
+            }),
+            Box::new(Expr::IntLit {
+                ty: ScalarType::I1,
+                value: 0,
+            }),
         );
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -605,8 +797,14 @@ mod tests {
 
         let expr = Expr::ICmp {
             pred: ICmpPred::Eq,
-            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
-            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
+            lhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 5,
+            }),
+            rhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 5,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -619,8 +817,14 @@ mod tests {
 
         let expr = Expr::ICmp {
             pred: ICmpPred::Ne,
-            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
-            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 6 }),
+            lhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 5,
+            }),
+            rhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 6,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -634,8 +838,14 @@ mod tests {
         // Signed: -1 < 1
         let expr = Expr::ICmp {
             pred: ICmpPred::Slt,
-            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: -1 }),
-            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+            lhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: -1,
+            }),
+            rhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 1,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -649,8 +859,14 @@ mod tests {
         // Unsigned: -1 (0xFFFFFFFF) > 1, so ult is false
         let expr = Expr::ICmp {
             pred: ICmpPred::Ult,
-            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: -1 }),
-            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
+            lhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: -1,
+            }),
+            rhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 1,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(false));
@@ -663,8 +879,14 @@ mod tests {
 
         let expr = Expr::ICmp {
             pred: ICmpPred::Sge,
-            lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
-            rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
+            lhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 5,
+            }),
+            rhs: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 5,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -679,8 +901,14 @@ mod tests {
 
         let expr = Expr::FCmp {
             pred: FCmpPred::Oeq,
-            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
-            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
+            lhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(1.0),
+            }),
+            rhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(1.0),
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -693,8 +921,14 @@ mod tests {
 
         let expr = Expr::FCmp {
             pred: FCmpPred::Olt,
-            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
-            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(2.0) }),
+            lhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(1.0),
+            }),
+            rhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(2.0),
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -708,8 +942,14 @@ mod tests {
         // uno is true if either is NaN
         let expr = Expr::FCmp {
             pred: FCmpPred::Uno,
-            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
-            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
+            lhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Nan,
+            }),
+            rhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(1.0),
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -723,8 +963,14 @@ mod tests {
         // ord is true if neither is NaN
         let expr = Expr::FCmp {
             pred: FCmpPred::Ord,
-            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(1.0) }),
-            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(2.0) }),
+            lhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(1.0),
+            }),
+            rhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(2.0),
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -738,8 +984,14 @@ mod tests {
         // Ordered comparisons return false when NaN is involved
         let expr = Expr::FCmp {
             pred: FCmpPred::Oeq,
-            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
-            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
+            lhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Nan,
+            }),
+            rhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Nan,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(false));
@@ -753,8 +1005,14 @@ mod tests {
         // Unordered eq returns true if either is NaN
         let expr = Expr::FCmp {
             pred: FCmpPred::Ueq,
-            lhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
-            rhs: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Nan }),
+            lhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Nan,
+            }),
+            rhs: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Nan,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I1(true));
@@ -770,7 +1028,10 @@ mod tests {
         // i32 258 truncated to i8 = 2 (loses high bits)
         let expr = Expr::Trunc {
             ty: ScalarType::I8,
-            value: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 258 }),
+            value: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 258,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I8(2));
@@ -784,7 +1045,10 @@ mod tests {
         // i8 200 zero-extended to i32 = 200 (not sign extended to negative)
         let expr = Expr::ZExt {
             ty: ScalarType::I32,
-            value: Box::new(Expr::IntLit { ty: ScalarType::I8, value: 200_u8 as i128 }),
+            value: Box::new(Expr::IntLit {
+                ty: ScalarType::I8,
+                value: 200_u8 as i128,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(200));
@@ -798,7 +1062,10 @@ mod tests {
         // i8 -1 sign-extended to i32 = -1
         let expr = Expr::SExt {
             ty: ScalarType::I32,
-            value: Box::new(Expr::IntLit { ty: ScalarType::I8, value: -1 }),
+            value: Box::new(Expr::IntLit {
+                ty: ScalarType::I8,
+                value: -1,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(-1));
@@ -812,11 +1079,14 @@ mod tests {
         // double to float
         let expr = Expr::FPTrunc {
             ty: ScalarType::Float,
-            value: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.14) }),
+            value: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(3.25),
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         match result {
-            Value::Float(v) => assert!((v - 3.14_f32).abs() < 0.001),
+            Value::Float(v) => assert!((v - 3.25_f32).abs() < 0.001),
             _ => panic!("expected Float"),
         }
     }
@@ -829,11 +1099,14 @@ mod tests {
         // float to double
         let expr = Expr::FPExt {
             ty: ScalarType::Double,
-            value: Box::new(Expr::FloatLit { ty: ScalarType::Float, value: FloatValue::Number(3.14) }),
+            value: Box::new(Expr::FloatLit {
+                ty: ScalarType::Float,
+                value: FloatValue::Number(3.25),
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         match result {
-            Value::Double(v) => assert!((v - 3.14).abs() < 0.001),
+            Value::Double(v) => assert!((v - 3.25).abs() < 0.001),
             _ => panic!("expected Double"),
         }
     }
@@ -846,7 +1119,10 @@ mod tests {
         // double 42.7 to i32 = 42
         let expr = Expr::FPToUI {
             ty: ScalarType::I32,
-            value: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(42.7) }),
+            value: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(42.7),
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(42));
@@ -860,7 +1136,10 @@ mod tests {
         // double -42.7 to i32 = -42
         let expr = Expr::FPToSI {
             ty: ScalarType::I32,
-            value: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(-42.7) }),
+            value: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(-42.7),
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(-42));
@@ -874,7 +1153,10 @@ mod tests {
         // i32 42 to double = 42.0
         let expr = Expr::UIToFP {
             ty: ScalarType::Double,
-            value: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 42 }),
+            value: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 42,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Double(42.0));
@@ -888,7 +1170,10 @@ mod tests {
         // i32 -42 to double = -42.0
         let expr = Expr::SIToFP {
             ty: ScalarType::Double,
-            value: Box::new(Expr::IntLit { ty: ScalarType::I32, value: -42 }),
+            value: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: -42,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::Double(-42.0));
@@ -903,9 +1188,18 @@ mod tests {
 
         // select true 1 2 = 1
         let expr = Expr::Select {
-            cond: Box::new(Expr::IntLit { ty: ScalarType::I1, value: 1 }),
-            true_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
-            false_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+            cond: Box::new(Expr::IntLit {
+                ty: ScalarType::I1,
+                value: 1,
+            }),
+            true_val: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 1,
+            }),
+            false_val: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 2,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(1));
@@ -918,9 +1212,18 @@ mod tests {
 
         // select false 1 2 = 2
         let expr = Expr::Select {
-            cond: Box::new(Expr::IntLit { ty: ScalarType::I1, value: 0 }),
-            true_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
-            false_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+            cond: Box::new(Expr::IntLit {
+                ty: ScalarType::I1,
+                value: 0,
+            }),
+            true_val: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 1,
+            }),
+            false_val: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 2,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(2));
@@ -935,11 +1238,23 @@ mod tests {
         let expr = Expr::Select {
             cond: Box::new(Expr::ICmp {
                 pred: ICmpPred::Slt,
-                lhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 5 }),
-                rhs: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 10 }),
+                lhs: Box::new(Expr::IntLit {
+                    ty: ScalarType::I32,
+                    value: 5,
+                }),
+                rhs: Box::new(Expr::IntLit {
+                    ty: ScalarType::I32,
+                    value: 10,
+                }),
             }),
-            true_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 1 }),
-            false_val: Box::new(Expr::IntLit { ty: ScalarType::I32, value: 2 }),
+            true_val: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 1,
+            }),
+            false_val: Box::new(Expr::IntLit {
+                ty: ScalarType::I32,
+                value: 2,
+            }),
         };
         let result = jit.eval(&expr).unwrap();
         assert_eq!(result, Value::I32(1));
@@ -950,13 +1265,22 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        // select true 3.14 2.71 = 3.14
+        // select true 3.25 2.75 = 3.25
         let expr = Expr::Select {
-            cond: Box::new(Expr::IntLit { ty: ScalarType::I1, value: 1 }),
-            true_val: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(3.14) }),
-            false_val: Box::new(Expr::FloatLit { ty: ScalarType::Double, value: FloatValue::Number(2.71) }),
+            cond: Box::new(Expr::IntLit {
+                ty: ScalarType::I1,
+                value: 1,
+            }),
+            true_val: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(3.25),
+            }),
+            false_val: Box::new(Expr::FloatLit {
+                ty: ScalarType::Double,
+                value: FloatValue::Number(2.75),
+            }),
         };
         let result = jit.eval(&expr).unwrap();
-        assert_eq!(result, Value::Double(3.14));
+        assert_eq!(result, Value::Double(3.25));
     }
 }

@@ -14,7 +14,10 @@ pub enum ScalarType {
 
 impl ScalarType {
     pub fn is_integer(&self) -> bool {
-        matches!(self, Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64)
+        matches!(
+            self,
+            Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64
+        )
     }
 
     pub fn is_float(&self) -> bool {

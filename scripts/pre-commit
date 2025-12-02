@@ -1,0 +1,45 @@
+#!/bin/bash
+# Pre-commit hook for lIR
+# Runs fmt check, clippy, and tests before allowing commit
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check formatting
+echo "Checking formatting..."
+cargo fmt --all -- --check
+if [ $? -ne 0 ]; then
+    echo "❌ Formatting check failed. Run 'cargo fmt' to fix."
+    exit 1
+fi
+echo "✓ Formatting OK"
+
+# Run clippy
+echo "Running clippy..."
+cargo clippy --all-targets --all-features -- -D warnings
+if [ $? -ne 0 ]; then
+    echo "❌ Clippy found issues."
+    exit 1
+fi
+echo "✓ Clippy OK"
+
+# Run unit tests
+echo "Running unit tests..."
+cargo test --workspace
+if [ $? -ne 0 ]; then
+    echo "❌ Unit tests failed."
+    exit 1
+fi
+echo "✓ Unit tests OK"
+
+# Run cucumber cert tests
+echo "Running certification tests..."
+cargo test -p lir-cli --test cert
+if [ $? -ne 0 ]; then
+    echo "❌ Certification tests failed."
+    exit 1
+fi
+echo "✓ Certification tests OK"
+
+echo "✅ All pre-commit checks passed!"
