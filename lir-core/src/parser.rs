@@ -83,6 +83,17 @@ impl<'a> Parser<'a> {
 
         // Not a function - parse as expression
         // We already consumed LParen, so parse the form directly
+        // Check if this is a vector literal: (<N x type> values...)
+        if let Some(Token::LAngle) = self.lexer.peek()? {
+            let expr = self.parse_vector_literal()?;
+            self.expect(Token::RParen)?;
+            // Ensure we consumed all input
+            if self.lexer.peek()?.is_some() {
+                return Err(ParseError::UnexpectedToken("trailing input".to_string()));
+            }
+            return Ok(ParseResult::Expr(expr));
+        }
+
         let token = self
             .lexer
             .next_token_peeked()?
