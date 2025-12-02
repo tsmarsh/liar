@@ -292,6 +292,16 @@ impl<'ctx> JitEngine<'ctx> {
             Type::Scalar(ScalarType::Void) => Err(CodeGenError::CodeGen(
                 "cannot eval void expression".to_string(),
             )),
+            Type::Ptr => {
+                type PtrFunc = unsafe extern "C" fn() -> *const u8;
+                let func: JitFunction<PtrFunc> = unsafe {
+                    execution_engine
+                        .get_function("__lir_eval")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let result = unsafe { func.call() };
+                Ok(Value::Ptr(result as u64))
+            }
         }
     }
 
@@ -370,7 +380,7 @@ impl<'ctx> JitEngine<'ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lir_core::ast::{FCmpPred, FloatValue, ICmpPred, ScalarType};
+    use lir_core::ast::{BasicBlock, FCmpPred, FloatValue, ICmpPred, ScalarType};
 
     #[test]
     fn test_integer_literal() {
@@ -1468,20 +1478,28 @@ mod tests {
     // Function tests
     use lir_core::ast::Param;
 
+    /// Helper to create a single entry block with given instructions
+    fn entry_block(instructions: Vec<Expr>) -> Vec<BasicBlock> {
+        vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions,
+        }]
+    }
+
     #[test]
     fn test_function_no_params() {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        // (define (get-42 i32) () (ret (i32 42)))
+        // (define (get-42 i32) () (block entry (ret (i32 42))))
         let func = FunctionDef {
             name: "get-42".to_string(),
             return_type: ScalarType::I32,
             params: vec![],
-            body: vec![Expr::Ret(Some(Box::new(Expr::IntLit {
+            blocks: entry_block(vec![Expr::Ret(Some(Box::new(Expr::IntLit {
                 ty: ScalarType::I32,
                 value: 42,
-            })))],
+            })))]),
         };
 
         let result = jit.eval_function(&func, &[]).unwrap();
@@ -1493,7 +1511,7 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        // (define (add-one i32) ((i32 x)) (ret (add x (i32 1))))
+        // (define (add-one i32) ((i32 x)) (block entry (ret (add x (i32 1)))))
         let func = FunctionDef {
             name: "add-one".to_string(),
             return_type: ScalarType::I32,
@@ -1501,13 +1519,13 @@ mod tests {
                 ty: ScalarType::I32,
                 name: "x".to_string(),
             }],
-            body: vec![Expr::Ret(Some(Box::new(Expr::Add(
+            blocks: entry_block(vec![Expr::Ret(Some(Box::new(Expr::Add(
                 Box::new(Expr::LocalRef("x".to_string())),
                 Box::new(Expr::IntLit {
                     ty: ScalarType::I32,
                     value: 1,
                 }),
-            ))))],
+            ))))]),
         };
 
         let result = jit.eval_function(&func, &[Value::I32(5)]).unwrap();
@@ -1519,7 +1537,7 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        // (define (add-two i32) ((i32 a) (i32 b)) (ret (add a b)))
+        // (define (add-two i32) ((i32 a) (i32 b)) (block entry (ret (add a b))))
         let func = FunctionDef {
             name: "add-two".to_string(),
             return_type: ScalarType::I32,
@@ -1533,10 +1551,10 @@ mod tests {
                     name: "b".to_string(),
                 },
             ],
-            body: vec![Expr::Ret(Some(Box::new(Expr::Add(
+            blocks: entry_block(vec![Expr::Ret(Some(Box::new(Expr::Add(
                 Box::new(Expr::LocalRef("a".to_string())),
                 Box::new(Expr::LocalRef("b".to_string())),
-            ))))],
+            ))))]),
         };
 
         let result = jit
@@ -1550,7 +1568,7 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        // (define (square i32) ((i32 x)) (ret (mul x x)))
+        // (define (square i32) ((i32 x)) (block entry (ret (mul x x))))
         let func = FunctionDef {
             name: "square".to_string(),
             return_type: ScalarType::I32,
@@ -1558,10 +1576,10 @@ mod tests {
                 ty: ScalarType::I32,
                 name: "x".to_string(),
             }],
-            body: vec![Expr::Ret(Some(Box::new(Expr::Mul(
+            blocks: entry_block(vec![Expr::Ret(Some(Box::new(Expr::Mul(
                 Box::new(Expr::LocalRef("x".to_string())),
                 Box::new(Expr::LocalRef("x".to_string())),
-            ))))],
+            ))))]),
         };
 
         let result = jit.eval_function(&func, &[Value::I32(7)]).unwrap();
@@ -1573,7 +1591,7 @@ mod tests {
         let context = Context::create();
         let jit = JitEngine::new(&context);
 
-        // (define (max i32) ((i32 a) (i32 b)) (ret (select (icmp sgt a b) a b)))
+        // (define (max i32) ((i32 a) (i32 b)) (block entry (ret (select (icmp sgt a b) a b))))
         let func = FunctionDef {
             name: "max".to_string(),
             return_type: ScalarType::I32,
@@ -1587,7 +1605,7 @@ mod tests {
                     name: "b".to_string(),
                 },
             ],
-            body: vec![Expr::Ret(Some(Box::new(Expr::Select {
+            blocks: entry_block(vec![Expr::Ret(Some(Box::new(Expr::Select {
                 cond: Box::new(Expr::ICmp {
                     pred: ICmpPred::Sgt,
                     lhs: Box::new(Expr::LocalRef("a".to_string())),
@@ -1595,7 +1613,7 @@ mod tests {
                 }),
                 true_val: Box::new(Expr::LocalRef("a".to_string())),
                 false_val: Box::new(Expr::LocalRef("b".to_string())),
-            })))],
+            })))]),
         };
 
         let result = jit

@@ -71,11 +71,12 @@ impl std::fmt::Display for VectorType {
     }
 }
 
-/// Type in lIR (scalar or vector)
+/// Type in lIR (scalar or vector or pointer)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Scalar(ScalarType),
     Vector(VectorType),
+    Ptr, // Opaque pointer type (modern LLVM)
 }
 
 impl Type {
@@ -83,6 +84,7 @@ impl Type {
         match self {
             Self::Scalar(s) => s.is_integer(),
             Self::Vector(v) => v.element.is_integer(),
+            Self::Ptr => false,
         }
     }
 
@@ -90,7 +92,12 @@ impl Type {
         match self {
             Self::Scalar(s) => s.is_float(),
             Self::Vector(v) => v.element.is_float(),
+            Self::Ptr => false,
         }
+    }
+
+    pub fn is_pointer(&self) -> bool {
+        matches!(self, Self::Ptr)
     }
 
     pub fn is_i1(&self) -> bool {
@@ -100,7 +107,7 @@ impl Type {
     pub fn scalar(&self) -> Option<&ScalarType> {
         match self {
             Self::Scalar(s) => Some(s),
-            Self::Vector(_) => None,
+            Self::Vector(_) | Self::Ptr => None,
         }
     }
 
@@ -108,6 +115,7 @@ impl Type {
         match self {
             Self::Scalar(s) => s.bit_width(),
             Self::Vector(v) => v.element.bit_width(),
+            Self::Ptr => 64, // Assume 64-bit pointers
         }
     }
 }
@@ -117,6 +125,7 @@ impl std::fmt::Display for Type {
         match self {
             Self::Scalar(s) => write!(f, "{}", s),
             Self::Vector(v) => write!(f, "{}", v),
+            Self::Ptr => write!(f, "ptr"),
         }
     }
 }
@@ -232,6 +241,8 @@ pub enum Expr {
         ty: VectorType,
         elements: Vec<Expr>,
     },
+    // Null pointer literal
+    NullPtr,
 
     // Integer arithmetic
     Add(Box<Expr>, Box<Expr>),
@@ -335,6 +346,44 @@ pub enum Expr {
 
     // Return instruction
     Ret(Option<Box<Expr>>),
+
+    // Memory operations
+    Alloca {
+        ty: ScalarType,
+        count: Option<Box<Expr>>,
+    },
+    Load {
+        ty: ScalarType,
+        ptr: Box<Expr>,
+    },
+    Store {
+        value: Box<Expr>,
+        ptr: Box<Expr>,
+    },
+
+    // Control flow
+    Br(BranchTarget),
+    Phi {
+        ty: ScalarType,
+        incoming: Vec<(String, Box<Expr>)>, // (block_label, value)
+    },
+
+    // Function call
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
+}
+
+/// Branch target - either unconditional or conditional
+#[derive(Debug, Clone, PartialEq)]
+pub enum BranchTarget {
+    Unconditional(String),
+    Conditional {
+        cond: Box<Expr>,
+        true_label: String,
+        false_label: String,
+    },
 }
 
 /// Function parameter
@@ -344,17 +393,76 @@ pub struct Param {
     pub name: String,
 }
 
+/// A basic block with a label and instructions
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasicBlock {
+    pub label: String,
+    pub instructions: Vec<Expr>,
+}
+
 /// Function definition
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDef {
     pub name: String,
     pub return_type: ScalarType,
     pub params: Vec<Param>,
-    pub body: Vec<Expr>,
+    pub blocks: Vec<BasicBlock>,
+}
+
+/// Parameter type in external declarations (simpler than Param - no name)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParamType {
+    Scalar(ScalarType),
+    Ptr,
+}
+
+impl std::fmt::Display for ParamType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scalar(s) => write!(f, "{}", s),
+            Self::Ptr => write!(f, "ptr"),
+        }
+    }
+}
+
+/// Return type for functions (scalar or ptr)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReturnType {
+    Scalar(ScalarType),
+    Ptr,
+}
+
+impl std::fmt::Display for ReturnType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scalar(s) => write!(f, "{}", s),
+            Self::Ptr => write!(f, "ptr"),
+        }
+    }
+}
+
+/// External function declaration
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternDecl {
+    pub name: String,
+    pub return_type: ReturnType,
+    pub param_types: Vec<ParamType>,
+    pub varargs: bool,
+}
+
+/// Global variable definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlobalDef {
+    pub name: String,
+    pub ty: ParamType,     // Type of the value (scalar or ptr)
+    pub initializer: Expr, // Initial value
+    pub is_constant: bool, // true for constant (immutable), false for global (mutable)
 }
 
 /// Top-level module item
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Function(FunctionDef),
+    ExternDecl(ExternDecl),
+    Global(GlobalDef),
 }

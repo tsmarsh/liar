@@ -8,11 +8,13 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
 }
 
-/// Result of parsing: either an expression or a function definition
+/// Result of parsing: either an expression, function definition, extern declaration, or global
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseResult {
     Expr(Expr),
     Function(FunctionDef),
+    ExternDecl(ExternDecl),
+    Global(GlobalDef),
 }
 
 impl<'a> Parser<'a> {
@@ -33,7 +35,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a top-level item: either an expression or a function definition
     pub fn parse_item(&mut self) -> Result<ParseResult, ParseError> {
-        // Peek to see if this is a function definition
+        // Peek to see if this is a function definition or declaration
         self.expect(Token::LParen)?;
 
         let token = self.lexer.peek()?.ok_or(ParseError::UnexpectedEof)?.clone();
@@ -48,6 +50,24 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::UnexpectedToken("trailing input".to_string()));
                 }
                 return Ok(ParseResult::Function(func));
+            } else if name == "declare" {
+                self.lexer.next_token_peeked()?; // consume "declare"
+                let decl = self.parse_extern_decl()?;
+                self.expect(Token::RParen)?;
+                // Ensure we consumed all input
+                if self.lexer.peek()?.is_some() {
+                    return Err(ParseError::UnexpectedToken("trailing input".to_string()));
+                }
+                return Ok(ParseResult::ExternDecl(decl));
+            } else if name == "global" {
+                self.lexer.next_token_peeked()?; // consume "global"
+                let global = self.parse_global_def()?;
+                self.expect(Token::RParen)?;
+                // Ensure we consumed all input
+                if self.lexer.peek()?.is_some() {
+                    return Err(ParseError::UnexpectedToken("trailing input".to_string()));
+                }
+                return Ok(ParseResult::Global(global));
             }
         }
 
@@ -136,6 +156,7 @@ impl<'a> Parser<'a> {
             // Type literals
             "i1" | "i8" | "i16" | "i32" | "i64" => self.parse_int_literal(name),
             "float" | "double" => self.parse_float_literal(name),
+            "ptr" => self.parse_ptr_literal(),
 
             // Integer arithmetic
             "add" => self.parse_binop(|l, r| Expr::Add(Box::new(l), Box::new(r))),
@@ -214,6 +235,18 @@ impl<'a> Parser<'a> {
             // Return instruction
             "ret" => self.parse_ret(),
 
+            // Memory operations
+            "alloca" => self.parse_alloca(),
+            "load" => self.parse_load(),
+            "store" => self.parse_store(),
+
+            // Control flow
+            "br" => self.parse_br(),
+            "phi" => self.parse_phi(),
+
+            // Function call
+            "call" => self.parse_call(),
+
             _ => Err(ParseError::UnknownOperation(name.to_string())),
         }
     }
@@ -232,6 +265,195 @@ impl<'a> Parser<'a> {
                 Ok(Expr::Ret(Some(Box::new(value))))
             }
         }
+    }
+
+    /// Parse alloca: (alloca type) or (alloca type count)
+    fn parse_alloca(&mut self) -> Result<Expr, ParseError> {
+        // Parse the type to allocate
+        let ty = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Check for optional count
+        let count = match self.lexer.peek()? {
+            Some(Token::RParen) => None,
+            _ => Some(Box::new(self.parse_expr()?)),
+        };
+
+        Ok(Expr::Alloca { ty, count })
+    }
+
+    /// Parse load: (load type ptr)
+    fn parse_load(&mut self) -> Result<Expr, ParseError> {
+        // Parse the type to load
+        let ty = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse the pointer
+        let ptr = self.parse_expr()?;
+
+        Ok(Expr::Load {
+            ty,
+            ptr: Box::new(ptr),
+        })
+    }
+
+    /// Parse store: (store value ptr)
+    fn parse_store(&mut self) -> Result<Expr, ParseError> {
+        // Parse the value to store
+        let value = self.parse_expr()?;
+
+        // Parse the pointer
+        let ptr = self.parse_expr()?;
+
+        Ok(Expr::Store {
+            value: Box::new(value),
+            ptr: Box::new(ptr),
+        })
+    }
+
+    /// Parse branch: (br label) or (br cond true-label false-label)
+    fn parse_br(&mut self) -> Result<Expr, ParseError> {
+        // First token could be a label (unconditional) or an expression (conditional)
+        // We need to peek ahead to determine which
+
+        // Try to parse the first thing as an expression
+        let first = self.parse_expr()?;
+
+        // Check if there are more tokens (conditional) or not (unconditional with expr as label ref)
+        match self.lexer.peek()? {
+            Some(Token::RParen) => {
+                // Unconditional branch - first was a label (but parsed as LocalRef)
+                // Actually, it should just be an identifier, let's check
+                if let Expr::LocalRef(label) = first {
+                    Ok(Expr::Br(BranchTarget::Unconditional(label)))
+                } else {
+                    Err(ParseError::Expected {
+                        expected: "label".to_string(),
+                        found: format!("{:?}", first),
+                    })
+                }
+            }
+            _ => {
+                // Conditional branch - first is condition, then two labels
+                let true_label = match self.lexer.next_token_peeked()? {
+                    Some(Token::Ident(s)) => s,
+                    Some(tok) => {
+                        return Err(ParseError::Expected {
+                            expected: "true label".to_string(),
+                            found: format!("{}", tok),
+                        })
+                    }
+                    None => return Err(ParseError::UnexpectedEof),
+                };
+                let false_label = match self.lexer.next_token_peeked()? {
+                    Some(Token::Ident(s)) => s,
+                    Some(tok) => {
+                        return Err(ParseError::Expected {
+                            expected: "false label".to_string(),
+                            found: format!("{}", tok),
+                        })
+                    }
+                    None => return Err(ParseError::UnexpectedEof),
+                };
+                Ok(Expr::Br(BranchTarget::Conditional {
+                    cond: Box::new(first),
+                    true_label,
+                    false_label,
+                }))
+            }
+        }
+    }
+
+    /// Parse phi: (phi type (label1 val1) (label2 val2) ...)
+    fn parse_phi(&mut self) -> Result<Expr, ParseError> {
+        // Parse the type
+        let ty = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse incoming values: (label value) ...
+        let mut incoming = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            self.expect(Token::LParen)?;
+
+            // Parse label
+            let label = match self.lexer.next_token_peeked()? {
+                Some(Token::Ident(s)) => s,
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "block label".to_string(),
+                        found: format!("{}", tok),
+                    })
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            };
+
+            // Parse value
+            let value = self.parse_expr()?;
+            self.expect(Token::RParen)?;
+
+            incoming.push((label, Box::new(value)));
+        }
+
+        Ok(Expr::Phi { ty, incoming })
+    }
+
+    /// Parse call: (call @function-name args...)
+    fn parse_call(&mut self) -> Result<Expr, ParseError> {
+        // Parse function name (must start with @)
+        let name = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) if s.starts_with('@') => s[1..].to_string(),
+            Some(Token::Ident(s)) => {
+                return Err(ParseError::Expected {
+                    expected: "function name starting with @".to_string(),
+                    found: s,
+                })
+            }
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "function name".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse arguments
+        let mut args = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            args.push(self.parse_expr()?);
+        }
+
+        Ok(Expr::Call { name, args })
     }
 
     /// Parse function definition body: (name return-type) (params...) body...
@@ -298,20 +520,190 @@ impl<'a> Parser<'a> {
         }
         self.expect(Token::RParen)?;
 
-        // Parse body expressions
-        let mut body = Vec::new();
+        // Parse blocks
+        let mut blocks = Vec::new();
         while let Some(tok) = self.lexer.peek()? {
             if *tok == Token::RParen {
                 break;
             }
-            body.push(self.parse_expr()?);
+            blocks.push(self.parse_block()?);
         }
 
         Ok(FunctionDef {
             name,
             return_type,
             params,
-            body,
+            blocks,
+        })
+    }
+
+    /// Parse extern declaration: name return-type (param-types...)
+    /// (declare name return-type (param-types...))
+    /// (declare name return-type (param-types... ...))  ; varargs
+    fn parse_extern_decl(&mut self) -> Result<ExternDecl, ParseError> {
+        // Parse name
+        let name = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => s,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "function name".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse return type (allow void and ptr)
+        let return_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) if s == "ptr" => ReturnType::Ptr,
+            Some(Token::Ident(ref s)) => ReturnType::Scalar(self.type_from_name(s)?),
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "return type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse parameter types: (type type ... or type type ...)
+        self.expect(Token::LParen)?;
+        let mut param_types = Vec::new();
+        let mut varargs = false;
+
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            match self.lexer.next_token_peeked()? {
+                Some(Token::Ident(ref s)) if s == "..." => {
+                    varargs = true;
+                    // ... must be last
+                    if self.lexer.peek()? != Some(&Token::RParen) {
+                        return Err(ParseError::UnexpectedToken(
+                            "... must be last in parameter list".to_string(),
+                        ));
+                    }
+                }
+                Some(Token::Ident(ref s)) if s == "ptr" => {
+                    param_types.push(ParamType::Ptr);
+                }
+                Some(Token::Ident(ref s)) => {
+                    let ty = self.type_from_name(s)?;
+                    param_types.push(ParamType::Scalar(ty));
+                }
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "parameter type".to_string(),
+                        found: format!("{}", tok),
+                    })
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            }
+        }
+        self.expect(Token::RParen)?;
+
+        Ok(ExternDecl {
+            name,
+            return_type,
+            param_types,
+            varargs,
+        })
+    }
+
+    /// Parse global definition: name type initializer [:constant]
+    /// (global counter i32 (i32 0))
+    /// (global pi double (double 3.14159) :constant)
+    fn parse_global_def(&mut self) -> Result<GlobalDef, ParseError> {
+        // Parse name
+        let name = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => s,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "global name".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse type (scalar or ptr)
+        let ty = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) if s == "ptr" => ParamType::Ptr,
+            Some(Token::Ident(ref s)) => ParamType::Scalar(self.type_from_name(s)?),
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse initializer expression
+        let initializer = self.parse_expr()?;
+
+        // Check for optional :constant flag
+        let is_constant = if let Some(Token::Ident(ref s)) = self.lexer.peek()? {
+            if s == ":constant" {
+                self.lexer.next_token_peeked()?;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        Ok(GlobalDef {
+            name,
+            ty,
+            initializer,
+            is_constant,
+        })
+    }
+
+    /// Parse a basic block: (block label instructions...)
+    fn parse_block(&mut self) -> Result<BasicBlock, ParseError> {
+        self.expect(Token::LParen)?;
+
+        // Expect 'block' keyword
+        match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) if s == "block" => {}
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "block".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        }
+
+        // Parse label
+        let label = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => s,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "block label".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse instructions
+        let mut instructions = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            instructions.push(self.parse_expr()?);
+        }
+        self.expect(Token::RParen)?;
+
+        Ok(BasicBlock {
+            label,
+            instructions,
         })
     }
 
@@ -347,6 +739,18 @@ impl<'a> Parser<'a> {
             None => return Err(ParseError::UnexpectedEof),
         };
         Ok(Expr::FloatLit { ty, value })
+    }
+
+    fn parse_ptr_literal(&mut self) -> Result<Expr, ParseError> {
+        // Expect 'null' keyword for null pointer
+        match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) if s == "null" => Ok(Expr::NullPtr),
+            Some(tok) => Err(ParseError::Expected {
+                expected: "null".to_string(),
+                found: format!("{}", tok),
+            }),
+            None => Err(ParseError::UnexpectedEof),
+        }
     }
 
     fn parse_vector_literal(&mut self) -> Result<Expr, ParseError> {
@@ -676,5 +1080,97 @@ mod tests {
             .parse()
             .unwrap();
         assert!(matches!(expr, Expr::Select { .. }));
+    }
+
+    #[test]
+    fn test_parse_extern_decl() {
+        let result = Parser::new("(declare malloc ptr (i64))")
+            .parse_item()
+            .unwrap();
+        match result {
+            ParseResult::ExternDecl(decl) => {
+                assert_eq!(decl.name, "malloc");
+                assert_eq!(decl.return_type, ReturnType::Ptr);
+                assert_eq!(decl.param_types.len(), 1);
+                assert!(!decl.varargs);
+            }
+            _ => panic!("expected ExternDecl"),
+        }
+    }
+
+    #[test]
+    fn test_parse_extern_decl_varargs() {
+        let result = Parser::new("(declare printf i32 (ptr ...))")
+            .parse_item()
+            .unwrap();
+        match result {
+            ParseResult::ExternDecl(decl) => {
+                assert_eq!(decl.name, "printf");
+                assert_eq!(decl.return_type, ReturnType::Scalar(ScalarType::I32));
+                assert_eq!(decl.param_types.len(), 1);
+                assert!(decl.varargs);
+            }
+            _ => panic!("expected ExternDecl"),
+        }
+    }
+
+    #[test]
+    fn test_parse_extern_decl_void() {
+        let result = Parser::new("(declare exit void (i32))")
+            .parse_item()
+            .unwrap();
+        match result {
+            ParseResult::ExternDecl(decl) => {
+                assert_eq!(decl.name, "exit");
+                assert_eq!(decl.return_type, ReturnType::Scalar(ScalarType::Void));
+                assert_eq!(decl.param_types.len(), 1);
+            }
+            _ => panic!("expected ExternDecl"),
+        }
+    }
+
+    #[test]
+    fn test_parse_global_int() {
+        let result = Parser::new("(global counter i32 (i32 0))")
+            .parse_item()
+            .unwrap();
+        match result {
+            ParseResult::Global(global) => {
+                assert_eq!(global.name, "counter");
+                assert_eq!(global.ty, ParamType::Scalar(ScalarType::I32));
+                assert!(!global.is_constant);
+            }
+            _ => panic!("expected Global"),
+        }
+    }
+
+    #[test]
+    fn test_parse_global_constant() {
+        let result = Parser::new("(global pi double (double 3.14159) :constant)")
+            .parse_item()
+            .unwrap();
+        match result {
+            ParseResult::Global(global) => {
+                assert_eq!(global.name, "pi");
+                assert_eq!(global.ty, ParamType::Scalar(ScalarType::Double));
+                assert!(global.is_constant);
+            }
+            _ => panic!("expected Global"),
+        }
+    }
+
+    #[test]
+    fn test_parse_global_ptr() {
+        let result = Parser::new("(global buffer ptr null)")
+            .parse_item()
+            .unwrap();
+        match result {
+            ParseResult::Global(global) => {
+                assert_eq!(global.name, "buffer");
+                assert_eq!(global.ty, ParamType::Ptr);
+                assert!(!global.is_constant);
+            }
+            _ => panic!("expected Global"),
+        }
     }
 }

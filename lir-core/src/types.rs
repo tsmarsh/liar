@@ -35,8 +35,10 @@ impl TypeChecker {
     pub fn check_function(&self, func: &FunctionDef) -> Result<(), TypeError> {
         let checker = TypeChecker::with_function(&func.params, func.return_type.clone());
 
-        for expr in &func.body {
-            checker.check(expr)?;
+        for block in &func.blocks {
+            for expr in &block.instructions {
+                checker.check(expr)?;
+            }
         }
 
         Ok(())
@@ -48,6 +50,7 @@ impl TypeChecker {
         match expr {
             Expr::IntLit { ty, .. } => Ok(Type::Scalar(ty.clone())),
             Expr::FloatLit { ty, .. } => Ok(Type::Scalar(ty.clone())),
+            Expr::NullPtr => Ok(Type::Ptr),
             Expr::VectorLit { ty, elements } => {
                 // Verify element count matches
                 if elements.len() != ty.count as usize {
@@ -135,6 +138,7 @@ impl TypeChecker {
                         count: vt.count,
                         element: ScalarType::I1,
                     })),
+                    Type::Ptr => Err(TypeError::IcmpRequiresInt), // Already checked above
                 }
             }
 
@@ -155,6 +159,7 @@ impl TypeChecker {
                         count: vt.count,
                         element: ScalarType::I1,
                     })),
+                    Type::Ptr => Err(TypeError::FcmpRequiresFloat), // Already checked above
                 }
             }
 
@@ -357,6 +362,77 @@ impl TypeChecker {
                     // No function context - ret not valid
                     Err(TypeError::RetOutsideFunction)
                 }
+            }
+
+            // Memory operations
+            Expr::Alloca { count, .. } => {
+                // If there's a count, it must be an integer
+                if let Some(c) = count {
+                    let count_ty = self.check(c)?;
+                    if !count_ty.is_integer() {
+                        return Err(TypeError::TypeMismatch);
+                    }
+                }
+                // Alloca returns a pointer
+                Ok(Type::Ptr)
+            }
+
+            Expr::Load { ty, ptr } => {
+                // Pointer must be a pointer type
+                let ptr_ty = self.check(ptr)?;
+                if !ptr_ty.is_pointer() {
+                    return Err(TypeError::LoadRequiresPointer);
+                }
+                // Load returns the specified type
+                Ok(Type::Scalar(ty.clone()))
+            }
+
+            Expr::Store { value, ptr } => {
+                // Pointer must be a pointer type
+                let ptr_ty = self.check(ptr)?;
+                if !ptr_ty.is_pointer() {
+                    return Err(TypeError::StoreRequiresPointer);
+                }
+                // Check the value type (we don't verify it matches the pointee,
+                // that's the programmer's responsibility in lIR)
+                self.check(value)?;
+                // Store returns void
+                Ok(Type::Scalar(ScalarType::Void))
+            }
+
+            // Control flow
+            Expr::Br(target) => {
+                // Check conditional branch has i1 condition
+                if let BranchTarget::Conditional { cond, .. } = target {
+                    let cond_ty = self.check(cond)?;
+                    if !cond_ty.is_i1() {
+                        return Err(TypeError::ConditionMustBeI1);
+                    }
+                }
+                // Br is a terminator, returns void
+                Ok(Type::Scalar(ScalarType::Void))
+            }
+
+            Expr::Phi { ty, incoming } => {
+                // Check all incoming values have the expected type
+                let expected = Type::Scalar(ty.clone());
+                for (_, value) in incoming {
+                    let value_ty = self.check(value)?;
+                    if value_ty != expected {
+                        return Err(TypeError::TypeMismatch);
+                    }
+                }
+                Ok(expected)
+            }
+
+            Expr::Call { args, .. } => {
+                // Type check all arguments
+                for arg in args {
+                    self.check(arg)?;
+                }
+                // We can't determine the return type without function context
+                // For now, assume i32 - this will be refined when we have a module context
+                Ok(Type::Scalar(ScalarType::I32))
             }
         }
     }

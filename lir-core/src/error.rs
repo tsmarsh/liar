@@ -91,6 +91,12 @@ pub enum TypeError {
 
     #[error("ret outside function")]
     RetOutsideFunction,
+
+    #[error("load requires pointer operand")]
+    LoadRequiresPointer,
+
+    #[error("store requires pointer operand")]
+    StoreRequiresPointer,
 }
 
 pub type Result<T> = std::result::Result<T, LirError>;

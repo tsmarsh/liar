@@ -4,11 +4,14 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, VectorType as LLVMVectorType};
-use inkwell::values::{BasicValueEnum, FunctionValue, VectorValue as LLVMVectorValue};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, VectorValue as LLVMVectorValue,
+};
 
 use inkwell::{FloatPredicate, IntPredicate};
 use lir_core::ast::{
-    Expr, FCmpPred, FloatValue, FunctionDef, ICmpPred, ScalarType, Type, VectorType,
+    BranchTarget, Expr, ExternDecl, FCmpPred, FloatValue, FunctionDef, GlobalDef, ICmpPred,
+    ParamType, ReturnType, ScalarType, Type, VectorType,
 };
 use lir_core::error::TypeError;
 use lir_core::types::TypeChecker;
@@ -96,6 +99,10 @@ impl<'ctx> CodeGen<'ctx> {
                     }
                 }
             }
+            Type::Ptr => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
         }
     }
 
@@ -138,9 +145,12 @@ impl<'ctx> CodeGen<'ctx> {
         // Create function
         let function = self.module.add_function(&func.name, fn_type, None);
 
-        // Create entry block
-        let entry_block = self.context.append_basic_block(function, "entry");
-        self.builder.position_at_end(entry_block);
+        // Create all basic blocks first (for forward references in branches)
+        let mut block_map: HashMap<String, inkwell::basic_block::BasicBlock<'ctx>> = HashMap::new();
+        for block in &func.blocks {
+            let bb = self.context.append_basic_block(function, &block.label);
+            block_map.insert(block.label.clone(), bb);
+        }
 
         // Build locals map from parameters
         let mut locals: HashMap<String, BasicValueEnum<'ctx>> = HashMap::new();
@@ -149,12 +159,218 @@ impl<'ctx> CodeGen<'ctx> {
             locals.insert(param.name.clone(), param_value);
         }
 
-        // Compile body expressions
-        for expr in &func.body {
-            self.compile_expr_with_locals(expr, &locals)?;
+        // Compile each block
+        for block in &func.blocks {
+            let bb = block_map[&block.label];
+            self.builder.position_at_end(bb);
+
+            for expr in &block.instructions {
+                self.compile_expr_with_block_context(expr, &locals, &block_map)?;
+            }
         }
 
         Ok(function)
+    }
+
+    /// Compile an external function declaration
+    pub fn compile_extern_decl(&self, decl: &ExternDecl) -> Result<FunctionValue<'ctx>> {
+        // Build parameter types
+        let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = decl
+            .param_types
+            .iter()
+            .filter_map(|p| match p {
+                ParamType::Scalar(s) => self.scalar_to_basic_type(s),
+                ParamType::Ptr => Some(
+                    self.context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .into(),
+                ),
+            })
+            .map(|t| t.into())
+            .collect();
+
+        // Build function type
+        let fn_type = match &decl.return_type {
+            ReturnType::Ptr => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .fn_type(&param_types, decl.varargs),
+            ReturnType::Scalar(ScalarType::Void) => {
+                self.context.void_type().fn_type(&param_types, decl.varargs)
+            }
+            ReturnType::Scalar(ScalarType::I1) => {
+                self.context.bool_type().fn_type(&param_types, decl.varargs)
+            }
+            ReturnType::Scalar(ScalarType::I8) => {
+                self.context.i8_type().fn_type(&param_types, decl.varargs)
+            }
+            ReturnType::Scalar(ScalarType::I16) => {
+                self.context.i16_type().fn_type(&param_types, decl.varargs)
+            }
+            ReturnType::Scalar(ScalarType::I32) => {
+                self.context.i32_type().fn_type(&param_types, decl.varargs)
+            }
+            ReturnType::Scalar(ScalarType::I64) => {
+                self.context.i64_type().fn_type(&param_types, decl.varargs)
+            }
+            ReturnType::Scalar(ScalarType::Float) => {
+                self.context.f32_type().fn_type(&param_types, decl.varargs)
+            }
+            ReturnType::Scalar(ScalarType::Double) => {
+                self.context.f64_type().fn_type(&param_types, decl.varargs)
+            }
+        };
+
+        // Add external function declaration
+        let function = self.module.add_function(&decl.name, fn_type, None);
+        Ok(function)
+    }
+
+    /// Compile a global variable definition
+    pub fn compile_global(&self, global: &GlobalDef) -> Result<inkwell::values::GlobalValue<'ctx>> {
+        // Get the LLVM type for the global
+        let global_type = match &global.ty {
+            ParamType::Scalar(s) => self.scalar_to_basic_type(s).ok_or_else(|| {
+                CodeGenError::CodeGen("void type not allowed for global".to_string())
+            })?,
+            ParamType::Ptr => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
+        };
+
+        // Compile the initializer to get a constant value
+        // For now, we only support simple literal initializers
+        let initializer: BasicValueEnum<'ctx> = match &global.initializer {
+            Expr::IntLit { ty, value } => {
+                let int_type = self.int_type(ty);
+                int_type.const_int(*value as u64, *value < 0).into()
+            }
+            Expr::FloatLit { ty, value } => {
+                let float_val = match value {
+                    FloatValue::Number(n) => *n,
+                    FloatValue::Inf => f64::INFINITY,
+                    FloatValue::NegInf => f64::NEG_INFINITY,
+                    FloatValue::Nan => f64::NAN,
+                };
+                match ty {
+                    ScalarType::Float => self.context.f32_type().const_float(float_val).into(),
+                    ScalarType::Double => self.context.f64_type().const_float(float_val).into(),
+                    _ => {
+                        return Err(CodeGenError::CodeGen(
+                            "invalid float type for global".to_string(),
+                        ))
+                    }
+                }
+            }
+            Expr::NullPtr => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .const_null()
+                .into(),
+            _ => {
+                return Err(CodeGenError::NotImplemented(
+                    "complex global initializers".to_string(),
+                ))
+            }
+        };
+
+        // Add the global variable
+        let global_val = self.module.add_global(global_type, None, &global.name);
+        global_val.set_initializer(&initializer);
+
+        // Set constant flag if specified
+        global_val.set_constant(global.is_constant);
+
+        Ok(global_val)
+    }
+
+    /// Compile expression with block context for branch targets
+    fn compile_expr_with_block_context(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+        blocks: &HashMap<String, inkwell::basic_block::BasicBlock<'ctx>>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        match expr {
+            Expr::Br(target) => {
+                match target {
+                    BranchTarget::Unconditional(label) => {
+                        let bb = blocks.get(label).ok_or_else(|| {
+                            CodeGenError::CodeGen(format!("undefined block: {}", label))
+                        })?;
+                        self.builder
+                            .build_unconditional_branch(*bb)
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                    }
+                    BranchTarget::Conditional {
+                        cond,
+                        true_label,
+                        false_label,
+                    } => {
+                        let cond_val = self.compile_expr_recursive(cond, locals)?;
+                        let cond_val = cond_val.into_int_value();
+                        let true_bb = blocks.get(true_label).ok_or_else(|| {
+                            CodeGenError::CodeGen(format!("undefined block: {}", true_label))
+                        })?;
+                        let false_bb = blocks.get(false_label).ok_or_else(|| {
+                            CodeGenError::CodeGen(format!("undefined block: {}", false_label))
+                        })?;
+                        self.builder
+                            .build_conditional_branch(cond_val, *true_bb, *false_bb)
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                    }
+                }
+                Ok(None)
+            }
+
+            Expr::Phi { ty, incoming } => {
+                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                    CodeGenError::CodeGen("cannot create phi for void type".to_string())
+                })?;
+
+                let phi = self
+                    .builder
+                    .build_phi(llvm_ty, "phi")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                for (label, value_expr) in incoming {
+                    let bb = blocks.get(label).ok_or_else(|| {
+                        CodeGenError::CodeGen(format!("undefined block: {}", label))
+                    })?;
+                    let value = self.compile_expr_recursive(value_expr, locals)?;
+                    phi.add_incoming(&[(&value, *bb)]);
+                }
+
+                Ok(Some(phi.as_basic_value()))
+            }
+
+            Expr::Call { name, args } => {
+                // Look up the function in the module
+                let function = self.module.get_function(name).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("undefined function: {}", name))
+                })?;
+
+                // Compile arguments
+                let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                for arg in args {
+                    let val = self.compile_expr_recursive(arg, locals)?;
+                    compiled_args.push(val.into());
+                }
+
+                // Build the call
+                let call_site = self
+                    .builder
+                    .build_call(function, &compiled_args, "call")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Return the result if non-void (Basic = value, Instruction = void)
+                Ok(call_site.try_as_basic_value().basic())
+            }
+
+            // Delegate to existing function for other expressions
+            _ => self.compile_expr_with_locals(expr, locals),
+        }
     }
 
     /// Compile expression with local variable context
@@ -243,6 +459,12 @@ impl<'ctx> CodeGen<'ctx> {
                 .get(name)
                 .copied()
                 .ok_or_else(|| CodeGenError::CodeGen(format!("undefined variable: {}", name))),
+
+            // Null pointer literal
+            Expr::NullPtr => {
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().into())
+            }
 
             // Binary operations - recurse with locals
             Expr::Add(lhs, rhs) => {
@@ -510,6 +732,85 @@ impl<'ctx> CodeGen<'ctx> {
                 "ret should be handled at statement level".to_string(),
             )),
 
+            // Memory operations
+            Expr::Alloca { ty, count } => {
+                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                    CodeGenError::CodeGen("cannot allocate void type".to_string())
+                })?;
+                let alloca = if let Some(count_expr) = count {
+                    let count_val = self.compile_expr_recursive(count_expr, locals)?;
+                    let count_int = count_val.into_int_value();
+                    self.builder
+                        .build_array_alloca(llvm_ty, count_int, "alloca")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                } else {
+                    self.builder
+                        .build_alloca(llvm_ty, "alloca")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                Ok(alloca.into())
+            }
+
+            Expr::Load { ty, ptr } => {
+                let ptr_val = self.compile_expr_recursive(ptr, locals)?;
+                let ptr_val = ptr_val.into_pointer_value();
+                let llvm_ty = self
+                    .scalar_to_basic_type(ty)
+                    .ok_or_else(|| CodeGenError::CodeGen("cannot load void type".to_string()))?;
+                let loaded = self
+                    .builder
+                    .build_load(llvm_ty, ptr_val, "load")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                Ok(loaded)
+            }
+
+            Expr::Store { value, ptr } => {
+                let val = self.compile_expr_recursive(value, locals)?;
+                let ptr_val = self.compile_expr_recursive(ptr, locals)?;
+                let ptr_val = ptr_val.into_pointer_value();
+                self.builder
+                    .build_store(ptr_val, val)
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                // Store returns void, but we need a BasicValueEnum
+                // Return a dummy i32 0 since void can't be a BasicValueEnum
+                Ok(self.context.i32_type().const_zero().into())
+            }
+
+            // Control flow - these need block context
+            Expr::Br(_) => Err(CodeGenError::CodeGen(
+                "br requires block context".to_string(),
+            )),
+            Expr::Phi { .. } => Err(CodeGenError::CodeGen(
+                "phi requires block context".to_string(),
+            )),
+
+            // Function call - needs block context for full support
+            Expr::Call { name, args } => {
+                // Look up the function in the module
+                let function = self.module.get_function(name).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("undefined function: {}", name))
+                })?;
+
+                // Compile arguments
+                let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                for arg in args {
+                    let val = self.compile_expr_recursive(arg, locals)?;
+                    compiled_args.push(val.into());
+                }
+
+                // Build the call
+                let call_site = self
+                    .builder
+                    .build_call(function, &compiled_args, "call")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Return the result if non-void
+                call_site
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| CodeGenError::CodeGen("call returned void".to_string()))
+            }
+
             // For any other expressions, fall back to compile_expr
             _ => self.compile_expr(expr),
         }
@@ -533,6 +834,12 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(llvm_ty
                     .const_int(val, scalar_ty != &ScalarType::I1 && *value < 0)
                     .into())
+            }
+
+            // Null pointer literal
+            Expr::NullPtr => {
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().into())
             }
 
             // Integer arithmetic - handle both scalars and vectors
@@ -1087,6 +1394,24 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::Ret(_) => Err(CodeGenError::CodeGen(
                 "ret requires function context".to_string(),
             )),
+            Expr::Alloca { .. } => Err(CodeGenError::CodeGen(
+                "alloca requires function context".to_string(),
+            )),
+            Expr::Load { .. } => Err(CodeGenError::CodeGen(
+                "load requires function context".to_string(),
+            )),
+            Expr::Store { .. } => Err(CodeGenError::CodeGen(
+                "store requires function context".to_string(),
+            )),
+            Expr::Br(_) => Err(CodeGenError::CodeGen(
+                "br requires block context".to_string(),
+            )),
+            Expr::Phi { .. } => Err(CodeGenError::CodeGen(
+                "phi requires block context".to_string(),
+            )),
+            Expr::Call { .. } => Err(CodeGenError::CodeGen(
+                "call requires function context".to_string(),
+            )),
         }
     }
 
@@ -1107,6 +1432,11 @@ impl<'ctx> CodeGen<'ctx> {
                 // For vectors, we pass an output pointer as a parameter
                 let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
                 self.context.void_type().fn_type(&[ptr_type.into()], false)
+            }
+            Type::Ptr => {
+                // Pointer return type
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                ptr_type.fn_type(&[], false)
             }
         };
 
@@ -1183,6 +1513,7 @@ pub enum Value {
     I64(i64),
     Float(f32),
     Double(f64),
+    Ptr(u64), // Pointer as raw address
     // Vector types - stored as Vec for flexibility
     VecI1(Vec<bool>),
     VecI8(Vec<i8>),
@@ -1203,6 +1534,7 @@ impl PartialEq for Value {
             (Value::I64(a), Value::I64(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b || (a.is_nan() && b.is_nan()),
             (Value::Double(a), Value::Double(b)) => a == b || (a.is_nan() && b.is_nan()),
+            (Value::Ptr(a), Value::Ptr(b)) => a == b,
             (Value::VecI1(a), Value::VecI1(b)) => a == b,
             (Value::VecI8(a), Value::VecI8(b)) => a == b,
             (Value::VecI16(a), Value::VecI16(b)) => a == b,
@@ -1275,6 +1607,13 @@ impl std::fmt::Display for Value {
             Value::I64(v) => write!(f, "(i64 {})", v),
             Value::Float(v) => write!(f, "(float {})", format_float(*v)),
             Value::Double(v) => write!(f, "(double {})", format_double(*v)),
+            Value::Ptr(v) => {
+                if *v == 0 {
+                    write!(f, "(ptr null)")
+                } else {
+                    write!(f, "(ptr 0x{:x})", v)
+                }
+            }
             // Vector display: (<N x type> v1 v2 v3 ...)
             Value::VecI1(vals) => {
                 write!(f, "(<{} x i1>", vals.len())?;
