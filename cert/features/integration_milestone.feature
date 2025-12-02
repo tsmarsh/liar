@@ -89,12 +89,12 @@ Feature: Integration Milestone (lIR readiness for liar)
   # ============================================================
 
   Scenario: Stack allocation and load/store
-    Given the expression (define (stack-test i64) () (let ((p (alloca i64))) (store (i64 42) p) (ret (load i64 p))))
+    Given the expression (define (stack-test i64) () (block entry (let ((p (alloca i64))) (store (i64 42) p) (ret (load i64 p)))))
     When I call stack-test
     Then the result is (i64 42)
 
   Scenario: Swap via stack
-    Given the expression (define (swap-first i64) ((i64 a) (i64 b)) (let ((pa (alloca i64)) (pb (alloca i64))) (store a pa) (store b pb) (let ((tmp (load i64 pa))) (store (load i64 pb) pa) (store tmp pb)) (ret (load i64 pa))))
+    Given the expression (define (swap-first i64) ((i64 a) (i64 b)) (block entry (let ((pa (alloca i64)) (pb (alloca i64))) (store a pa) (store b pb) (let ((tmp (load i64 pa))) (store (load i64 pb) pa) (store tmp pb)) (ret (load i64 pa)))))
     When I call swap-first with (i64 10) (i64 20)
     Then the result is (i64 20)
 
@@ -104,7 +104,7 @@ Feature: Integration Milestone (lIR readiness for liar)
 
   Scenario: External function declaration and call
     Given the expression (declare abs i64 (i64))
-    And the expression (define (call-abs i64) ((i64 x)) (ret (call @abs x)))
+    And the expression (define (call-abs i64) ((i64 x)) (block entry (ret (call @abs x))))
     When I call call-abs with (i64 -42)
     Then the result is (i64 42)
 
@@ -114,13 +114,13 @@ Feature: Integration Milestone (lIR readiness for liar)
 
   Scenario: Define struct and access field via GEP
     Given the expression (defstruct point (i64 i64))
-    And the expression (define (get-x i64) ((ptr p)) (ret (load i64 (getelementptr %struct.point p (i64 0) (i32 0)))))
+    And the expression (define (get-x i64) ((ptr p)) (block entry (ret (load i64 (getelementptr %struct.point p (i64 0) (i32 0))))))
     When I call get-x with a point { x: 10, y: 20 }
     Then the result is (i64 10)
 
   Scenario: Set struct field via GEP
     Given the expression (defstruct counter (i64))
-    And the expression (define (set-count void) ((ptr c) (i64 n)) (store n (getelementptr %struct.counter c (i64 0) (i32 0))) (ret))
+    And the expression (define (set-count void) ((ptr c) (i64 n)) (block entry (store n (getelementptr %struct.counter c (i64 0) (i32 0))) (ret)))
     When I allocate counter and call set-count with (i64 99)
     Then loading field 0 returns (i64 99)
 
@@ -132,8 +132,8 @@ Feature: Integration Milestone (lIR readiness for liar)
 
   Scenario: Closure simulation - adder
     Given the expression (defstruct adder_env (i64))
-    And the expression (define (adder_fn i64) ((ptr env) (i64 y)) (let ((x (load i64 (getelementptr %struct.adder_env env (i64 0) (i32 0))))) (ret (add x y))))
-    And the expression (define (make_adder ptr) ((i64 x)) (let ((env (alloca i64))) (store x env) (ret env)))
+    And the expression (define (adder_fn i64) ((ptr env) (i64 y)) (block entry (let ((x (load i64 (getelementptr %struct.adder_env env (i64 0) (i32 0))))) (ret (add x y)))))
+    And the expression (define (make_adder ptr) ((i64 x)) (block entry (let ((env (alloca i64))) (store x env) (ret env))))
     And I create an adder with captured value (i64 10)
     When I call the adder with (i64 32)
     Then the result is (i64 42)

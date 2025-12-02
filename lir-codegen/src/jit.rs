@@ -51,11 +51,11 @@ impl<'ctx> JitEngine<'ctx> {
             .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
         // Call based on signature
-        self.call_function(&execution_engine, &func.name, &func.return_type, args)
+        self.call_compiled_function(&execution_engine, &func.name, &func.return_type, args)
     }
 
-    /// Call a compiled function by name
-    fn call_function(
+    /// Call a compiled function by name (public for test harness)
+    pub fn call_compiled_function(
         &self,
         execution_engine: &inkwell::execution_engine::ExecutionEngine<'ctx>,
         name: &str,
@@ -209,6 +209,41 @@ impl<'ctx> JitEngine<'ctx> {
                 };
                 let result = unsafe { func.call(arg1, arg2) };
                 Ok(Value::I32(result))
+            }
+
+            // i64 functions with args
+            (ReturnType::Scalar(ScalarType::I64), 1) => {
+                type I64ToI64 = unsafe extern "C" fn(i64) -> i64;
+                let func: JitFunction<I64ToI64> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let arg = match args[0] {
+                    Value::I64(v) => v,
+                    _ => return Err(CodeGenError::CodeGen("expected i64 argument".to_string())),
+                };
+                let result = unsafe { func.call(arg) };
+                Ok(Value::I64(result))
+            }
+
+            (ReturnType::Scalar(ScalarType::I64), 2) => {
+                type I64I64ToI64 = unsafe extern "C" fn(i64, i64) -> i64;
+                let func: JitFunction<I64I64ToI64> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let arg1 = match args[0] {
+                    Value::I64(v) => v,
+                    _ => return Err(CodeGenError::CodeGen("expected i64 argument".to_string())),
+                };
+                let arg2 = match args[1] {
+                    Value::I64(v) => v,
+                    _ => return Err(CodeGenError::CodeGen("expected i64 argument".to_string())),
+                };
+                let result = unsafe { func.call(arg1, arg2) };
+                Ok(Value::I64(result))
             }
 
             _ => Err(CodeGenError::CodeGen(format!(

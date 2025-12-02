@@ -35,7 +35,27 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a top-level item: either an expression or a function definition
+    /// Ensures all input is consumed (for single-item parsing)
     pub fn parse_item(&mut self) -> Result<ParseResult, ParseError> {
+        let result = self.parse_one_item()?;
+        // Ensure we consumed all input
+        if self.lexer.peek()?.is_some() {
+            return Err(ParseError::UnexpectedToken("trailing input".to_string()));
+        }
+        Ok(result)
+    }
+
+    /// Parse multiple top-level items (functions, declarations, etc.)
+    pub fn parse_items(&mut self) -> Result<Vec<ParseResult>, ParseError> {
+        let mut items = Vec::new();
+        while self.lexer.peek()?.is_some() {
+            items.push(self.parse_one_item()?);
+        }
+        Ok(items)
+    }
+
+    /// Parse a single top-level item without checking for trailing input
+    fn parse_one_item(&mut self) -> Result<ParseResult, ParseError> {
         // Peek to see if this is a function definition or declaration
         self.expect(Token::LParen)?;
 
@@ -46,37 +66,21 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token_peeked()?; // consume "define"
                 let func = self.parse_function_def()?;
                 self.expect(Token::RParen)?;
-                // Ensure we consumed all input
-                if self.lexer.peek()?.is_some() {
-                    return Err(ParseError::UnexpectedToken("trailing input".to_string()));
-                }
                 return Ok(ParseResult::Function(func));
             } else if name == "declare" {
                 self.lexer.next_token_peeked()?; // consume "declare"
                 let decl = self.parse_extern_decl()?;
                 self.expect(Token::RParen)?;
-                // Ensure we consumed all input
-                if self.lexer.peek()?.is_some() {
-                    return Err(ParseError::UnexpectedToken("trailing input".to_string()));
-                }
                 return Ok(ParseResult::ExternDecl(decl));
             } else if name == "global" {
                 self.lexer.next_token_peeked()?; // consume "global"
                 let global = self.parse_global_def()?;
                 self.expect(Token::RParen)?;
-                // Ensure we consumed all input
-                if self.lexer.peek()?.is_some() {
-                    return Err(ParseError::UnexpectedToken("trailing input".to_string()));
-                }
                 return Ok(ParseResult::Global(global));
             } else if name == "defstruct" {
                 self.lexer.next_token_peeked()?; // consume "defstruct"
                 let struct_def = self.parse_struct_def()?;
                 self.expect(Token::RParen)?;
-                // Ensure we consumed all input
-                if self.lexer.peek()?.is_some() {
-                    return Err(ParseError::UnexpectedToken("trailing input".to_string()));
-                }
                 return Ok(ParseResult::Struct(struct_def));
             }
         }
@@ -87,10 +91,6 @@ impl<'a> Parser<'a> {
         if let Some(Token::LAngle) = self.lexer.peek()? {
             let expr = self.parse_vector_literal()?;
             self.expect(Token::RParen)?;
-            // Ensure we consumed all input
-            if self.lexer.peek()?.is_some() {
-                return Err(ParseError::UnexpectedToken("trailing input".to_string()));
-            }
             return Ok(ParseResult::Expr(expr));
         }
 
@@ -110,11 +110,6 @@ impl<'a> Parser<'a> {
         };
 
         self.expect(Token::RParen)?;
-
-        // Ensure we consumed all input
-        if self.lexer.peek()?.is_some() {
-            return Err(ParseError::UnexpectedToken("trailing input".to_string()));
-        }
 
         Ok(ParseResult::Expr(expr))
     }

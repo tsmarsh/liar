@@ -164,7 +164,14 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     /// Compile a function definition
-    pub fn compile_function(&self, func: &FunctionDef) -> Result<FunctionValue<'ctx>> {
+    /// Declare a function signature without compiling the body.
+    /// Use this for forward declarations to enable mutual recursion.
+    pub fn declare_function(&self, func: &FunctionDef) -> FunctionValue<'ctx> {
+        // Check if already declared
+        if let Some(existing) = self.module.get_function(&func.name) {
+            return existing;
+        }
+
         // Build parameter types
         let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
             .params
@@ -205,8 +212,12 @@ impl<'ctx> CodeGen<'ctx> {
                 .fn_type(&param_types, false),
         };
 
-        // Create function
-        let function = self.module.add_function(&func.name, fn_type, None);
+        self.module.add_function(&func.name, fn_type, None)
+    }
+
+    pub fn compile_function(&self, func: &FunctionDef) -> Result<FunctionValue<'ctx>> {
+        // Get or create function declaration
+        let function = self.declare_function(func);
 
         // Create all basic blocks first (for forward references in branches)
         let mut block_map: HashMap<String, inkwell::basic_block::BasicBlock<'ctx>> = HashMap::new();

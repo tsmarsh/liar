@@ -1,10 +1,3 @@
-#!/bin/bash
-
-# =============================================================================
-# Moth: Add function call step definitions to complete the test harness
-# =============================================================================
-
-moth new "lIR: cucumber step definitions for function calls" -s crit --no-edit --stdin << 'EOF'
 ## Summary
 50 scenarios are skipped because there's no step definition for calling compiled
 functions. The functions compile successfully (Given steps pass), but we can't
@@ -120,10 +113,3 @@ This is similar to what the unit tests already do, just exposed as a clean API.
 - [ ] functions.feature: 0 skipped  
 - [ ] integration_milestone.feature: 0 skipped
 - [ ] Final: 201 passed, 0 skipped
-EOF
-
-echo ""
-echo "Created moth. Run 'moth ls' to see it."
-echo ""
-echo "This is the last piece - once function calls work, you'll have:"
-echo "  201 scenarios passed, 0 skipped"
