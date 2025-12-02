@@ -8,7 +8,3 @@ description = "Cucumber test harness for lIR feature specifications"
 cucumber = "0.21"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 async-trait = "0.1"
-
-[[test]]
-name = "features"
-harness = false
