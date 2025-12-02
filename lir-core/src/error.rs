@@ -97,6 +97,12 @@ pub enum TypeError {
 
     #[error("store requires pointer operand")]
     StoreRequiresPointer,
+
+    #[error("getelementptr requires pointer operand")]
+    GepRequiresPointer,
+
+    #[error("getelementptr index must be integer")]
+    GepIndexMustBeInt,
 }
 
 pub type Result<T> = std::result::Result<T, LirError>;

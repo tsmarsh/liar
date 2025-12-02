@@ -401,6 +401,24 @@ impl TypeChecker {
                 Ok(Type::Scalar(ScalarType::Void))
             }
 
+            // Pointer arithmetic
+            Expr::GetElementPtr { ptr, indices, .. } => {
+                // Pointer must be a pointer type
+                let ptr_ty = self.check(ptr)?;
+                if !ptr_ty.is_pointer() {
+                    return Err(TypeError::GepRequiresPointer);
+                }
+                // All indices must be integers
+                for idx in indices {
+                    let idx_ty = self.check(idx)?;
+                    if !idx_ty.is_integer() {
+                        return Err(TypeError::GepIndexMustBeInt);
+                    }
+                }
+                // GEP returns a pointer
+                Ok(Type::Ptr)
+            }
+
             // Control flow
             Expr::Br(target) => {
                 // Check conditional branch has i1 condition

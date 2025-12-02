@@ -242,6 +242,16 @@ impl<'a> Parser<'a> {
             "alloca" => self.parse_alloca(),
             "load" => self.parse_load(),
             "store" => self.parse_store(),
+            "getelementptr" => self.parse_getelementptr(false),
+            "inbounds" => {
+                // This is getelementptr inbounds - expect 'getelementptr' keyword conceptually
+                // but the 'inbounds' keyword triggers the variant
+                // Actually, we should parse: (getelementptr inbounds type ptr indices...)
+                // So if we see just "inbounds", that's an error. We handle it in parse_getelementptr
+                Err(ParseError::UnknownOperation(
+                    "inbounds without getelementptr".to_string(),
+                ))
+            }
 
             // Control flow
             "br" => self.parse_br(),
@@ -327,6 +337,53 @@ impl<'a> Parser<'a> {
         Ok(Expr::Store {
             value: Box::new(value),
             ptr: Box::new(ptr),
+        })
+    }
+
+    /// Parse getelementptr: (getelementptr [inbounds] type ptr indices...)
+    fn parse_getelementptr(&mut self, _: bool) -> Result<Expr, ParseError> {
+        // Check for 'inbounds' keyword
+        let inbounds = match self.lexer.peek()? {
+            Some(Token::Ident(s)) if s == "inbounds" => {
+                self.lexer.next_token_peeked()?; // consume 'inbounds'
+                true
+            }
+            _ => false,
+        };
+
+        // Parse the element type
+        let ty = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse the base pointer
+        let ptr = self.parse_expr()?;
+
+        // Parse indices until we hit RParen
+        let mut indices = Vec::new();
+        while !matches!(self.lexer.peek()?, Some(Token::RParen)) {
+            indices.push(self.parse_expr()?);
+        }
+
+        if indices.is_empty() {
+            return Err(ParseError::Expected {
+                expected: "at least one index".to_string(),
+                found: ")".to_string(),
+            });
+        }
+
+        Ok(Expr::GetElementPtr {
+            ty,
+            ptr: Box::new(ptr),
+            indices,
+            inbounds,
         })
     }
 
@@ -1199,5 +1256,47 @@ mod tests {
     fn test_parse_string_with_escapes() {
         let result = Parser::new("(string \"hello\\nworld\")").parse().unwrap();
         assert_eq!(result, Expr::StringLit("hello\nworld".to_string()));
+    }
+
+    #[test]
+    fn test_parse_getelementptr() {
+        let result = Parser::new("(getelementptr i8 (ptr null) (i64 0))")
+            .parse()
+            .unwrap();
+        match result {
+            Expr::GetElementPtr {
+                ty,
+                ptr,
+                indices,
+                inbounds,
+            } => {
+                assert_eq!(ty, ScalarType::I8);
+                assert!(matches!(*ptr, Expr::NullPtr));
+                assert_eq!(indices.len(), 1);
+                assert!(!inbounds);
+            }
+            _ => panic!("expected GetElementPtr"),
+        }
+    }
+
+    #[test]
+    fn test_parse_getelementptr_inbounds() {
+        let result = Parser::new("(getelementptr inbounds i32 (ptr null) (i64 5) (i32 0))")
+            .parse()
+            .unwrap();
+        match result {
+            Expr::GetElementPtr {
+                ty,
+                ptr,
+                indices,
+                inbounds,
+            } => {
+                assert_eq!(ty, ScalarType::I32);
+                assert!(matches!(*ptr, Expr::NullPtr));
+                assert_eq!(indices.len(), 2);
+                assert!(inbounds);
+            }
+            _ => panic!("expected GetElementPtr"),
+        }
     }
 }

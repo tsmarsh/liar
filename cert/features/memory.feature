@@ -33,3 +33,16 @@ Feature: Memory Operations (alloca, load, store)
     Given the expression (define (read-ptr i32) ((ptr p)) (ret (load i32 p)))
     When I call read-ptr with a pointer to (i32 99)
     Then the result is (i32 99)
+
+  # Getelementptr (GEP) - pointer arithmetic
+  Scenario: getelementptr on string - simple offset
+    Given the expression (getelementptr i8 (string "hello") (i64 0))
+    Then the result is a pointer
+
+  Scenario: getelementptr on string - offset by 1
+    Given the expression (getelementptr i8 (string "hello") (i64 1))
+    Then the result is a pointer
+
+  Scenario: getelementptr inbounds
+    Given the expression (getelementptr inbounds i8 (string "hello") (i64 2))
+    Then the result is a pointer

@@ -796,6 +796,47 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(self.context.i32_type().const_zero().into())
             }
 
+            Expr::GetElementPtr {
+                ty,
+                ptr,
+                indices,
+                inbounds,
+            } => {
+                let ptr_val = self.compile_expr_recursive(ptr, locals)?;
+                let ptr_val = ptr_val.into_pointer_value();
+
+                // Get the element type
+                let elem_ty = self
+                    .scalar_to_basic_type(ty)
+                    .ok_or_else(|| CodeGenError::CodeGen("cannot GEP void type".to_string()))?;
+
+                // Compile indices
+                let compiled_indices: Vec<inkwell::values::IntValue> = indices
+                    .iter()
+                    .map(|idx| {
+                        self.compile_expr_recursive(idx, locals)
+                            .map(|v| v.into_int_value())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Build GEP
+                let gep = if *inbounds {
+                    unsafe {
+                        self.builder
+                            .build_in_bounds_gep(elem_ty, ptr_val, &compiled_indices, "gep")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                    }
+                } else {
+                    unsafe {
+                        self.builder
+                            .build_gep(elem_ty, ptr_val, &compiled_indices, "gep")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                    }
+                };
+
+                Ok(gep.into())
+            }
+
             // Control flow - these need block context
             Expr::Br(_) => Err(CodeGenError::CodeGen(
                 "br requires block context".to_string(),
@@ -1438,6 +1479,42 @@ impl<'ctx> CodeGen<'ctx> {
             Expr::Store { .. } => Err(CodeGenError::CodeGen(
                 "store requires function context".to_string(),
             )),
+            Expr::GetElementPtr {
+                ty,
+                ptr,
+                indices,
+                inbounds,
+            } => {
+                let ptr_val = self.compile_expr(ptr)?.into_pointer_value();
+
+                // Get the element type
+                let elem_ty = self
+                    .scalar_to_basic_type(ty)
+                    .ok_or_else(|| CodeGenError::CodeGen("cannot GEP void type".to_string()))?;
+
+                // Compile indices
+                let compiled_indices: Vec<inkwell::values::IntValue> = indices
+                    .iter()
+                    .map(|idx| self.compile_expr(idx).map(|v| v.into_int_value()))
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Build GEP
+                let gep = if *inbounds {
+                    unsafe {
+                        self.builder
+                            .build_in_bounds_gep(elem_ty, ptr_val, &compiled_indices, "gep")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                    }
+                } else {
+                    unsafe {
+                        self.builder
+                            .build_gep(elem_ty, ptr_val, &compiled_indices, "gep")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                    }
+                };
+
+                Ok(gep.into())
+            }
             Expr::Br(_) => Err(CodeGenError::CodeGen(
                 "br requires block context".to_string(),
             )),

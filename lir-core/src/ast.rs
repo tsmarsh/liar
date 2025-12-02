@@ -364,6 +364,14 @@ pub enum Expr {
         ptr: Box<Expr>,
     },
 
+    // Pointer arithmetic
+    GetElementPtr {
+        ty: ScalarType,     // The element type we're indexing through
+        ptr: Box<Expr>,     // The base pointer
+        indices: Vec<Expr>, // One or more indices
+        inbounds: bool,     // Whether to use inbounds flag
+    },
+
     // Control flow
     Br(BranchTarget),
     Phi {
