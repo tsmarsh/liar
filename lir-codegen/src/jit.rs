@@ -140,6 +140,45 @@ impl<'ctx> JitEngine<'ctx> {
                 Ok(Value::Ptr(result as u64))
             }
 
+            // Ptr return with i64 arg (common for make_adder pattern)
+            (ReturnType::Ptr, 1) => {
+                type I64ToPtr = unsafe extern "C" fn(i64) -> *const u8;
+                let func: JitFunction<I64ToPtr> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let arg = match args[0] {
+                    Value::I64(v) => v,
+                    Value::Ptr(v) => v as i64,
+                    _ => return Err(CodeGenError::CodeGen("expected i64 or ptr argument".to_string())),
+                };
+                let result = unsafe { func.call(arg) };
+                Ok(Value::Ptr(result as u64))
+            }
+
+            // Ptr return with two i64 args
+            (ReturnType::Ptr, 2) => {
+                type I64I64ToPtr = unsafe extern "C" fn(i64, i64) -> *const u8;
+                let func: JitFunction<I64I64ToPtr> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let arg1 = match args[0] {
+                    Value::I64(v) => v,
+                    Value::Ptr(v) => v as i64,
+                    _ => return Err(CodeGenError::CodeGen("expected i64 or ptr argument".to_string())),
+                };
+                let arg2 = match args[1] {
+                    Value::I64(v) => v,
+                    Value::Ptr(v) => v as i64,
+                    _ => return Err(CodeGenError::CodeGen("expected i64 or ptr argument".to_string())),
+                };
+                let result = unsafe { func.call(arg1, arg2) };
+                Ok(Value::Ptr(result as u64))
+            }
+
             // One i32 arg
             (ReturnType::Scalar(ScalarType::I32), 1) => {
                 type I32ToI32 = unsafe extern "C" fn(i32) -> i32;
