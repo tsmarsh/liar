@@ -286,6 +286,9 @@ impl<'a> Parser<'a> {
             // Function call
             "call" => self.parse_call(),
 
+            // Let bindings
+            "let" => self.parse_let(),
+
             _ => Err(ParseError::UnknownOperation(name.to_string())),
         }
     }
@@ -632,6 +635,57 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Expr::Call { name, args })
+    }
+
+    /// Parse let: (let ((name1 expr1) (name2 expr2) ...) body...)
+    fn parse_let(&mut self) -> Result<Expr, ParseError> {
+        // Expect opening paren for bindings list
+        self.expect(Token::LParen)?;
+
+        let mut bindings = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            self.expect(Token::LParen)?;
+
+            // Parse binding name
+            let name = match self.lexer.next_token_peeked()? {
+                Some(Token::Ident(s)) => s,
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "binding name".to_string(),
+                        found: format!("{}", tok),
+                    })
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            };
+
+            // Parse binding value
+            let value = self.parse_expr()?;
+            self.expect(Token::RParen)?;
+
+            bindings.push((name, Box::new(value)));
+        }
+        self.expect(Token::RParen)?; // close bindings list
+
+        // Parse body expressions until outer RParen
+        let mut body = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            body.push(self.parse_expr()?);
+        }
+
+        if body.is_empty() {
+            return Err(ParseError::Expected {
+                expected: "let body expression".to_string(),
+                found: ")".to_string(),
+            });
+        }
+
+        Ok(Expr::Let { bindings, body })
     }
 
     /// Parse function definition body: (name return-type) (params...) body...

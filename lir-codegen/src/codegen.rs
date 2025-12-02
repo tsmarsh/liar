@@ -880,7 +880,7 @@ impl<'ctx> CodeGen<'ctx> {
     /// Compile expression to LLVM value
     pub fn compile_expr(&self, expr: &Expr) -> Result<BasicValueEnum<'ctx>> {
         // Type check first
-        let checker = TypeChecker::new();
+        let mut checker = TypeChecker::new();
         let _ty = checker.check(expr)?;
 
         match expr {
@@ -1583,13 +1583,232 @@ impl<'ctx> CodeGen<'ctx> {
                 // Convert AggregateValueEnum to BasicValueEnum
                 Ok(result.into_struct_value().into())
             }
+
+            // Let bindings - use the recursive helper with empty initial locals
+            Expr::Let { bindings, body } => {
+                let locals: HashMap<String, BasicValueEnum<'ctx>> = HashMap::new();
+                self.compile_let_expr(bindings, body, &locals)
+            }
+        }
+    }
+
+    /// Helper for let bindings - compile with a locals map
+    fn compile_let_expr(
+        &self,
+        bindings: &[(String, Box<Expr>)],
+        body: &[Expr],
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let mut new_locals = locals.clone();
+
+        // Evaluate each binding and add to locals
+        for (name, expr) in bindings {
+            let value = self.compile_with_locals(expr, &new_locals)?;
+            new_locals.insert(name.clone(), value);
+        }
+
+        // Evaluate body expressions, return last
+        let mut result = None;
+        for expr in body {
+            result = Some(self.compile_with_locals(expr, &new_locals)?);
+        }
+
+        result.ok_or_else(|| CodeGenError::CodeGen("empty let body".to_string()))
+    }
+
+    /// Compile expression with locals context (for let bindings)
+    fn compile_with_locals(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        match expr {
+            Expr::LocalRef(name) => locals
+                .get(name)
+                .copied()
+                .ok_or_else(|| CodeGenError::CodeGen(format!("undefined variable: {}", name))),
+
+            Expr::Let { bindings, body } => self.compile_let_expr(bindings, body, locals),
+
+            // For binary operations, we need to recurse with locals
+            Expr::Add(lhs, rhs) => {
+                let lhs_val = self.compile_with_locals(lhs, locals)?;
+                let rhs_val = self.compile_with_locals(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_add(l, r, "add")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_int_add(l, r, "add")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen(
+                        "add requires integer operands".to_string(),
+                    )),
+                }
+            }
+
+            Expr::Sub(lhs, rhs) => {
+                let lhs_val = self.compile_with_locals(lhs, locals)?;
+                let rhs_val = self.compile_with_locals(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_sub(l, r, "sub")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen(
+                        "sub requires integer operands".to_string(),
+                    )),
+                }
+            }
+
+            Expr::Mul(lhs, rhs) => {
+                let lhs_val = self.compile_with_locals(lhs, locals)?;
+                let rhs_val = self.compile_with_locals(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_mul(l, r, "mul")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen(
+                        "mul requires integer operands".to_string(),
+                    )),
+                }
+            }
+
+            // Float arithmetic operations
+            Expr::FAdd(lhs, rhs) => {
+                let lhs_val = self.compile_with_locals(lhs, locals)?;
+                let rhs_val = self.compile_with_locals(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_add(l, r, "fadd")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen(
+                        "fadd requires float operands".to_string(),
+                    )),
+                }
+            }
+
+            Expr::FSub(lhs, rhs) => {
+                let lhs_val = self.compile_with_locals(lhs, locals)?;
+                let rhs_val = self.compile_with_locals(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_sub(l, r, "fsub")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen(
+                        "fsub requires float operands".to_string(),
+                    )),
+                }
+            }
+
+            Expr::FMul(lhs, rhs) => {
+                let lhs_val = self.compile_with_locals(lhs, locals)?;
+                let rhs_val = self.compile_with_locals(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_mul(l, r, "fmul")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen(
+                        "fmul requires float operands".to_string(),
+                    )),
+                }
+            }
+
+            Expr::FDiv(lhs, rhs) => {
+                let lhs_val = self.compile_with_locals(lhs, locals)?;
+                let rhs_val = self.compile_with_locals(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_div(l, r, "fdiv")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen(
+                        "fdiv requires float operands".to_string(),
+                    )),
+                }
+            }
+
+            Expr::FRem(lhs, rhs) => {
+                let lhs_val = self.compile_with_locals(lhs, locals)?;
+                let rhs_val = self.compile_with_locals(rhs, locals)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
+                        .builder
+                        .build_float_rem(l, r, "frem")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen(
+                        "frem requires float operands".to_string(),
+                    )),
+                }
+            }
+
+            // Integer comparison
+            Expr::ICmp { pred, lhs, rhs } => {
+                let lhs_val = self.compile_with_locals(lhs, locals)?;
+                let rhs_val = self.compile_with_locals(rhs, locals)?;
+                let llvm_pred = match pred {
+                    ICmpPred::Eq => IntPredicate::EQ,
+                    ICmpPred::Ne => IntPredicate::NE,
+                    ICmpPred::Slt => IntPredicate::SLT,
+                    ICmpPred::Sle => IntPredicate::SLE,
+                    ICmpPred::Sgt => IntPredicate::SGT,
+                    ICmpPred::Sge => IntPredicate::SGE,
+                    ICmpPred::Ult => IntPredicate::ULT,
+                    ICmpPred::Ule => IntPredicate::ULE,
+                    ICmpPred::Ugt => IntPredicate::UGT,
+                    ICmpPred::Uge => IntPredicate::UGE,
+                };
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => Ok(self
+                        .builder
+                        .build_int_compare(llvm_pred, l, r, "icmp")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    _ => Err(CodeGenError::CodeGen(
+                        "icmp requires integer operands".to_string(),
+                    )),
+                }
+            }
+
+            // Select (ternary conditional)
+            Expr::Select {
+                cond,
+                true_val,
+                false_val,
+            } => {
+                let cond_val = self.compile_with_locals(cond, locals)?.into_int_value();
+                let true_val = self.compile_with_locals(true_val, locals)?;
+                let false_val = self.compile_with_locals(false_val, locals)?;
+                Ok(self
+                    .builder
+                    .build_select(cond_val, true_val, false_val, "select")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?)
+            }
+
+            // For simple literals and non-nested expressions, delegate to compile_expr
+            _ => self.compile_expr(expr),
         }
     }
 
     /// Create a JIT function that evaluates the expression and returns the result
     pub fn create_eval_function(&self, expr: &Expr) -> Result<()> {
         // Type check to get result type
-        let checker = TypeChecker::new();
+        let mut checker = TypeChecker::new();
         let ty = checker.check(expr)?;
 
         let fn_type = match &ty {

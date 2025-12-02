@@ -210,7 +210,7 @@ impl<'ctx> JitEngine<'ctx> {
     /// Evaluate an expression using JIT compilation
     pub fn eval(&self, expr: &Expr) -> Result<Value> {
         // Type check to get result type
-        let checker = TypeChecker::new();
+        let mut checker = TypeChecker::new();
         let ty = checker.check(expr)?;
 
         // Create codegen and compile

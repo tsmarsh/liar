@@ -33,7 +33,7 @@ impl TypeChecker {
 
     /// Check a function definition
     pub fn check_function(&self, func: &FunctionDef) -> Result<(), TypeError> {
-        let checker = TypeChecker::with_function(&func.params, func.return_type.clone());
+        let mut checker = TypeChecker::with_function(&func.params, func.return_type.clone());
 
         for block in &func.blocks {
             for expr in &block.instructions {
@@ -46,7 +46,7 @@ impl TypeChecker {
 
     /// Check an expression and return its result type
     #[allow(clippy::only_used_in_recursion)]
-    pub fn check(&self, expr: &Expr) -> Result<Type, TypeError> {
+    pub fn check(&mut self, expr: &Expr) -> Result<Type, TypeError> {
         match expr {
             Expr::IntLit { ty, .. } => Ok(Type::Scalar(ty.clone())),
             Expr::FloatLit { ty, .. } => Ok(Type::Scalar(ty.clone())),
@@ -345,8 +345,8 @@ impl TypeChecker {
 
             // Return instruction
             Expr::Ret(value) => {
-                if let Some(ref ret_ty) = self.return_type {
-                    match (ret_ty, value) {
+                if let Some(ret_ty) = self.return_type.clone() {
+                    match (&ret_ty, value) {
                         (ScalarType::Void, None) => Ok(Type::Scalar(ScalarType::Void)),
                         (ScalarType::Void, Some(_)) => Err(TypeError::TypeMismatch),
                         (_, None) => Err(TypeError::TypeMismatch),
@@ -509,6 +509,28 @@ impl TypeChecker {
                 self.check(value)?;
                 // Returns the same type as the input aggregate
                 self.check(aggregate)
+            }
+
+            Expr::Let { bindings, body } => {
+                // Save current locals for scoping
+                let saved_locals = self.locals.clone();
+
+                // Check all binding expressions and add to locals
+                for (name, expr) in bindings {
+                    let ty = self.check(expr)?;
+                    self.locals.insert(name.clone(), ty);
+                }
+
+                // Check all body expressions, return type of last one
+                let mut last_type = None;
+                for expr in body {
+                    last_type = Some(self.check(expr)?);
+                }
+
+                // Restore original locals (bindings go out of scope)
+                self.locals = saved_locals;
+
+                last_type.ok_or(TypeError::TypeMismatch) // empty body shouldn't happen
             }
         }
     }

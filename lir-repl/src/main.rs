@@ -58,7 +58,7 @@ fn eval_line(context: &Context, line: &str) {
     };
 
     // Type check
-    let checker = TypeChecker::new();
+    let mut checker = TypeChecker::new();
     if let Err(e) = checker.check(&expr) {
         eprintln!("Type error: {}", e);
         return;

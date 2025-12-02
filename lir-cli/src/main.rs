@@ -22,7 +22,7 @@ fn eval(input: &str) -> Result<String, String> {
     match result {
         ParseResult::Expr(expr) => {
             // Type check
-            let checker = TypeChecker::new();
+            let mut checker = TypeChecker::new();
             checker
                 .check(&expr)
                 .map_err(|e| format!("type error: {}", e))?;

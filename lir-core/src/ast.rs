@@ -398,6 +398,12 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
+
+    // Let binding for SSA values
+    Let {
+        bindings: Vec<(String, Box<Expr>)>, // (name, value) pairs
+        body: Vec<Expr>,                    // body expressions, returns last
+    },
 }
 
 /// Branch target - either unconditional or conditional
