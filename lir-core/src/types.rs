@@ -8,7 +8,7 @@ pub struct TypeChecker {
     /// Types of local variables in scope
     locals: HashMap<String, Type>,
     /// Expected return type of the current function
-    return_type: Option<ScalarType>,
+    return_type: Option<ReturnType>,
 }
 
 impl TypeChecker {
@@ -20,10 +20,14 @@ impl TypeChecker {
     }
 
     /// Create a type checker with function context
-    pub fn with_function(params: &[Param], return_type: ScalarType) -> Self {
+    pub fn with_function(params: &[Param], return_type: ReturnType) -> Self {
         let mut locals = HashMap::new();
         for param in params {
-            locals.insert(param.name.clone(), Type::Scalar(param.ty.clone()));
+            let ty = match &param.ty {
+                ParamType::Scalar(s) => Type::Scalar(s.clone()),
+                ParamType::Ptr => Type::Ptr,
+            };
+            locals.insert(param.name.clone(), ty);
         }
         Self {
             locals,
@@ -347,12 +351,24 @@ impl TypeChecker {
             Expr::Ret(value) => {
                 if let Some(ret_ty) = self.return_type.clone() {
                     match (&ret_ty, value) {
-                        (ScalarType::Void, None) => Ok(Type::Scalar(ScalarType::Void)),
-                        (ScalarType::Void, Some(_)) => Err(TypeError::TypeMismatch),
+                        (ReturnType::Scalar(ScalarType::Void), None) => {
+                            Ok(Type::Scalar(ScalarType::Void))
+                        }
+                        (ReturnType::Scalar(ScalarType::Void), Some(_)) => {
+                            Err(TypeError::TypeMismatch)
+                        }
                         (_, None) => Err(TypeError::TypeMismatch),
-                        (ty, Some(v)) => {
+                        (ReturnType::Scalar(ty), Some(v)) => {
                             let value_ty = self.check(v)?;
                             if value_ty == Type::Scalar(ty.clone()) {
+                                Ok(Type::Scalar(ScalarType::Void)) // ret itself is void
+                            } else {
+                                Err(TypeError::TypeMismatch)
+                            }
+                        }
+                        (ReturnType::Ptr, Some(v)) => {
+                            let value_ty = self.check(v)?;
+                            if value_ty == Type::Ptr {
                                 Ok(Type::Scalar(ScalarType::Void)) // ret itself is void
                             } else {
                                 Err(TypeError::TypeMismatch)

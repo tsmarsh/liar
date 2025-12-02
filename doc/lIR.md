@@ -56,6 +56,24 @@ Fixed-size SIMD vectors: `<N x type>`
 (<8 x i8> 0 1 2 3 4 5 6 7)
 ```
 
+### Pointer Type
+
+Opaque pointer type (LLVM 15+ style):
+
+```lisp
+ptr              ; pointer type
+(ptr null)       ; null pointer literal
+```
+
+### Struct Types
+
+Named struct types for aggregate data:
+
+```lisp
+%struct.point    ; references struct type "point"
+{ (i32 1) (i32 2) }  ; anonymous struct literal
+```
+
 ## Operations
 
 ### Integer Arithmetic
@@ -205,6 +223,166 @@ Conditional value selection (ternary operator):
 
 Note: Both branches are evaluated. This is not short-circuit evaluation.
 
+### Basic Blocks and Branches
+
+Functions contain basic blocks, each with a label. Control flow uses branches.
+
+```lisp
+; Unconditional branch
+(br label)
+
+; Conditional branch
+(br condition true-label false-label)
+```
+
+```lisp
+(define (max i32) ((i32 a) (i32 b))
+  (block entry
+    (br (icmp sgt a b) a_wins b_wins))
+  (block a_wins
+    (br done))
+  (block b_wins
+    (br done))
+  (block done
+    (ret (phi i32 (a_wins a) (b_wins b)))))
+```
+
+### Phi Nodes
+
+Phi nodes select a value based on which predecessor block was executed.
+
+```lisp
+(phi type (label1 value1) (label2 value2) ...)
+```
+
+Each pair is `(block-label value)` - the value to use if control came from that block.
+
+```lisp
+; Select between two values based on control flow
+(phi i32 (neg (i32 0)) (pos x))
+
+; Loop counter
+(phi i32 (entry (i32 0)) (loop next-i))
+```
+
+Phi nodes must be at the start of a block (before other instructions).
+
+### Return
+
+```lisp
+(ret value)     ; Return a value
+(ret)           ; Return void
+```
+
+## Memory Operations
+
+### alloca
+
+Allocate stack memory:
+
+```lisp
+(alloca type)           ; allocate one element
+(alloca type count)     ; allocate array (count must be integer)
+```
+
+```lisp
+(alloca i32)            ; allocate space for one i32, returns ptr
+(alloca i64 (i32 10))   ; allocate array of 10 i64s
+(alloca ptr)            ; allocate space for a pointer
+```
+
+### load
+
+Load a value from memory:
+
+```lisp
+(load type ptr)
+```
+
+```lisp
+(load i32 p)            ; load i32 from pointer p
+(load ptr p)            ; load pointer from pointer p
+```
+
+### store
+
+Store a value to memory:
+
+```lisp
+(store value ptr)
+```
+
+```lisp
+(store (i32 42) p)      ; store 42 to pointer p
+(store q p)             ; store pointer q to pointer p
+```
+
+### getelementptr
+
+Pointer arithmetic:
+
+```lisp
+(getelementptr type base-ptr indices...)
+(getelementptr inbounds type base-ptr indices...)
+```
+
+```lisp
+; Index into array
+(getelementptr i32 arr (i64 5))          ; arr[5]
+
+; Index into struct
+(getelementptr %struct.point p (i32 0) (i32 1))  ; &p->field1
+```
+
+## Aggregate Operations
+
+### extractvalue
+
+Extract a field from a struct:
+
+```lisp
+(extractvalue aggregate index...)
+```
+
+```lisp
+(extractvalue { (i32 10) (i32 20) } 0)   ; => (i32 10)
+(extractvalue { (i32 10) (i32 20) } 1)   ; => (i32 20)
+```
+
+### insertvalue
+
+Insert a value into a struct (returns new struct):
+
+```lisp
+(insertvalue aggregate value index...)
+```
+
+```lisp
+(insertvalue { (i32 1) (i32 2) } (i32 99) 0)
+; => { (i32 99) (i32 2) }
+```
+
+## Let Bindings
+
+Name intermediate SSA values for readability:
+
+```lisp
+(let ((name value)...) body...)
+```
+
+```lisp
+(let ((x (add (i32 1) (i32 2))))
+  (mul x x))
+; => (i32 9)
+
+(let ((a (i32 10))
+      (b (i32 20)))
+  (add a b))
+; => (i32 30)
+```
+
+Let bindings are lexically scoped and can reference earlier bindings.
+
 ## Vector Operations
 
 ### extractelement
@@ -257,6 +435,70 @@ lIR has strict type checking. Common errors:
 ; Invalid conversion direction
 (trunc i64 (i32 42))  ; ERROR: cannot truncate to larger type
 (zext i8 (i32 42))    ; ERROR: cannot extend to smaller type
+```
+
+## Top-Level Forms
+
+### Function Definitions
+
+```lisp
+(define (name return-type) ((type param)...) body...)
+```
+
+```lisp
+(define (add-one i32) ((i32 x))
+  (block entry
+    (ret (add x (i32 1)))))
+
+(define (sum ptr) ((ptr a) (ptr b))
+  ...)
+```
+
+### External Declarations
+
+```lisp
+(declare name return-type (param-types...) [varargs])
+```
+
+```lisp
+(declare printf i32 (ptr) ...)     ; varargs function
+(declare malloc ptr (i64))
+(declare exit void (i32))
+```
+
+### Global Variables
+
+```lisp
+(global name type value)           ; mutable global
+(constant name type value)         ; immutable constant
+```
+
+```lisp
+(global counter i32 (i32 0))
+(constant pi double (double 3.14159))
+(constant message ptr (string "hello\n"))
+```
+
+### Struct Definitions
+
+```lisp
+(defstruct name (field-types...))
+```
+
+```lisp
+(defstruct point (double double))
+(defstruct person (ptr i32 double))
+```
+
+## Function Calls
+
+```lisp
+(call @function-name args...)
+```
+
+```lisp
+(call @add-one (i32 5))
+(call @printf fmt arg1 arg2)
 ```
 
 ## Design Principles

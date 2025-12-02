@@ -4,7 +4,9 @@ use inkwell::context::Context;
 use inkwell::execution_engine::JitFunction;
 use inkwell::OptimizationLevel;
 
-use lir_core::ast::{Expr, FunctionDef, ScalarType, Type, VectorType};
+#[cfg(test)]
+use lir_core::ast::ParamType;
+use lir_core::ast::{Expr, FunctionDef, ReturnType, ScalarType, Type, VectorType};
 use lir_core::types::TypeChecker;
 
 use crate::codegen::{CodeGen, CodeGenError, Value};
@@ -57,13 +59,13 @@ impl<'ctx> JitEngine<'ctx> {
         &self,
         execution_engine: &inkwell::execution_engine::ExecutionEngine<'ctx>,
         name: &str,
-        return_type: &ScalarType,
+        return_type: &ReturnType,
         args: &[Value],
     ) -> Result<Value> {
         // For now, we support specific signatures. This is a simplified implementation.
         match (return_type, args.len()) {
             // No args
-            (ScalarType::I32, 0) => {
+            (ReturnType::Scalar(ScalarType::I32), 0) => {
                 let func: JitFunction<I32Func> = unsafe {
                     execution_engine
                         .get_function(name)
@@ -72,7 +74,7 @@ impl<'ctx> JitEngine<'ctx> {
                 let result = unsafe { func.call() };
                 Ok(Value::I32(result))
             }
-            (ScalarType::I64, 0) => {
+            (ReturnType::Scalar(ScalarType::I64), 0) => {
                 let func: JitFunction<I64Func> = unsafe {
                     execution_engine
                         .get_function(name)
@@ -81,7 +83,7 @@ impl<'ctx> JitEngine<'ctx> {
                 let result = unsafe { func.call() };
                 Ok(Value::I64(result))
             }
-            (ScalarType::I8, 0) => {
+            (ReturnType::Scalar(ScalarType::I8), 0) => {
                 let func: JitFunction<I8Func> = unsafe {
                     execution_engine
                         .get_function(name)
@@ -90,7 +92,7 @@ impl<'ctx> JitEngine<'ctx> {
                 let result = unsafe { func.call() };
                 Ok(Value::I8(result))
             }
-            (ScalarType::I1, 0) => {
+            (ReturnType::Scalar(ScalarType::I1), 0) => {
                 let func: JitFunction<I1Func> = unsafe {
                     execution_engine
                         .get_function(name)
@@ -99,7 +101,7 @@ impl<'ctx> JitEngine<'ctx> {
                 let result = unsafe { func.call() };
                 Ok(Value::I1(result))
             }
-            (ScalarType::Float, 0) => {
+            (ReturnType::Scalar(ScalarType::Float), 0) => {
                 let func: JitFunction<FloatFunc> = unsafe {
                     execution_engine
                         .get_function(name)
@@ -108,7 +110,7 @@ impl<'ctx> JitEngine<'ctx> {
                 let result = unsafe { func.call() };
                 Ok(Value::Float(result))
             }
-            (ScalarType::Double, 0) => {
+            (ReturnType::Scalar(ScalarType::Double), 0) => {
                 let func: JitFunction<DoubleFunc> = unsafe {
                     execution_engine
                         .get_function(name)
@@ -117,7 +119,7 @@ impl<'ctx> JitEngine<'ctx> {
                 let result = unsafe { func.call() };
                 Ok(Value::Double(result))
             }
-            (ScalarType::Void, 0) => {
+            (ReturnType::Scalar(ScalarType::Void), 0) => {
                 type VoidFunc = unsafe extern "C" fn();
                 let func: JitFunction<VoidFunc> = unsafe {
                     execution_engine
@@ -127,9 +129,19 @@ impl<'ctx> JitEngine<'ctx> {
                 unsafe { func.call() };
                 Ok(Value::I32(0)) // Return 0 for void functions (success indicator)
             }
+            (ReturnType::Ptr, 0) => {
+                type PtrFunc = unsafe extern "C" fn() -> *const u8;
+                let func: JitFunction<PtrFunc> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let result = unsafe { func.call() };
+                Ok(Value::Ptr(result as u64))
+            }
 
             // One i32 arg
-            (ScalarType::I32, 1) => {
+            (ReturnType::Scalar(ScalarType::I32), 1) => {
                 type I32ToI32 = unsafe extern "C" fn(i32) -> i32;
                 let func: JitFunction<I32ToI32> = unsafe {
                     execution_engine
@@ -144,7 +156,7 @@ impl<'ctx> JitEngine<'ctx> {
                 Ok(Value::I32(result))
             }
 
-            (ScalarType::I1, 1) => {
+            (ReturnType::Scalar(ScalarType::I1), 1) => {
                 type I32ToI1 = unsafe extern "C" fn(i32) -> bool;
                 let func: JitFunction<I32ToI1> = unsafe {
                     execution_engine
@@ -160,7 +172,7 @@ impl<'ctx> JitEngine<'ctx> {
             }
 
             // One double arg
-            (ScalarType::Double, 1) => {
+            (ReturnType::Scalar(ScalarType::Double), 1) => {
                 type DoubleToDouble = unsafe extern "C" fn(f64) -> f64;
                 let func: JitFunction<DoubleToDouble> = unsafe {
                     execution_engine
@@ -180,7 +192,7 @@ impl<'ctx> JitEngine<'ctx> {
             }
 
             // Two i32 args
-            (ScalarType::I32, 2) => {
+            (ReturnType::Scalar(ScalarType::I32), 2) => {
                 type I32I32ToI32 = unsafe extern "C" fn(i32, i32) -> i32;
                 let func: JitFunction<I32I32ToI32> = unsafe {
                     execution_engine
@@ -1494,7 +1506,7 @@ mod tests {
         // (define (get-42 i32) () (block entry (ret (i32 42))))
         let func = FunctionDef {
             name: "get-42".to_string(),
-            return_type: ScalarType::I32,
+            return_type: ReturnType::Scalar(ScalarType::I32),
             params: vec![],
             blocks: entry_block(vec![Expr::Ret(Some(Box::new(Expr::IntLit {
                 ty: ScalarType::I32,
@@ -1514,9 +1526,9 @@ mod tests {
         // (define (add-one i32) ((i32 x)) (block entry (ret (add x (i32 1)))))
         let func = FunctionDef {
             name: "add-one".to_string(),
-            return_type: ScalarType::I32,
+            return_type: ReturnType::Scalar(ScalarType::I32),
             params: vec![Param {
-                ty: ScalarType::I32,
+                ty: ParamType::Scalar(ScalarType::I32),
                 name: "x".to_string(),
             }],
             blocks: entry_block(vec![Expr::Ret(Some(Box::new(Expr::Add(
@@ -1540,14 +1552,14 @@ mod tests {
         // (define (add-two i32) ((i32 a) (i32 b)) (block entry (ret (add a b))))
         let func = FunctionDef {
             name: "add-two".to_string(),
-            return_type: ScalarType::I32,
+            return_type: ReturnType::Scalar(ScalarType::I32),
             params: vec![
                 Param {
-                    ty: ScalarType::I32,
+                    ty: ParamType::Scalar(ScalarType::I32),
                     name: "a".to_string(),
                 },
                 Param {
-                    ty: ScalarType::I32,
+                    ty: ParamType::Scalar(ScalarType::I32),
                     name: "b".to_string(),
                 },
             ],
@@ -1571,9 +1583,9 @@ mod tests {
         // (define (square i32) ((i32 x)) (block entry (ret (mul x x))))
         let func = FunctionDef {
             name: "square".to_string(),
-            return_type: ScalarType::I32,
+            return_type: ReturnType::Scalar(ScalarType::I32),
             params: vec![Param {
-                ty: ScalarType::I32,
+                ty: ParamType::Scalar(ScalarType::I32),
                 name: "x".to_string(),
             }],
             blocks: entry_block(vec![Expr::Ret(Some(Box::new(Expr::Mul(
@@ -1594,14 +1606,14 @@ mod tests {
         // (define (max i32) ((i32 a) (i32 b)) (block entry (ret (select (icmp sgt a b) a b))))
         let func = FunctionDef {
             name: "max".to_string(),
-            return_type: ScalarType::I32,
+            return_type: ReturnType::Scalar(ScalarType::I32),
             params: vec![
                 Param {
-                    ty: ScalarType::I32,
+                    ty: ParamType::Scalar(ScalarType::I32),
                     name: "a".to_string(),
                 },
                 Param {
-                    ty: ScalarType::I32,
+                    ty: ParamType::Scalar(ScalarType::I32),
                     name: "b".to_string(),
                 },
             ],

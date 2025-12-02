@@ -380,9 +380,12 @@ impl<'a> Parser<'a> {
             _ => false,
         };
 
-        // Parse the element type
+        // Parse the element type - could be scalar or %struct.name
         let ty = match self.lexer.next_token_peeked()? {
-            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(Token::Ident(ref s)) if s.starts_with("%struct.") => {
+                GepType::Struct(s[8..].to_string()) // strip %struct. prefix
+            }
+            Some(Token::Ident(ref s)) => GepType::Scalar(self.type_from_name(s)?),
             Some(tok) => {
                 return Err(ParseError::Expected {
                     expected: "type".to_string(),
@@ -704,7 +707,7 @@ impl<'a> Parser<'a> {
         };
 
         let return_type = match self.lexer.next_token_peeked()? {
-            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(Token::Ident(ref s)) => self.return_type_from_name(s)?,
             Some(tok) => {
                 return Err(ParseError::Expected {
                     expected: "return type".to_string(),
@@ -725,7 +728,7 @@ impl<'a> Parser<'a> {
             // Parse (type name)
             self.expect(Token::LParen)?;
             let param_type = match self.lexer.next_token_peeked()? {
-                Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+                Some(Token::Ident(ref s)) => self.param_type_from_name(s)?,
                 Some(tok) => {
                     return Err(ParseError::Expected {
                         expected: "parameter type".to_string(),
@@ -1321,6 +1324,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn return_type_from_name(&self, name: &str) -> Result<ReturnType, ParseError> {
+        match name {
+            "ptr" => Ok(ReturnType::Ptr),
+            "i1" => Ok(ReturnType::Scalar(ScalarType::I1)),
+            "i8" => Ok(ReturnType::Scalar(ScalarType::I8)),
+            "i16" => Ok(ReturnType::Scalar(ScalarType::I16)),
+            "i32" => Ok(ReturnType::Scalar(ScalarType::I32)),
+            "i64" => Ok(ReturnType::Scalar(ScalarType::I64)),
+            "float" => Ok(ReturnType::Scalar(ScalarType::Float)),
+            "double" => Ok(ReturnType::Scalar(ScalarType::Double)),
+            "void" => Ok(ReturnType::Scalar(ScalarType::Void)),
+            _ => Err(ParseError::UnknownType(name.to_string())),
+        }
+    }
+
     fn expect(&mut self, expected: Token) -> Result<(), ParseError> {
         match self.lexer.next_token_peeked()? {
             Some(tok) if tok == expected => Ok(()),
@@ -1503,7 +1521,7 @@ mod tests {
                 indices,
                 inbounds,
             } => {
-                assert_eq!(ty, ScalarType::I8);
+                assert_eq!(ty, GepType::Scalar(ScalarType::I8));
                 assert!(matches!(*ptr, Expr::NullPtr));
                 assert_eq!(indices.len(), 1);
                 assert!(!inbounds);
@@ -1524,7 +1542,50 @@ mod tests {
                 indices,
                 inbounds,
             } => {
-                assert_eq!(ty, ScalarType::I32);
+                assert_eq!(ty, GepType::Scalar(ScalarType::I32));
+                assert!(matches!(*ptr, Expr::NullPtr));
+                assert_eq!(indices.len(), 2);
+                assert!(inbounds);
+            }
+            _ => panic!("expected GetElementPtr"),
+        }
+    }
+
+    #[test]
+    fn test_parse_getelementptr_struct_type() {
+        let result = Parser::new("(getelementptr %struct.point (ptr null) (i32 0) (i32 1))")
+            .parse()
+            .unwrap();
+        match result {
+            Expr::GetElementPtr {
+                ty,
+                ptr,
+                indices,
+                inbounds,
+            } => {
+                assert_eq!(ty, GepType::Struct("point".to_string()));
+                assert!(matches!(*ptr, Expr::NullPtr));
+                assert_eq!(indices.len(), 2);
+                assert!(!inbounds);
+            }
+            _ => panic!("expected GetElementPtr"),
+        }
+    }
+
+    #[test]
+    fn test_parse_getelementptr_struct_type_inbounds() {
+        let result =
+            Parser::new("(getelementptr inbounds %struct.adder_env (ptr null) (i32 0) (i32 0))")
+                .parse()
+                .unwrap();
+        match result {
+            Expr::GetElementPtr {
+                ty,
+                ptr,
+                indices,
+                inbounds,
+            } => {
+                assert_eq!(ty, GepType::Struct("adder_env".to_string()));
                 assert!(matches!(*ptr, Expr::NullPtr));
                 assert_eq!(indices.len(), 2);
                 assert!(inbounds);

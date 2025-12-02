@@ -10,8 +10,8 @@ use inkwell::values::{
 
 use inkwell::{FloatPredicate, IntPredicate};
 use lir_core::ast::{
-    BranchTarget, Expr, ExternDecl, FCmpPred, FloatValue, FunctionDef, GlobalDef, ICmpPred,
-    ParamType, ReturnType, ScalarType, Type, VectorType,
+    BranchTarget, Expr, ExternDecl, FCmpPred, FloatValue, FunctionDef, GepType, GlobalDef,
+    ICmpPred, ParamType, ReturnType, ScalarType, Type, VectorType,
 };
 use lir_core::error::TypeError;
 use lir_core::types::TypeChecker;
@@ -35,6 +35,8 @@ pub struct CodeGen<'ctx> {
     pub context: &'ctx Context,
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
+    /// Registry of named struct types (name -> LLVM struct type)
+    struct_types: HashMap<String, inkwell::types::StructType<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -45,6 +47,7 @@ impl<'ctx> CodeGen<'ctx> {
             context,
             module,
             builder,
+            struct_types: HashMap::new(),
         }
     }
 
@@ -131,26 +134,75 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    /// Register a named struct type
+    pub fn register_struct_type(
+        &mut self,
+        name: &str,
+        fields: &[ParamType],
+    ) -> inkwell::types::StructType<'ctx> {
+        let field_types: Vec<BasicTypeEnum<'ctx>> = fields
+            .iter()
+            .filter_map(|f| self.param_type_to_basic_type(f))
+            .collect();
+        let struct_type = self.context.struct_type(&field_types, false);
+        self.struct_types.insert(name.to_string(), struct_type);
+        struct_type
+    }
+
+    /// Get LLVM type from GepType (for getelementptr)
+    fn gep_type_to_basic_type(&self, ty: &GepType) -> Result<BasicTypeEnum<'ctx>> {
+        match ty {
+            GepType::Scalar(s) => self
+                .scalar_to_basic_type(s)
+                .ok_or_else(|| CodeGenError::CodeGen("cannot GEP void type".to_string())),
+            GepType::Struct(name) => self
+                .struct_types
+                .get(name)
+                .map(|t| (*t).into())
+                .ok_or_else(|| CodeGenError::CodeGen(format!("unknown struct type: {}", name))),
+        }
+    }
+
     /// Compile a function definition
     pub fn compile_function(&self, func: &FunctionDef) -> Result<FunctionValue<'ctx>> {
         // Build parameter types
         let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
             .params
             .iter()
-            .filter_map(|p| self.scalar_to_basic_type(&p.ty))
+            .filter_map(|p| self.param_type_to_basic_type(&p.ty))
             .map(|t| t.into())
             .collect();
 
         // Build function type
         let fn_type = match &func.return_type {
-            ScalarType::Void => self.context.void_type().fn_type(&param_types, false),
-            ScalarType::I1 => self.context.bool_type().fn_type(&param_types, false),
-            ScalarType::I8 => self.context.i8_type().fn_type(&param_types, false),
-            ScalarType::I16 => self.context.i16_type().fn_type(&param_types, false),
-            ScalarType::I32 => self.context.i32_type().fn_type(&param_types, false),
-            ScalarType::I64 => self.context.i64_type().fn_type(&param_types, false),
-            ScalarType::Float => self.context.f32_type().fn_type(&param_types, false),
-            ScalarType::Double => self.context.f64_type().fn_type(&param_types, false),
+            ReturnType::Scalar(ScalarType::Void) => {
+                self.context.void_type().fn_type(&param_types, false)
+            }
+            ReturnType::Scalar(ScalarType::I1) => {
+                self.context.bool_type().fn_type(&param_types, false)
+            }
+            ReturnType::Scalar(ScalarType::I8) => {
+                self.context.i8_type().fn_type(&param_types, false)
+            }
+            ReturnType::Scalar(ScalarType::I16) => {
+                self.context.i16_type().fn_type(&param_types, false)
+            }
+            ReturnType::Scalar(ScalarType::I32) => {
+                self.context.i32_type().fn_type(&param_types, false)
+            }
+            ReturnType::Scalar(ScalarType::I64) => {
+                self.context.i64_type().fn_type(&param_types, false)
+            }
+            ReturnType::Scalar(ScalarType::Float) => {
+                self.context.f32_type().fn_type(&param_types, false)
+            }
+            ReturnType::Scalar(ScalarType::Double) => {
+                self.context.f64_type().fn_type(&param_types, false)
+            }
+            ReturnType::Ptr => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .fn_type(&param_types, false),
         };
 
         // Create function
@@ -817,9 +869,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let ptr_val = ptr_val.into_pointer_value();
 
                 // Get the element type
-                let elem_ty = self
-                    .scalar_to_basic_type(ty)
-                    .ok_or_else(|| CodeGenError::CodeGen("cannot GEP void type".to_string()))?;
+                let elem_ty = self.gep_type_to_basic_type(ty)?;
 
                 // Compile indices
                 let compiled_indices: Vec<inkwell::values::IntValue> = indices
@@ -1499,9 +1549,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let ptr_val = self.compile_expr(ptr)?.into_pointer_value();
 
                 // Get the element type
-                let elem_ty = self
-                    .scalar_to_basic_type(ty)
-                    .ok_or_else(|| CodeGenError::CodeGen("cannot GEP void type".to_string()))?;
+                let elem_ty = self.gep_type_to_basic_type(ty)?;
 
                 // Compile indices
                 let compiled_indices: Vec<inkwell::values::IntValue> = indices

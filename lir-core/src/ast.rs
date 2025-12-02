@@ -380,7 +380,7 @@ pub enum Expr {
 
     // Pointer arithmetic
     GetElementPtr {
-        ty: ScalarType,     // The element type we're indexing through
+        ty: GepType,        // The element type we're indexing through (scalar or struct)
         ptr: Box<Expr>,     // The base pointer
         indices: Vec<Expr>, // One or more indices
         inbounds: bool,     // Whether to use inbounds flag
@@ -420,7 +420,7 @@ pub enum BranchTarget {
 /// Function parameter
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
-    pub ty: ScalarType,
+    pub ty: ParamType,
     pub name: String,
 }
 
@@ -435,7 +435,7 @@ pub struct BasicBlock {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDef {
     pub name: String,
-    pub return_type: ScalarType,
+    pub return_type: ReturnType,
     pub params: Vec<Param>,
     pub blocks: Vec<BasicBlock>,
 }
@@ -452,6 +452,22 @@ impl std::fmt::Display for ParamType {
         match self {
             Self::Scalar(s) => write!(f, "{}", s),
             Self::Ptr => write!(f, "ptr"),
+        }
+    }
+}
+
+/// Type for getelementptr - can be scalar or named struct
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GepType {
+    Scalar(ScalarType),
+    Struct(String), // Named struct (e.g., "point" for %struct.point)
+}
+
+impl std::fmt::Display for GepType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scalar(s) => write!(f, "{}", s),
+            Self::Struct(name) => write!(f, "%struct.{}", name),
         }
     }
 }

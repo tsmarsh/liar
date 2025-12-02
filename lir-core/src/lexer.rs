@@ -182,8 +182,16 @@ impl<'a> Lexer<'a> {
     fn read_ident(&mut self) -> String {
         let mut ident = String::new();
         while let Some(&c) = self.chars.peek() {
-            // Allow alphanumeric, underscore, hyphen, @ (for function references), : (for keywords)
-            if c.is_alphanumeric() || c == '_' || c == '-' || c == '@' || c == ':' {
+            // Allow alphanumeric, underscore, hyphen, @ (for function references),
+            // : (for keywords), % (for LLVM named types), . (for %struct.name)
+            if c.is_alphanumeric()
+                || c == '_'
+                || c == '-'
+                || c == '@'
+                || c == ':'
+                || c == '%'
+                || c == '.'
+            {
                 ident.push(c);
                 self.chars.next();
             } else {
