@@ -136,7 +136,13 @@ fn format_value(value: &Value) -> String {
             } else if *v == 0.0 && v.is_sign_negative() {
                 "(double -0.0)".to_string()
             } else {
-                format!("(double {})", v)
+                // Ensure whole numbers have .0 suffix for consistent formatting
+                let s = format!("{}", v);
+                if !s.contains('.') && !s.contains('e') {
+                    format!("(double {}.0)", v)
+                } else {
+                    format!("(double {})", v)
+                }
             }
         }
         Value::Ptr(v) => {

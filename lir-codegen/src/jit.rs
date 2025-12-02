@@ -151,7 +151,11 @@ impl<'ctx> JitEngine<'ctx> {
                 let arg = match args[0] {
                     Value::I64(v) => v,
                     Value::Ptr(v) => v as i64,
-                    _ => return Err(CodeGenError::CodeGen("expected i64 or ptr argument".to_string())),
+                    _ => {
+                        return Err(CodeGenError::CodeGen(
+                            "expected i64 or ptr argument".to_string(),
+                        ))
+                    }
                 };
                 let result = unsafe { func.call(arg) };
                 Ok(Value::Ptr(result as u64))
@@ -168,12 +172,20 @@ impl<'ctx> JitEngine<'ctx> {
                 let arg1 = match args[0] {
                     Value::I64(v) => v,
                     Value::Ptr(v) => v as i64,
-                    _ => return Err(CodeGenError::CodeGen("expected i64 or ptr argument".to_string())),
+                    _ => {
+                        return Err(CodeGenError::CodeGen(
+                            "expected i64 or ptr argument".to_string(),
+                        ))
+                    }
                 };
                 let arg2 = match args[1] {
                     Value::I64(v) => v,
                     Value::Ptr(v) => v as i64,
-                    _ => return Err(CodeGenError::CodeGen("expected i64 or ptr argument".to_string())),
+                    _ => {
+                        return Err(CodeGenError::CodeGen(
+                            "expected i64 or ptr argument".to_string(),
+                        ))
+                    }
                 };
                 let result = unsafe { func.call(arg1, arg2) };
                 Ok(Value::Ptr(result as u64))
@@ -248,6 +260,26 @@ impl<'ctx> JitEngine<'ctx> {
                 };
                 let result = unsafe { func.call(arg1, arg2) };
                 Ok(Value::I32(result))
+            }
+
+            // Two args returning double (for int-to-float-add pattern)
+            (ReturnType::Scalar(ScalarType::Double), 2) => {
+                type I32I32ToDouble = unsafe extern "C" fn(i32, i32) -> f64;
+                let func: JitFunction<I32I32ToDouble> = unsafe {
+                    execution_engine
+                        .get_function(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let arg1 = match args[0] {
+                    Value::I32(v) => v,
+                    _ => return Err(CodeGenError::CodeGen("expected i32 argument".to_string())),
+                };
+                let arg2 = match args[1] {
+                    Value::I32(v) => v,
+                    _ => return Err(CodeGenError::CodeGen("expected i32 argument".to_string())),
+                };
+                let result = unsafe { func.call(arg1, arg2) };
+                Ok(Value::Double(result))
             }
 
             // i64 functions with args
