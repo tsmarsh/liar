@@ -4,7 +4,12 @@ version.workspace = true
 edition.workspace = true
 description = "Interactive REPL for lIR"
 
+[[bin]]
+name = "lir-repl"
+path = "src/main.rs"
+
 [dependencies]
 lir-core = { path = "../lir-core" }
 lir-codegen = { path = "../lir-codegen" }
+inkwell = { version = "0.7.0", features = ["llvm21-1"] }
 rustyline = "13.0"

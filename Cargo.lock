@@ -654,6 +654,7 @@ dependencies = [
 name = "lir-repl"
 version = "0.1.0"
 dependencies = [
+ "inkwell",
  "lir-codegen",
  "lir-core",
  "rustyline",
