@@ -12,7 +12,7 @@ use inkwell::context::Context;
 use lir_cert::{execute, LirBackend};
 use lir_codegen::codegen::{CodeGen, Value};
 use lir_codegen::jit::JitEngine;
-use lir_core::ast::{FunctionDef, StructDef};
+use lir_core::ast::{ExternDecl, FunctionDef, StructDef};
 use lir_core::parser::{ParseResult, Parser};
 use std::collections::HashMap;
 
@@ -26,6 +26,8 @@ pub struct LirWorld {
     functions: HashMap<String, FunctionDef>,
     /// Accumulated struct definitions for multi-function scenarios
     structs: HashMap<String, StructDef>,
+    /// Accumulated external declarations
+    externs: HashMap<String, ExternDecl>,
     /// Last result from function call
     last_result: Option<Value>,
     /// Error message if function call failed
@@ -59,6 +61,15 @@ fn try_parse_struct(expr: &str) -> Option<StructDef> {
     let mut parser = Parser::new(expr);
     match parser.parse_item() {
         Ok(ParseResult::Struct(def)) => Some(def),
+        _ => None,
+    }
+}
+
+/// Parse an extern declaration
+fn try_parse_extern(expr: &str) -> Option<ExternDecl> {
+    let mut parser = Parser::new(expr);
+    match parser.parse_item() {
+        Ok(ParseResult::ExternDecl(decl)) => Some(decl),
         _ => None,
     }
 }
@@ -182,6 +193,11 @@ async fn given_expression(world: &mut LirWorld, expr: String) {
         world.functions.insert(func.name.clone(), func);
     }
 
+    // Try to parse as extern declaration and accumulate
+    if let Some(decl) = try_parse_extern(&expr) {
+        world.externs.insert(decl.name.clone(), decl);
+    }
+
     // Also run through CLI for non-function tests
     let result = execute::<CliBackend>(&expr);
     world.exit_code = result.exit_code;
@@ -245,6 +261,15 @@ fn call_function(world: &mut LirWorld, name: &str, args: &[Value]) {
     // Register all struct types first
     for def in world.structs.values() {
         codegen.register_struct_type(&def.name, &def.fields);
+    }
+
+    // Compile external declarations
+    for decl in world.externs.values() {
+        if let Err(e) = codegen.compile_extern_decl(decl) {
+            world.last_error = Some(format!("compile error: {:?}", e));
+            world.last_result = None;
+            return;
+        }
     }
 
     // First pass: declare all functions (for mutual recursion support)
