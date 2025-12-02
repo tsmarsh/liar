@@ -3,10 +3,10 @@
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::builder::Builder;
-use inkwell::types::{BasicTypeEnum, IntType};
-use inkwell::values::BasicValueEnum;
+use inkwell::types::{BasicTypeEnum, IntType, VectorType as LLVMVectorType};
+use inkwell::values::{BasicValueEnum, VectorValue as LLVMVectorValue};
 
-use lir_core::ast::{Expr, FloatValue, ICmpPred, FCmpPred, ScalarType, Type};
+use lir_core::ast::{Expr, FloatValue, ICmpPred, FCmpPred, ScalarType, Type, VectorType};
 use lir_core::types::TypeChecker;
 use lir_core::error::TypeError;
 use inkwell::{IntPredicate, FloatPredicate};
@@ -54,6 +54,19 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    /// Get LLVM vector type
+    fn vec_type(&self, ty: &VectorType) -> LLVMVectorType<'ctx> {
+        if ty.element.is_integer() {
+            self.int_type(&ty.element).vec_type(ty.count)
+        } else {
+            match ty.element {
+                ScalarType::Float => self.context.f32_type().vec_type(ty.count),
+                ScalarType::Double => self.context.f64_type().vec_type(ty.count),
+                _ => unreachable!(),
+            }
+        }
+    }
+
     /// Get LLVM type from lIR Type
     #[allow(dead_code)]
     fn llvm_type(&self, ty: &Type) -> BasicTypeEnum<'ctx> {
@@ -98,48 +111,111 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(llvm_ty.const_int(val, scalar_ty != &ScalarType::I1 && *value < 0).into())
             }
 
-            // Integer arithmetic
+            // Integer arithmetic - handle both scalars and vectors
             Expr::Add(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_int_value();
-                let rhs_val = self.compile_expr(rhs)?.into_int_value();
-                Ok(self.builder.build_int_add(lhs_val, rhs_val, "add")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        Ok(self.builder.build_int_add(l, r, "add")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_int_add(l, r, "vadd")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in add".to_string())),
+                }
             }
             Expr::Sub(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_int_value();
-                let rhs_val = self.compile_expr(rhs)?.into_int_value();
-                Ok(self.builder.build_int_sub(lhs_val, rhs_val, "sub")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        Ok(self.builder.build_int_sub(l, r, "sub")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_int_sub(l, r, "vsub")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in sub".to_string())),
+                }
             }
             Expr::Mul(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_int_value();
-                let rhs_val = self.compile_expr(rhs)?.into_int_value();
-                Ok(self.builder.build_int_mul(lhs_val, rhs_val, "mul")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        Ok(self.builder.build_int_mul(l, r, "mul")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_int_mul(l, r, "vmul")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in mul".to_string())),
+                }
             }
             Expr::SDiv(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_int_value();
-                let rhs_val = self.compile_expr(rhs)?.into_int_value();
-                Ok(self.builder.build_int_signed_div(lhs_val, rhs_val, "sdiv")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        Ok(self.builder.build_int_signed_div(l, r, "sdiv")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_int_signed_div(l, r, "vsdiv")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in sdiv".to_string())),
+                }
             }
             Expr::UDiv(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_int_value();
-                let rhs_val = self.compile_expr(rhs)?.into_int_value();
-                Ok(self.builder.build_int_unsigned_div(lhs_val, rhs_val, "udiv")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        Ok(self.builder.build_int_unsigned_div(l, r, "udiv")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_int_unsigned_div(l, r, "vudiv")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in udiv".to_string())),
+                }
             }
             Expr::SRem(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_int_value();
-                let rhs_val = self.compile_expr(rhs)?.into_int_value();
-                Ok(self.builder.build_int_signed_rem(lhs_val, rhs_val, "srem")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        Ok(self.builder.build_int_signed_rem(l, r, "srem")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_int_signed_rem(l, r, "vsrem")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in srem".to_string())),
+                }
             }
             Expr::URem(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_int_value();
-                let rhs_val = self.compile_expr(rhs)?.into_int_value();
-                Ok(self.builder.build_int_unsigned_rem(lhs_val, rhs_val, "urem")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        Ok(self.builder.build_int_unsigned_rem(l, r, "urem")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_int_unsigned_rem(l, r, "vurem")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in urem".to_string())),
+                }
             }
 
             // Float literal
@@ -163,34 +239,79 @@ impl<'ctx> CodeGen<'ctx> {
 
             // Float arithmetic
             Expr::FAdd(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_float_value();
-                let rhs_val = self.compile_expr(rhs)?.into_float_value();
-                Ok(self.builder.build_float_add(lhs_val, rhs_val, "fadd")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
+                        Ok(self.builder.build_float_add(l, r, "fadd")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_float_add(l, r, "vfadd")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fadd".to_string())),
+                }
             }
             Expr::FSub(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_float_value();
-                let rhs_val = self.compile_expr(rhs)?.into_float_value();
-                Ok(self.builder.build_float_sub(lhs_val, rhs_val, "fsub")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
+                        Ok(self.builder.build_float_sub(l, r, "fsub")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_float_sub(l, r, "vfsub")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fsub".to_string())),
+                }
             }
             Expr::FMul(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_float_value();
-                let rhs_val = self.compile_expr(rhs)?.into_float_value();
-                Ok(self.builder.build_float_mul(lhs_val, rhs_val, "fmul")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
+                        Ok(self.builder.build_float_mul(l, r, "fmul")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_float_mul(l, r, "vfmul")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fmul".to_string())),
+                }
             }
             Expr::FDiv(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_float_value();
-                let rhs_val = self.compile_expr(rhs)?.into_float_value();
-                Ok(self.builder.build_float_div(lhs_val, rhs_val, "fdiv")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
+                        Ok(self.builder.build_float_div(l, r, "fdiv")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_float_div(l, r, "vfdiv")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fdiv".to_string())),
+                }
             }
             Expr::FRem(lhs, rhs) => {
-                let lhs_val = self.compile_expr(lhs)?.into_float_value();
-                let rhs_val = self.compile_expr(rhs)?.into_float_value();
-                Ok(self.builder.build_float_rem(lhs_val, rhs_val, "frem")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
+                        Ok(self.builder.build_float_rem(l, r, "frem")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_float_rem(l, r, "vfrem")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in frem".to_string())),
+                }
             }
 
             // Bitwise operations
@@ -231,10 +352,10 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
             }
 
-            // Integer comparison
+            // Integer comparison - handle both scalars and vectors
             Expr::ICmp { pred, lhs, rhs } => {
-                let lhs_val = self.compile_expr(lhs)?.into_int_value();
-                let rhs_val = self.compile_expr(rhs)?.into_int_value();
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
                 let llvm_pred = match pred {
                     ICmpPred::Eq => IntPredicate::EQ,
                     ICmpPred::Ne => IntPredicate::NE,
@@ -247,14 +368,23 @@ impl<'ctx> CodeGen<'ctx> {
                     ICmpPred::Ugt => IntPredicate::UGT,
                     ICmpPred::Uge => IntPredicate::UGE,
                 };
-                Ok(self.builder.build_int_compare(llvm_pred, lhs_val, rhs_val, "icmp")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) => {
+                        Ok(self.builder.build_int_compare(llvm_pred, l, r, "icmp")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_int_compare(llvm_pred, l, r, "vicmp")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in icmp".to_string())),
+                }
             }
 
             // Float comparison
             Expr::FCmp { pred, lhs, rhs } => {
-                let lhs_val = self.compile_expr(lhs)?.into_float_value();
-                let rhs_val = self.compile_expr(rhs)?.into_float_value();
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
                 let llvm_pred = match pred {
                     FCmpPred::Oeq => FloatPredicate::OEQ,
                     FCmpPred::One => FloatPredicate::ONE,
@@ -271,8 +401,17 @@ impl<'ctx> CodeGen<'ctx> {
                     FCmpPred::Uge => FloatPredicate::UGE,
                     FCmpPred::Uno => FloatPredicate::UNO,
                 };
-                Ok(self.builder.build_float_compare(llvm_pred, lhs_val, rhs_val, "fcmp")
-                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                match (lhs_val, rhs_val) {
+                    (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => {
+                        Ok(self.builder.build_float_compare(llvm_pred, l, r, "fcmp")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => {
+                        Ok(self.builder.build_float_compare(llvm_pred, l, r, "vfcmp")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+                    }
+                    _ => Err(CodeGenError::CodeGen("type mismatch in fcmp".to_string())),
+                }
             }
 
             // Integer conversions
@@ -360,8 +499,47 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
             }
 
-            // Not yet implemented
-            _ => Err(CodeGenError::NotImplemented(format!("expression type not yet supported"))),
+            // Vector literal
+            Expr::VectorLit { ty, elements } => {
+                let vec_type = self.vec_type(ty);
+                let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(elements.len());
+                for elem in elements {
+                    vals.push(self.compile_expr(elem)?);
+                }
+
+                // Build vector from elements
+                let mut vec: LLVMVectorValue<'ctx> = vec_type.get_undef();
+                for (i, val) in vals.iter().enumerate() {
+                    let idx = self.context.i32_type().const_int(i as u64, false);
+                    vec = self.builder.build_insert_element(vec, *val, idx, "vec_insert")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                }
+                Ok(vec.into())
+            }
+
+            // Vector operations
+            Expr::ExtractElement { vec, idx } => {
+                let vec_val = self.compile_expr(vec)?.into_vector_value();
+                let idx_val = self.compile_expr(idx)?.into_int_value();
+                Ok(self.builder.build_extract_element(vec_val, idx_val, "extract")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+
+            Expr::InsertElement { vec, val, idx } => {
+                let vec_val = self.compile_expr(vec)?.into_vector_value();
+                let elem_val = self.compile_expr(val)?;
+                let idx_val = self.compile_expr(idx)?.into_int_value();
+                Ok(self.builder.build_insert_element(vec_val, elem_val, idx_val, "insert")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
+
+            Expr::ShuffleVector { vec1, vec2, mask } => {
+                let vec1_val = self.compile_expr(vec1)?.into_vector_value();
+                let vec2_val = self.compile_expr(vec2)?.into_vector_value();
+                let mask_val = self.compile_expr(mask)?.into_vector_value();
+                Ok(self.builder.build_shuffle_vector(vec1_val, vec2_val, mask_val, "shuffle")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?.into())
+            }
         }
     }
 
@@ -372,16 +550,21 @@ impl<'ctx> CodeGen<'ctx> {
         let ty = checker.check(expr)?;
 
         let fn_type = match &ty {
-            Type::Scalar(s) if s.is_integer() => {
-                self.int_type(s).fn_type(&[], false)
-            }
             Type::Scalar(ScalarType::Float) => {
                 self.context.f32_type().fn_type(&[], false)
             }
             Type::Scalar(ScalarType::Double) => {
                 self.context.f64_type().fn_type(&[], false)
             }
-            _ => return Err(CodeGenError::NotImplemented("non-scalar return types".to_string())),
+            Type::Scalar(s) => {
+                // All other scalars are integers
+                self.int_type(s).fn_type(&[], false)
+            }
+            Type::Vector(_) => {
+                // For vectors, we pass an output pointer as a parameter
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                self.context.void_type().fn_type(&[ptr_type.into()], false)
+            }
         };
 
         let function = self.module.add_function("__lir_eval", fn_type, None);
@@ -389,15 +572,58 @@ impl<'ctx> CodeGen<'ctx> {
         self.builder.position_at_end(basic_block);
 
         let result = self.compile_expr(expr)?;
-        self.builder.build_return(Some(&result))
-            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        match &ty {
+            Type::Vector(vt) => {
+                // Store result to output pointer
+                let out_ptr = function.get_first_param().unwrap().into_pointer_value();
+
+                // For i1 vectors, we need special handling: zext each element to i8
+                // because LLVM packs i1 vectors as bits, but we want them as bytes
+                if vt.element == ScalarType::I1 {
+                    let vec = result.into_vector_value();
+                    let i8_type = self.context.i8_type();
+                    for i in 0..vt.count {
+                        let elem = self.builder.build_extract_element(
+                            vec,
+                            self.context.i32_type().const_int(i as u64, false),
+                            "elem"
+                        ).map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                        let extended = self.builder.build_int_z_extend(
+                            elem.into_int_value(),
+                            i8_type,
+                            "zext"
+                        ).map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                        let elem_ptr = unsafe {
+                            self.builder.build_gep(
+                                i8_type,
+                                out_ptr,
+                                &[self.context.i32_type().const_int(i as u64, false)],
+                                "elemptr"
+                            ).map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        };
+                        self.builder.build_store(elem_ptr, extended)
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                    }
+                } else {
+                    self.builder.build_store(out_ptr, result)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                }
+                self.builder.build_return(None)
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+            }
+            _ => {
+                self.builder.build_return(Some(&result))
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+            }
+        }
 
         Ok(())
     }
 }
 
 /// Typed result from JIT evaluation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     I1(bool),
     I8(i8),
@@ -406,6 +632,64 @@ pub enum Value {
     I64(i64),
     Float(f32),
     Double(f64),
+    // Vector types - stored as Vec for flexibility
+    VecI1(Vec<bool>),
+    VecI8(Vec<i8>),
+    VecI16(Vec<i16>),
+    VecI32(Vec<i32>),
+    VecI64(Vec<i64>),
+    VecFloat(Vec<f32>),
+    VecDouble(Vec<f64>),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::I1(a), Value::I1(b)) => a == b,
+            (Value::I8(a), Value::I8(b)) => a == b,
+            (Value::I16(a), Value::I16(b)) => a == b,
+            (Value::I32(a), Value::I32(b)) => a == b,
+            (Value::I64(a), Value::I64(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b || (a.is_nan() && b.is_nan()),
+            (Value::Double(a), Value::Double(b)) => a == b || (a.is_nan() && b.is_nan()),
+            (Value::VecI1(a), Value::VecI1(b)) => a == b,
+            (Value::VecI8(a), Value::VecI8(b)) => a == b,
+            (Value::VecI16(a), Value::VecI16(b)) => a == b,
+            (Value::VecI32(a), Value::VecI32(b)) => a == b,
+            (Value::VecI64(a), Value::VecI64(b)) => a == b,
+            (Value::VecFloat(a), Value::VecFloat(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x == y || (x.is_nan() && y.is_nan()))
+            }
+            (Value::VecDouble(a), Value::VecDouble(b)) => {
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x == y || (x.is_nan() && y.is_nan()))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Helper to format float with decimal point
+fn format_float(v: f32) -> String {
+    if v.is_nan() {
+        "nan".to_string()
+    } else if v.is_infinite() {
+        if v > 0.0 { "inf".to_string() } else { "-inf".to_string() }
+    } else {
+        let s = format!("{}", v);
+        if s.contains('.') || s.contains('e') { s } else { format!("{}.0", s) }
+    }
+}
+
+/// Helper to format double with decimal point
+fn format_double(v: f64) -> String {
+    if v.is_nan() {
+        "nan".to_string()
+    } else if v.is_infinite() {
+        if v > 0.0 { "inf".to_string() } else { "-inf".to_string() }
+    } else {
+        let s = format!("{}", v);
+        if s.contains('.') || s.contains('e') { s } else { format!("{}.0", s) }
+    }
 }
 
 impl std::fmt::Display for Value {
@@ -416,43 +700,57 @@ impl std::fmt::Display for Value {
             Value::I16(v) => write!(f, "(i16 {})", v),
             Value::I32(v) => write!(f, "(i32 {})", v),
             Value::I64(v) => write!(f, "(i64 {})", v),
-            Value::Float(v) => {
-                if v.is_nan() {
-                    write!(f, "(float nan)")
-                } else if v.is_infinite() {
-                    if *v > 0.0 {
-                        write!(f, "(float inf)")
-                    } else {
-                        write!(f, "(float -inf)")
-                    }
-                } else {
-                    // Ensure float values always have decimal point
-                    let s = format!("{}", v);
-                    if s.contains('.') || s.contains('e') {
-                        write!(f, "(float {})", s)
-                    } else {
-                        write!(f, "(float {}.0)", s)
-                    }
+            Value::Float(v) => write!(f, "(float {})", format_float(*v)),
+            Value::Double(v) => write!(f, "(double {})", format_double(*v)),
+            // Vector display: (<N x type> v1 v2 v3 ...)
+            Value::VecI1(vals) => {
+                write!(f, "(<{} x i1>", vals.len())?;
+                for v in vals {
+                    write!(f, " {}", if *v { 1 } else { 0 })?;
                 }
+                write!(f, ")")
             }
-            Value::Double(v) => {
-                if v.is_nan() {
-                    write!(f, "(double nan)")
-                } else if v.is_infinite() {
-                    if *v > 0.0 {
-                        write!(f, "(double inf)")
-                    } else {
-                        write!(f, "(double -inf)")
-                    }
-                } else {
-                    // Ensure double values always have decimal point
-                    let s = format!("{}", v);
-                    if s.contains('.') || s.contains('e') {
-                        write!(f, "(double {})", s)
-                    } else {
-                        write!(f, "(double {}.0)", s)
-                    }
+            Value::VecI8(vals) => {
+                write!(f, "(<{} x i8>", vals.len())?;
+                for v in vals {
+                    write!(f, " {}", v)?;
                 }
+                write!(f, ")")
+            }
+            Value::VecI16(vals) => {
+                write!(f, "(<{} x i16>", vals.len())?;
+                for v in vals {
+                    write!(f, " {}", v)?;
+                }
+                write!(f, ")")
+            }
+            Value::VecI32(vals) => {
+                write!(f, "(<{} x i32>", vals.len())?;
+                for v in vals {
+                    write!(f, " {}", v)?;
+                }
+                write!(f, ")")
+            }
+            Value::VecI64(vals) => {
+                write!(f, "(<{} x i64>", vals.len())?;
+                for v in vals {
+                    write!(f, " {}", v)?;
+                }
+                write!(f, ")")
+            }
+            Value::VecFloat(vals) => {
+                write!(f, "(<{} x float>", vals.len())?;
+                for v in vals {
+                    write!(f, " {}", format_float(*v))?;
+                }
+                write!(f, ")")
+            }
+            Value::VecDouble(vals) => {
+                write!(f, "(<{} x double>", vals.len())?;
+                for v in vals {
+                    write!(f, " {}", format_double(*v))?;
+                }
+                write!(f, ")")
             }
         }
     }

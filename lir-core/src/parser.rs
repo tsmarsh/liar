@@ -38,6 +38,14 @@ impl<'a> Parser<'a> {
     fn parse_sexpr(&mut self) -> Result<Expr, ParseError> {
         self.expect(Token::LParen)?;
 
+        // Check if this is a vector literal: (<N x type> values...)
+        if let Some(Token::LAngle) = self.lexer.peek()? {
+            let expr = self.parse_vector_literal()?;
+            // parse_vector_literal doesn't expect RParen, we handle it here
+            self.expect(Token::RParen)?;
+            return Ok(expr);
+        }
+
         let token = self.lexer.next()?.ok_or(ParseError::UnexpectedEof)?;
 
         let expr = match token {
@@ -196,7 +204,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        self.expect(Token::RParen)?;
+        // Don't expect RParen here - the caller handles it
         Ok(Expr::VectorLit { ty, elements })
     }
 

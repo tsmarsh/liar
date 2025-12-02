@@ -4,14 +4,14 @@ use inkwell::context::Context;
 use inkwell::execution_engine::JitFunction;
 use inkwell::OptimizationLevel;
 
-use lir_core::ast::{Expr, ScalarType, Type};
+use lir_core::ast::{Expr, ScalarType, Type, VectorType};
 use lir_core::types::TypeChecker;
 
 use crate::codegen::{CodeGen, CodeGenError, Value};
 
 pub type Result<T> = std::result::Result<T, CodeGenError>;
 
-// JIT function type aliases
+// JIT function type aliases for scalar returns
 type I1Func = unsafe extern "C" fn() -> bool;
 type I8Func = unsafe extern "C" fn() -> i8;
 type I16Func = unsafe extern "C" fn() -> i16;
@@ -19,6 +19,9 @@ type I32Func = unsafe extern "C" fn() -> i32;
 type I64Func = unsafe extern "C" fn() -> i64;
 type FloatFunc = unsafe extern "C" fn() -> f32;
 type DoubleFunc = unsafe extern "C" fn() -> f64;
+
+// JIT function type for vector returns (takes output pointer)
+type VecFunc = unsafe extern "C" fn(*mut u8);
 
 pub struct JitEngine<'ctx> {
     pub context: &'ctx Context,
@@ -102,8 +105,61 @@ impl<'ctx> JitEngine<'ctx> {
                 let result = unsafe { func.call() };
                 Ok(Value::Double(result))
             }
-            Type::Vector(_) => {
-                Err(CodeGenError::NotImplemented("vector return types".to_string()))
+            Type::Vector(vt) => {
+                self.eval_vector(&execution_engine, &vt)
+            }
+        }
+    }
+
+    /// Evaluate a vector-returning expression
+    fn eval_vector(
+        &self,
+        execution_engine: &inkwell::execution_engine::ExecutionEngine<'ctx>,
+        vt: &VectorType,
+    ) -> Result<Value> {
+        let func: JitFunction<VecFunc> = unsafe {
+            execution_engine.get_function("__lir_eval")
+                .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+        };
+
+        let count = vt.count as usize;
+
+        // Allocate buffer for vector result based on element type
+        match vt.element {
+            ScalarType::I1 => {
+                let mut buf: Vec<u8> = vec![0; count]; // i1 stored as i8
+                unsafe { func.call(buf.as_mut_ptr()); }
+                Ok(Value::VecI1(buf.into_iter().map(|v| v != 0).collect()))
+            }
+            ScalarType::I8 => {
+                let mut buf: Vec<i8> = vec![0; count];
+                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                Ok(Value::VecI8(buf))
+            }
+            ScalarType::I16 => {
+                let mut buf: Vec<i16> = vec![0; count];
+                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                Ok(Value::VecI16(buf))
+            }
+            ScalarType::I32 => {
+                let mut buf: Vec<i32> = vec![0; count];
+                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                Ok(Value::VecI32(buf))
+            }
+            ScalarType::I64 => {
+                let mut buf: Vec<i64> = vec![0; count];
+                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                Ok(Value::VecI64(buf))
+            }
+            ScalarType::Float => {
+                let mut buf: Vec<f32> = vec![0.0; count];
+                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                Ok(Value::VecFloat(buf))
+            }
+            ScalarType::Double => {
+                let mut buf: Vec<f64> = vec![0.0; count];
+                unsafe { func.call(buf.as_mut_ptr() as *mut u8); }
+                Ok(Value::VecDouble(buf))
             }
         }
     }
