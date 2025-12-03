@@ -63,3 +63,13 @@ Feature: Compare-and-Exchange (CmpXchg) Operations
     When I call test
     Then the result is (i64 0)
 
+  Scenario: CmpXchg with pointer type - success
+    Given the expression (define (test i1) () (block entry (let ((pp (alloca ptr)) (target (alloca i64)) (other (alloca i64))) (store target pp) (let ((result (cmpxchg seq_cst pp target other))) (ret (extractvalue result 1))))))
+    When I call test
+    Then the result is (i1 1)
+
+  Scenario: CmpXchg with pointer type - failure
+    Given the expression (define (test i1) () (block entry (let ((pp (alloca ptr)) (target (alloca i64)) (other (alloca i64)) (wrong (alloca i64))) (store target pp) (let ((result (cmpxchg seq_cst pp wrong other))) (ret (extractvalue result 1))))))
+    When I call test
+    Then the result is (i1 0)
+

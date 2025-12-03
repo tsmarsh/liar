@@ -960,7 +960,7 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(Some(result.into()))
             }
 
-            // Compare-and-exchange
+            // Compare-and-exchange (supports integer and pointer types)
             Expr::CmpXchg {
                 ordering,
                 ptr,
@@ -977,14 +977,12 @@ impl<'ctx> CodeGen<'ctx> {
                     .compile_expr_with_deferred_phis(expected, locals, blocks, deferred_phis)?
                     .ok_or_else(|| {
                         CodeGenError::CodeGen("cmpxchg expected must produce a value".into())
-                    })?
-                    .into_int_value();
+                    })?;
                 let new_val = self
                     .compile_expr_with_deferred_phis(new_value, locals, blocks, deferred_phis)?
                     .ok_or_else(|| {
                         CodeGenError::CodeGen("cmpxchg new value must produce a value".into())
-                    })?
-                    .into_int_value();
+                    })?;
 
                 let success_ordering = Self::atomic_ordering(ordering);
                 // For failure ordering, use same or weaker ordering
@@ -1830,12 +1828,8 @@ impl<'ctx> CodeGen<'ctx> {
                 let ptr_val = self
                     .compile_expr_recursive(ptr, locals)?
                     .into_pointer_value();
-                let exp_val = self
-                    .compile_expr_recursive(expected, locals)?
-                    .into_int_value();
-                let new_val = self
-                    .compile_expr_recursive(new_value, locals)?
-                    .into_int_value();
+                let exp_val = self.compile_expr_recursive(expected, locals)?;
+                let new_val = self.compile_expr_recursive(new_value, locals)?;
 
                 let success_ordering = Self::atomic_ordering(ordering);
                 let failure_ordering = match ordering {
@@ -2728,8 +2722,8 @@ impl<'ctx> CodeGen<'ctx> {
                 new_value,
             } => {
                 let ptr_val = self.compile_expr(ptr)?.into_pointer_value();
-                let exp_val = self.compile_expr(expected)?.into_int_value();
-                let new_val = self.compile_expr(new_value)?.into_int_value();
+                let exp_val = self.compile_expr(expected)?;
+                let new_val = self.compile_expr(new_value)?;
 
                 let success_ordering = Self::atomic_ordering(ordering);
                 let failure_ordering = match ordering {
@@ -3285,10 +3279,8 @@ impl<'ctx> CodeGen<'ctx> {
                 new_value,
             } => {
                 let ptr_val = self.compile_with_locals(ptr, locals)?.into_pointer_value();
-                let exp_val = self.compile_with_locals(expected, locals)?.into_int_value();
-                let new_val = self
-                    .compile_with_locals(new_value, locals)?
-                    .into_int_value();
+                let exp_val = self.compile_with_locals(expected, locals)?;
+                let new_val = self.compile_with_locals(new_value, locals)?;
 
                 let success_ordering = Self::atomic_ordering(ordering);
                 let failure_ordering = match ordering {
