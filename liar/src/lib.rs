@@ -41,7 +41,7 @@ pub fn compile(source: &str) -> std::result::Result<String, Vec<CompileError>> {
     let mut program = parser.parse_program().map_err(|e| vec![e])?;
 
     // Resolve names
-    resolve::resolve(&mut program).map_err(|e| vec![e])?;
+    resolve::resolve(&program).map_err(|e| vec![e])?;
 
     // Type inference
     let mut type_env = TypeEnv::new();

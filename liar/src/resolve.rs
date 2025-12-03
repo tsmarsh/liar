@@ -1,16 +1,482 @@
 //! Name resolution
 //!
 //! Resolves variable references to their definitions.
+//! Detects undefined variables and duplicate definitions.
 
-use crate::ast::Program;
-use crate::error::Result;
+use std::collections::HashMap;
+
+use crate::ast::{Def, Defstruct, Defun, Expr, Item, LetBinding, MatchArm, Pattern, Program};
+use crate::error::{CompileError, Errors, Result};
+use crate::span::{Span, Spanned};
+
+/// Unique identifier for a binding
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BindingId(pub u32);
+
+/// Information about a binding
+#[derive(Debug, Clone)]
+pub struct BindingInfo {
+    pub kind: BindingKind,
+    pub span: Span,
+    pub id: BindingId,
+}
+
+/// Kind of binding
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingKind {
+    Local,
+    Parameter,
+    Function,
+    Constant,
+    Struct,
+}
+
+/// A scope containing bindings
+#[derive(Debug)]
+struct Scope {
+    bindings: HashMap<String, BindingInfo>,
+}
+
+impl Scope {
+    fn new() -> Self {
+        Self {
+            bindings: HashMap::new(),
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<&BindingInfo> {
+        self.bindings.get(name)
+    }
+
+    fn insert(&mut self, name: String, info: BindingInfo) -> Option<BindingInfo> {
+        self.bindings.insert(name, info)
+    }
+}
+
+/// Name resolver state
+pub struct Resolver {
+    scopes: Vec<Scope>,
+    errors: Errors,
+    next_id: u32,
+    /// Map from binding use sites to their definitions
+    pub resolutions: HashMap<Span, BindingId>,
+}
+
+/// List of builtin functions that are always in scope
+const BUILTINS: &[&str] = &[
+    // Arithmetic
+    "+", "-", "*", "/", "rem", // Comparison
+    "=", "!=", "<", ">", "<=", ">=", // Boolean
+    "not", "and", "or", // I/O
+    "print", "println", // List operations
+    "cons", "car", "cdr", "list", "nil?", "empty?", // Type conversions
+    "int", "float", "string",
+];
+
+impl Resolver {
+    pub fn new() -> Self {
+        let mut resolver = Self {
+            scopes: vec![Scope::new()],
+            errors: Errors::new(),
+            next_id: 0,
+            resolutions: HashMap::new(),
+        };
+
+        // Define all builtins
+        for &name in BUILTINS {
+            resolver.define(name, Span::default(), BindingKind::Function);
+        }
+
+        resolver
+    }
+
+    fn fresh_id(&mut self) -> BindingId {
+        let id = BindingId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(Scope::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn current_scope(&mut self) -> &mut Scope {
+        self.scopes.last_mut().expect("no scope")
+    }
+
+    fn define(&mut self, name: &str, span: Span, kind: BindingKind) -> BindingId {
+        let id = self.fresh_id();
+        let info = BindingInfo { kind, span, id };
+
+        // Check for duplicate in current scope only
+        let existing_span = self
+            .scopes
+            .last()
+            .and_then(|s| s.get(name))
+            .map(|info| info.span);
+
+        if let Some(existing) = existing_span {
+            self.errors.push(CompileError::resolve(
+                span,
+                format!(
+                    "duplicate definition of '{}' (previously defined at {}..{})",
+                    name, existing.start, existing.end
+                ),
+            ));
+        }
+
+        self.current_scope().insert(name.to_string(), info);
+        id
+    }
+
+    fn lookup(&mut self, name: &str, span: Span) -> Option<BindingId> {
+        // Search from innermost to outermost scope
+        for scope in self.scopes.iter().rev() {
+            if let Some(info) = scope.get(name) {
+                self.resolutions.insert(span, info.id);
+                return Some(info.id);
+            }
+        }
+
+        self.errors.push(CompileError::resolve(
+            span,
+            format!("undefined variable: '{}'", name),
+        ));
+        None
+    }
+
+    /// Resolve names in a program
+    pub fn resolve(
+        mut self,
+        program: &Program,
+    ) -> std::result::Result<ResolvedProgram, Vec<CompileError>> {
+        // First pass: collect all top-level definitions (for forward references)
+        for item in &program.items {
+            match &item.node {
+                Item::Defun(defun) => {
+                    self.define(&defun.name.node, defun.name.span, BindingKind::Function);
+                }
+                Item::Def(def) => {
+                    self.define(&def.name.node, def.name.span, BindingKind::Constant);
+                }
+                Item::Defstruct(defstruct) => {
+                    self.define(
+                        &defstruct.name.node,
+                        defstruct.name.span,
+                        BindingKind::Struct,
+                    );
+                }
+            }
+        }
+
+        // Second pass: resolve all references within bodies
+        for item in &program.items {
+            self.resolve_item(item);
+        }
+
+        self.errors.into_result(ResolvedProgram {
+            resolutions: self.resolutions,
+        })
+    }
+
+    fn resolve_item(&mut self, item: &Spanned<Item>) {
+        match &item.node {
+            Item::Defun(defun) => self.resolve_defun(defun),
+            Item::Def(def) => self.resolve_def(def),
+            Item::Defstruct(defstruct) => self.resolve_defstruct(defstruct),
+        }
+    }
+
+    fn resolve_defun(&mut self, defun: &Defun) {
+        self.push_scope();
+
+        // Define parameters
+        for param in &defun.params {
+            self.define(&param.name.node, param.name.span, BindingKind::Parameter);
+        }
+
+        // Resolve body
+        self.resolve_expr(&defun.body);
+
+        self.pop_scope();
+    }
+
+    fn resolve_def(&mut self, def: &Def) {
+        self.resolve_expr(&def.value);
+    }
+
+    fn resolve_defstruct(&mut self, _defstruct: &Defstruct) {
+        // Struct definitions don't have expressions to resolve
+        // Field types are resolved during type checking
+    }
+
+    fn resolve_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) | Expr::Nil => {
+                // Literals have no names to resolve
+            }
+
+            Expr::Var(name) => {
+                self.lookup(name, expr.span);
+            }
+
+            Expr::Call(func, args) => {
+                self.resolve_expr(func);
+                for arg in args {
+                    self.resolve_expr(arg);
+                }
+            }
+
+            Expr::Lambda(params, body) => {
+                self.push_scope();
+                for param in params {
+                    self.define(&param.name.node, param.name.span, BindingKind::Parameter);
+                }
+                self.resolve_expr(body);
+                self.pop_scope();
+            }
+
+            Expr::Let(bindings, body) => {
+                self.push_scope();
+                for binding in bindings {
+                    self.resolve_let_binding(binding);
+                }
+                self.resolve_expr(body);
+                self.pop_scope();
+            }
+
+            Expr::Plet(bindings, body) => {
+                // Same as let for name resolution purposes
+                self.push_scope();
+                for binding in bindings {
+                    self.resolve_let_binding(binding);
+                }
+                self.resolve_expr(body);
+                self.pop_scope();
+            }
+
+            Expr::If(cond, then_, else_) => {
+                self.resolve_expr(cond);
+                self.resolve_expr(then_);
+                self.resolve_expr(else_);
+            }
+
+            Expr::Do(exprs) => {
+                for expr in exprs {
+                    self.resolve_expr(expr);
+                }
+            }
+
+            Expr::Set(name, value) => {
+                self.lookup(&name.node, name.span);
+                self.resolve_expr(value);
+            }
+
+            Expr::Ref(inner) | Expr::RefMut(inner) | Expr::Deref(inner) | Expr::Unsafe(inner) => {
+                self.resolve_expr(inner);
+            }
+
+            Expr::Struct(name, fields) => {
+                // The struct name should be defined
+                self.lookup(name, expr.span);
+                for (_, value) in fields {
+                    self.resolve_expr(value);
+                }
+            }
+
+            Expr::Field(obj, _field) => {
+                self.resolve_expr(obj);
+                // Field names are resolved during type checking
+            }
+
+            Expr::Match(scrutinee, arms) => {
+                self.resolve_expr(scrutinee);
+                for arm in arms {
+                    self.resolve_match_arm(arm);
+                }
+            }
+
+            Expr::Quote(_) => {
+                // Quoted symbols don't need resolution
+            }
+        }
+    }
+
+    fn resolve_let_binding(&mut self, binding: &LetBinding) {
+        // Resolve value first (in outer scope, before the binding is visible)
+        // Note: The value is already resolved before we add the binding
+        // But we need to handle recursive lets differently if desired
+        self.resolve_expr(&binding.value);
+
+        // Then define the name
+        self.define(&binding.name.node, binding.name.span, BindingKind::Local);
+    }
+
+    fn resolve_match_arm(&mut self, arm: &MatchArm) {
+        self.push_scope();
+        self.resolve_pattern(&arm.pattern);
+        self.resolve_expr(&arm.body);
+        self.pop_scope();
+    }
+
+    fn resolve_pattern(&mut self, pattern: &Spanned<Pattern>) {
+        match &pattern.node {
+            Pattern::Wildcard => {}
+            Pattern::Var(name) => {
+                self.define(name, pattern.span, BindingKind::Local);
+            }
+            Pattern::Literal(_) => {}
+            Pattern::Struct(name, fields) => {
+                // Struct name should be defined
+                self.lookup(name, pattern.span);
+                for (_, pat) in fields {
+                    self.resolve_pattern(&Spanned::new(pat.clone(), pattern.span));
+                }
+            }
+            Pattern::Tuple(patterns) => {
+                for pat in patterns {
+                    self.resolve_pattern(&Spanned::new(pat.clone(), pattern.span));
+                }
+            }
+        }
+    }
+}
+
+impl Default for Resolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The result of name resolution
+#[derive(Debug)]
+pub struct ResolvedProgram {
+    /// Map from use sites (spans) to their binding definitions
+    pub resolutions: HashMap<Span, BindingId>,
+}
 
 /// Resolve names in a program
-pub fn resolve(_program: &mut Program) -> Result<()> {
-    // TODO: Implement name resolution
-    // - Build symbol tables for each scope
-    // - Resolve variable references to their definitions
-    // - Check for undefined variables
-    // - Check for duplicate definitions
-    Ok(())
+pub fn resolve(program: &Program) -> Result<()> {
+    let resolver = Resolver::new();
+    match resolver.resolve(program) {
+        Ok(_) => Ok(()),
+        Err(errors) => Err(errors.into_iter().next().expect("at least one error")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::Parser;
+
+    fn resolve_source(source: &str) -> std::result::Result<ResolvedProgram, Vec<CompileError>> {
+        let mut parser = Parser::new(source).expect("lexer failed");
+        let program = parser.parse_program().expect("parser failed");
+        Resolver::new().resolve(&program)
+    }
+
+    #[test]
+    fn test_simple_function() {
+        let result = resolve_source(
+            r#"
+            (defun add (a b)
+              (+ a b))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_undefined_variable() {
+        let result = resolve_source(
+            r#"
+            (defun foo ()
+              undefined)
+            "#,
+        );
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors[0].message.contains("undefined variable"));
+    }
+
+    #[test]
+    fn test_let_binding() {
+        let result = resolve_source(
+            r#"
+            (defun foo ()
+              (let ((x 1))
+                x))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_nested_scope() {
+        let result = resolve_source(
+            r#"
+            (defun foo ()
+              (let ((x 1))
+                (let ((y 2))
+                  (+ x y))))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_forward_reference() {
+        // Functions can reference each other (forward references)
+        let result = resolve_source(
+            r#"
+            (defun foo ()
+              (bar))
+            (defun bar ()
+              (foo))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_duplicate_definition() {
+        let result = resolve_source(
+            r#"
+            (defun foo () 1)
+            (defun foo () 2)
+            "#,
+        );
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors[0].message.contains("duplicate definition"));
+    }
+
+    #[test]
+    fn test_lambda_scope() {
+        let result = resolve_source(
+            r#"
+            (defun foo ()
+              (let ((f (fn (x) x)))
+                (f 1)))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_lambda_captures() {
+        let result = resolve_source(
+            r#"
+            (defun foo ()
+              (let ((x 1))
+                (let ((f (fn (y) (+ x y))))
+                  (f 2))))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
 }
