@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Def, Defun, Expr, Item, LetBinding, MatchArm, Param, Pattern, Program};
-use crate::error::Result;
+use crate::error::{CompileError, Errors, Result};
 use crate::resolve::BindingId;
 use crate::span::{Span, Spanned};
 
@@ -43,6 +43,21 @@ impl ClosureColor {
             (ClosureColor::Local, _) | (_, ClosureColor::Local) => ClosureColor::Local,
             (ClosureColor::NonSync, _) | (_, ClosureColor::NonSync) => ClosureColor::NonSync,
             (ClosureColor::Sync, ClosureColor::Sync) => ClosureColor::Sync,
+        }
+    }
+
+    /// Check if this color is thread-safe (can be used in plet, async, spawn)
+    pub fn is_thread_safe(&self) -> bool {
+        matches!(self, ClosureColor::Pure | ClosureColor::Sync)
+    }
+
+    /// Get a human-readable description of why this color isn't thread-safe
+    pub fn thread_safety_reason(&self) -> &'static str {
+        match self {
+            ClosureColor::Pure => "is thread-safe (no captures)",
+            ClosureColor::Sync => "is thread-safe (captures only Send+Sync values)",
+            ClosureColor::Local => "captures borrowed references and cannot be used across threads",
+            ClosureColor::NonSync => "captures non-Send values and cannot be used across threads",
         }
     }
 }
@@ -546,6 +561,150 @@ pub fn analyze(program: &mut Program) -> Result<()> {
     Ok(())
 }
 
+/// Thread safety checker for plet and async contexts
+pub struct ThreadSafetyChecker<'a> {
+    /// Closure info from the analyzer
+    closure_info: &'a HashMap<Span, CaptureInfo>,
+    /// Collected errors
+    errors: Errors,
+    /// Whether we're currently in a plet context
+    in_plet: bool,
+}
+
+impl<'a> ThreadSafetyChecker<'a> {
+    pub fn new(closure_info: &'a HashMap<Span, CaptureInfo>) -> Self {
+        Self {
+            closure_info,
+            errors: Errors::new(),
+            in_plet: false,
+        }
+    }
+
+    /// Check thread safety for a program
+    pub fn check(mut self, program: &Program) -> std::result::Result<(), Vec<CompileError>> {
+        for item in &program.items {
+            self.check_item(item);
+        }
+        self.errors.into_result(())
+    }
+
+    fn check_item(&mut self, item: &Spanned<Item>) {
+        match &item.node {
+            Item::Defun(defun) => self.check_expr(&defun.body),
+            Item::Def(def) => self.check_expr(&def.value),
+            Item::Defstruct(_) => {}
+        }
+    }
+
+    fn check_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            Expr::Lambda(_, body) => {
+                // Check if this lambda is used in a plet context
+                if self.in_plet {
+                    if let Some(info) = self.closure_info.get(&expr.span) {
+                        if !info.color.is_thread_safe() {
+                            self.errors.push(CompileError::thread_safety(
+                                expr.span,
+                                format!(
+                                    "closure used in plet {}",
+                                    info.color.thread_safety_reason()
+                                ),
+                            ));
+                        }
+                    }
+                }
+                self.check_expr(body);
+            }
+
+            Expr::Plet(bindings, body) => {
+                let was_in_plet = self.in_plet;
+                self.in_plet = true;
+
+                for binding in bindings {
+                    self.check_expr(&binding.value);
+                }
+                self.check_expr(body);
+
+                self.in_plet = was_in_plet;
+            }
+
+            Expr::Let(bindings, body) => {
+                for binding in bindings {
+                    self.check_expr(&binding.value);
+                }
+                self.check_expr(body);
+            }
+
+            Expr::Call(func, args) => {
+                self.check_expr(func);
+                for arg in args {
+                    self.check_expr(arg);
+                }
+            }
+
+            Expr::If(cond, then_, else_) => {
+                self.check_expr(cond);
+                self.check_expr(then_);
+                self.check_expr(else_);
+            }
+
+            Expr::Do(exprs) => {
+                for e in exprs {
+                    self.check_expr(e);
+                }
+            }
+
+            Expr::Set(_, value) => {
+                self.check_expr(value);
+            }
+
+            Expr::Ref(inner) | Expr::RefMut(inner) | Expr::Deref(inner) | Expr::Unsafe(inner) => {
+                self.check_expr(inner);
+            }
+
+            Expr::Struct(_, fields) => {
+                for (_, value) in fields {
+                    self.check_expr(value);
+                }
+            }
+
+            Expr::Field(obj, _) => {
+                self.check_expr(obj);
+            }
+
+            Expr::Match(scrutinee, arms) => {
+                self.check_expr(scrutinee);
+                for arm in arms {
+                    self.check_expr(&arm.body);
+                }
+            }
+
+            // Literals and simple expressions
+            Expr::Int(_)
+            | Expr::Float(_)
+            | Expr::Bool(_)
+            | Expr::String(_)
+            | Expr::Nil
+            | Expr::Var(_)
+            | Expr::Quote(_) => {}
+        }
+    }
+}
+
+/// Full closure analysis with thread safety checking
+pub fn analyze_with_thread_safety(
+    program: &Program,
+) -> std::result::Result<HashMap<Span, CaptureInfo>, Vec<CompileError>> {
+    let analyzer = ClosureAnalyzer::new();
+    let info = analyzer.analyze(program).map_err(|e| vec![e])?;
+
+    // Check thread safety
+    let checker = ThreadSafetyChecker::new(&info);
+    checker.check(program)?;
+
+    Ok(info)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -693,5 +852,56 @@ mod tests {
         // + is a builtin, should not be captured
         let capture_info = info.values().next().unwrap();
         assert!(capture_info.captures.is_empty());
+    }
+
+    fn check_thread_safety(source: &str) -> std::result::Result<(), Vec<CompileError>> {
+        let mut parser = Parser::new(source).expect("lexer failed");
+        let program = parser.parse_program().expect("parser failed");
+        analyze_with_thread_safety(&program).map(|_| ())
+    }
+
+    #[test]
+    fn test_plet_pure_closure_ok() {
+        // Pure closures (no captures) are OK in plet
+        let result = check_thread_safety(
+            r#"
+            (defun foo ()
+              (plet ((f (fn (x) (+ x 1))))
+                (f 42)))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_plet_sync_closure_ok() {
+        // Sync closures (move captures) are OK in plet
+        let result = check_thread_safety(
+            r#"
+            (defun foo ()
+              (let ((x 1))
+                (plet ((f (fn (y) (+ x y))))
+                  (f 42))))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_plet_local_closure_error() {
+        // Local closures (borrow captures) are NOT OK in plet
+        let result = check_thread_safety(
+            r#"
+            (defun foo ()
+              (let ((x 1))
+                (plet ((f (fn (y) (+ (deref (ref x)) y))))
+                  (f 42))))
+            "#,
+        );
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("plet"));
+        assert!(errors[0].message.contains("borrowed"));
     }
 }

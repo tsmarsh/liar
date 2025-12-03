@@ -42,6 +42,10 @@ impl CompileError {
     pub fn codegen(span: Span, message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Codegen, span, message)
     }
+
+    pub fn thread_safety(span: Span, message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::ThreadSafety, span, message)
+    }
 }
 
 impl std::fmt::Display for CompileError {
@@ -63,6 +67,7 @@ pub enum ErrorKind {
     Resolve,
     Type,
     Borrow,
+    ThreadSafety,
     Codegen,
 }
 
@@ -74,6 +79,7 @@ impl std::fmt::Display for ErrorKind {
             ErrorKind::Resolve => write!(f, "name resolution error"),
             ErrorKind::Type => write!(f, "type error"),
             ErrorKind::Borrow => write!(f, "borrow error"),
+            ErrorKind::ThreadSafety => write!(f, "thread safety error"),
             ErrorKind::Codegen => write!(f, "codegen error"),
         }
     }
