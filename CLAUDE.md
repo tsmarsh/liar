@@ -8,17 +8,31 @@ liar source → liar → lIR → lair → LLVM IR → native
 
 ## The Toolchain
 
-| Tool | What | Input | Output |
-|------|------|-------|--------|
-| `liar` | high-level compiler | liar source | lIR |
-| `lair` | lIR assembler | lIR source | LLVM IR / native |
+| Tool | Status | What | Input | Output |
+|------|--------|------|-------|--------|
+| `lair` | **Done** | lIR assembler | lIR source | LLVM IR / native |
+| `lir` | **Done** | Expression evaluator | lIR expression | Result |
+| `lir-repl` | **Done** | Interactive REPL | - | - |
+| `liar` | Planned | high-level compiler | liar source | lIR |
 
 ## The Two Layers
 
-| Layer | What it is | File |
-|-------|------------|------|
-| **lIR** | S-expression assembler for LLVM IR. 1:1 mapping, no sugar. | [lIR.md](doc/lIR.md) |
-| **liar** | Borrow-checked Lisp with closures, atoms, threading. User-facing. | [LIAR.md](doc/LIAR.md) |
+| Layer | What it is | Status | File |
+|-------|------------|--------|------|
+| **lIR** | S-expression assembler for LLVM IR. 1:1 mapping, no sugar. | **Implemented** | [lIR.md](doc/lIR.md) |
+| **liar** | Borrow-checked Lisp with closures, atoms, threading. User-facing. | Planned | [LIAR.md](doc/LIAR.md) |
+
+## Current Capabilities
+
+lIR is fully functional as an LLVM IR assembler:
+- All scalar and vector types (i1-i64, float, double, ptr, vectors)
+- All arithmetic, bitwise, and comparison operations
+- Type conversions (trunc, zext, sext, fptrunc, fpext, etc.)
+- Memory operations (alloca, load, store, getelementptr)
+- Control flow (branches, phi nodes, function calls)
+- Structs (defstruct, field access via GEP)
+- FFI (external function declarations)
+- AOT compilation to native executables
 
 ---
 
