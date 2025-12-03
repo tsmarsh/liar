@@ -457,6 +457,28 @@ pub enum Expr {
         array: Box<Expr>,
     },
 
+    // Reference counting operations
+    // (rc-alloc T) - allocate with refcount 1, returns rc T
+    RcAlloc {
+        elem_type: ScalarType,
+    },
+    // (rc-clone x) - increment refcount, return alias
+    RcClone {
+        value: Box<Expr>,
+    },
+    // (rc-drop x) - decrement refcount, free if zero
+    RcDrop {
+        value: Box<Expr>,
+    },
+    // (rc-count x) - get current refcount (for debugging)
+    RcCount {
+        value: Box<Expr>,
+    },
+    // (rc-ptr x) - get raw pointer (for load/store)
+    RcPtr {
+        value: Box<Expr>,
+    },
+
     // Let binding for SSA values
     Let {
         bindings: Vec<(String, Box<Expr>)>, // (name, value) pairs
@@ -507,6 +529,8 @@ pub enum ParamType {
     Own(Box<ScalarType>),    // Owned pointer - dropped when out of scope
     Ref(Box<ScalarType>),    // Shared borrow - read-only, lifetime-bound
     RefMut(Box<ScalarType>), // Mutable borrow - exclusive, lifetime-bound
+    // Reference-counted pointer
+    Rc(Box<ScalarType>), // Reference-counted pointer with atomic inc/dec
 }
 
 impl std::fmt::Display for ParamType {
@@ -517,6 +541,7 @@ impl std::fmt::Display for ParamType {
             Self::Own(t) => write!(f, "own {}", t),
             Self::Ref(t) => write!(f, "ref {}", t),
             Self::RefMut(t) => write!(f, "refmut {}", t),
+            Self::Rc(t) => write!(f, "rc {}", t),
         }
     }
 }

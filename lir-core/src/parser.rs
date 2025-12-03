@@ -295,6 +295,13 @@ impl<'a> Parser<'a> {
             "drop" => self.parse_drop(),
             "move" => self.parse_move(),
 
+            // Reference counting operations
+            "rc-alloc" => self.parse_rc_alloc(),
+            "rc-clone" => self.parse_rc_clone(),
+            "rc-drop" => self.parse_rc_drop(),
+            "rc-count" => self.parse_rc_count(),
+            "rc-ptr" => self.parse_rc_ptr(),
+
             // Let bindings
             "let" => self.parse_let(),
 
@@ -896,6 +903,55 @@ impl<'a> Parser<'a> {
     fn parse_move(&mut self) -> Result<Expr, ParseError> {
         let value = self.parse_expr()?;
         Ok(Expr::Move {
+            value: Box::new(value),
+        })
+    }
+
+    /// Parse rc-alloc: (rc-alloc T)
+    fn parse_rc_alloc(&mut self) -> Result<Expr, ParseError> {
+        // Parse element type
+        let elem_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "element type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        Ok(Expr::RcAlloc { elem_type })
+    }
+
+    /// Parse rc-clone: (rc-clone x)
+    fn parse_rc_clone(&mut self) -> Result<Expr, ParseError> {
+        let value = self.parse_expr()?;
+        Ok(Expr::RcClone {
+            value: Box::new(value),
+        })
+    }
+
+    /// Parse rc-drop: (rc-drop x)
+    fn parse_rc_drop(&mut self) -> Result<Expr, ParseError> {
+        let value = self.parse_expr()?;
+        Ok(Expr::RcDrop {
+            value: Box::new(value),
+        })
+    }
+
+    /// Parse rc-count: (rc-count x)
+    fn parse_rc_count(&mut self) -> Result<Expr, ParseError> {
+        let value = self.parse_expr()?;
+        Ok(Expr::RcCount {
+            value: Box::new(value),
+        })
+    }
+
+    /// Parse rc-ptr: (rc-ptr x)
+    fn parse_rc_ptr(&mut self) -> Result<Expr, ParseError> {
+        let value = self.parse_expr()?;
+        Ok(Expr::RcPtr {
             value: Box::new(value),
         })
     }
@@ -1621,6 +1677,20 @@ impl<'a> Parser<'a> {
                     None => return Err(ParseError::UnexpectedEof),
                 };
                 ParamType::RefMut(Box::new(inner_type))
+            }
+            "rc" => {
+                // Parse: rc type name
+                let inner_type = match self.lexer.next_token_peeked()? {
+                    Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+                    Some(tok) => {
+                        return Err(ParseError::Expected {
+                            expected: "type".to_string(),
+                            found: format!("{}", tok),
+                        })
+                    }
+                    None => return Err(ParseError::UnexpectedEof),
+                };
+                ParamType::Rc(Box::new(inner_type))
             }
             _ => {
                 // Regular type

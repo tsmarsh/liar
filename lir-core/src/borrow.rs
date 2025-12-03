@@ -103,7 +103,7 @@ impl BorrowChecker {
                 ParamType::Own(_) => OwnershipState::Owned,
                 ParamType::Ref(_) => OwnershipState::Borrowed { count: 1 },
                 ParamType::RefMut(_) => OwnershipState::BorrowedMut,
-                ParamType::Scalar(_) | ParamType::Ptr => continue, // Non-ownership types
+                ParamType::Scalar(_) | ParamType::Ptr | ParamType::Rc(_) => continue, // Non-ownership types (RC has its own tracking)
             };
             self.bindings.insert(param.name.clone(), state);
         }
@@ -344,6 +344,21 @@ impl BorrowChecker {
 
             // Literals don't need checking
             Expr::IntLit { .. } | Expr::FloatLit { .. } | Expr::NullPtr | Expr::StringLit(_) => {}
+
+            // RC operations - not tracked by borrow checker (has its own refcount semantics)
+            Expr::RcAlloc { .. } => {}
+            Expr::RcClone { value } => {
+                self.check_expr(value);
+            }
+            Expr::RcDrop { value } => {
+                self.check_expr(value);
+            }
+            Expr::RcCount { value } => {
+                self.check_expr(value);
+            }
+            Expr::RcPtr { value } => {
+                self.check_expr(value);
+            }
         }
     }
 

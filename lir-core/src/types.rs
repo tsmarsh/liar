@@ -27,7 +27,9 @@ impl TypeChecker {
                 ParamType::Scalar(s) => Type::Scalar(s.clone()),
                 ParamType::Ptr => Type::Ptr,
                 // Ownership types compile to pointers at LLVM level
-                ParamType::Own(_) | ParamType::Ref(_) | ParamType::RefMut(_) => Type::Ptr,
+                ParamType::Own(_) | ParamType::Ref(_) | ParamType::RefMut(_) | ParamType::Rc(_) => {
+                    Type::Ptr
+                }
             };
             locals.insert(param.name.clone(), ty);
         }
@@ -407,7 +409,10 @@ impl TypeChecker {
                     ParamType::Scalar(s) => Ok(Type::Scalar(s.clone())),
                     ParamType::Ptr => Ok(Type::Ptr),
                     // Ownership types compile to pointers at LLVM level
-                    ParamType::Own(_) | ParamType::Ref(_) | ParamType::RefMut(_) => Ok(Type::Ptr),
+                    ParamType::Own(_)
+                    | ParamType::Ref(_)
+                    | ParamType::RefMut(_)
+                    | ParamType::Rc(_) => Ok(Type::Ptr),
                 }
             }
 
@@ -670,6 +675,48 @@ impl TypeChecker {
                     return Err(TypeError::TypeMismatch);
                 }
                 // Move returns the pointer (ownership transferred)
+                Ok(Type::Ptr)
+            }
+
+            // Reference counting operations
+            Expr::RcAlloc { .. } => {
+                // RcAlloc returns a pointer to the data
+                Ok(Type::Ptr)
+            }
+            Expr::RcClone { value } => {
+                // Check value is a pointer
+                let val_ty = self.check(value)?;
+                if !val_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Returns same pointer
+                Ok(Type::Ptr)
+            }
+            Expr::RcDrop { value } => {
+                // Check value is a pointer
+                let val_ty = self.check(value)?;
+                if !val_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Drop returns void
+                Ok(Type::Scalar(ScalarType::Void))
+            }
+            Expr::RcCount { value } => {
+                // Check value is a pointer
+                let val_ty = self.check(value)?;
+                if !val_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Returns i64 refcount
+                Ok(Type::Scalar(ScalarType::I64))
+            }
+            Expr::RcPtr { value } => {
+                // Check value is a pointer
+                let val_ty = self.check(value)?;
+                if !val_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Returns raw pointer
                 Ok(Type::Ptr)
             }
         }
