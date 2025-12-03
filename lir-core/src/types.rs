@@ -719,6 +719,28 @@ impl TypeChecker {
                 // Returns raw pointer
                 Ok(Type::Ptr)
             }
+
+            // Atomic memory operations
+            Expr::AtomicLoad { ty, ptr, .. } => {
+                // Pointer must be a pointer type
+                let ptr_ty = self.check(ptr)?;
+                if !ptr_ty.is_pointer() {
+                    return Err(TypeError::LoadRequiresPointer);
+                }
+                // Atomic load returns the specified scalar type
+                Ok(Type::Scalar(ty.clone()))
+            }
+            Expr::AtomicStore { value, ptr, .. } => {
+                // Pointer must be a pointer type
+                let ptr_ty = self.check(ptr)?;
+                if !ptr_ty.is_pointer() {
+                    return Err(TypeError::StoreRequiresPointer);
+                }
+                // Check the value type
+                self.check(value)?;
+                // Store returns void
+                Ok(Type::Scalar(ScalarType::Void))
+            }
         }
     }
 }

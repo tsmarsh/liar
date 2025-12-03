@@ -174,6 +174,28 @@ impl std::fmt::Display for ICmpPred {
     }
 }
 
+/// Memory ordering for atomic operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryOrdering {
+    Monotonic, // Minimal ordering, no synchronization
+    Acquire,   // Acquire semantics (for loads)
+    Release,   // Release semantics (for stores)
+    AcqRel,    // Acquire-release (for read-modify-write)
+    SeqCst,    // Sequential consistency (strongest)
+}
+
+impl std::fmt::Display for MemoryOrdering {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Monotonic => write!(f, "monotonic"),
+            Self::Acquire => write!(f, "acquire"),
+            Self::Release => write!(f, "release"),
+            Self::AcqRel => write!(f, "acq_rel"),
+            Self::SeqCst => write!(f, "seq_cst"),
+        }
+    }
+}
+
 /// Float comparison predicates
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FCmpPred {
@@ -477,6 +499,20 @@ pub enum Expr {
     // (rc-ptr x) - get raw pointer (for load/store)
     RcPtr {
         value: Box<Expr>,
+    },
+
+    // Atomic memory operations
+    // (atomic-load ordering type ptr) - atomic load
+    AtomicLoad {
+        ordering: MemoryOrdering,
+        ty: ScalarType,
+        ptr: Box<Expr>,
+    },
+    // (atomic-store ordering value ptr) - atomic store
+    AtomicStore {
+        ordering: MemoryOrdering,
+        value: Box<Expr>,
+        ptr: Box<Expr>,
     },
 
     // Let binding for SSA values

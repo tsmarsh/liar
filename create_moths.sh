@@ -1,720 +1,239 @@
 #!/bin/bash
 
 # =============================================================================
-# Moths for lIR Safety Features (ADR-021)
+# Moths for missing liar language features
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Feature 1: Tail Calls
+# THREADING FEATURES
 # -----------------------------------------------------------------------------
 
-moth new "lIR: tailcall instruction" -s high --no-edit --stdin << 'EOF'
+moth new "liar: closure color tracking (ADR-010)" -s high --no-edit --stdin << 'EOF'
 ## Summary
-Add guaranteed tail call instruction to lIR.
+Track closure "color" to determine thread-safety. Colors propagate through
+nesting and affect where closures can be used.
+
+## Colors
+```
+Pure     - No captures, can go anywhere
+Local    - Captures borrows, cannot escape scope
+Sync     - Captures only Send+Sync values, thread-safe
+NonSync  - Captures non-Send values, single-threaded only
+```
+
+## Color Rules
+- Pure + anything = that thing
+- Local + anything = Local
+- Sync + Sync = Sync
+- NonSync + anything = NonSync
+
+## AST Additions
+```rust
+// In closures.rs
+pub enum ClosureColor {
+    Pure,
+    Local,
+    Sync,
+    NonSync,
+}
+
+pub struct ClosureInfo {
+    pub captures: Vec<Capture>,
+    pub color: ClosureColor,
+}
+```
+
+## Analysis
+```rust
+impl ClosureAnalyzer {
+    fn compute_color(&self, captures: &[Capture]) -> ClosureColor {
+        if captures.is_empty() {
+            return ClosureColor::Pure;
+        }
+        
+        let mut color = ClosureColor::Pure;
+        for cap in captures {
+            let cap_color = match cap.mode {
+                CaptureMode::Borrow => ClosureColor::Local,
+                CaptureMode::Move => {
+                    if self.is_send_sync(&cap.ty) {
+                        ClosureColor::Sync
+                    } else {
+                        ClosureColor::NonSync
+                    }
+                }
+                CaptureMode::Clone => ClosureColor::Sync, // Cloned = owned copy
+            };
+            color = self.combine_colors(color, cap_color);
+        }
+        color
+    }
+}
+```
+
+## Verification
+- plet body must be Sync or Pure
+- async block must be Sync or Pure
+- spawn requires Sync or Pure
+- Local closures cannot escape defining scope
+
+## Acceptance Criteria
+- [ ] ClosureColor enum added
+- [ ] Color computed for all closures
+- [ ] Colors propagate through nesting
+- [ ] plet rejects non-Sync closures
+- [ ] Error messages indicate color violations
+EOF
+
+# -----------------------------------------------------------------------------
+
+moth new "liar: atoms for shared state (ADR-011)" -s high --no-edit --stdin << 'EOF'
+## Summary
+Implement atoms for thread-safe mutable state following Clojure's model.
 
 ## Syntax
 ```lisp
-(tailcall @function args...)
-```
-
-## AST Addition
-```rust
-// In ast.rs
-pub enum Instruction {
-    // ... existing ...
-    TailCall {
-        func: String,
-        args: Vec<Expr>,
-    },
-}
-```
-
-## Parser Addition
-```rust
-// In parser.rs, parse_instruction()
-"tailcall" => {
-    let func = self.parse_func_ref()?;
-    let args = self.parse_args()?;
-    Ok(Instruction::TailCall { func, args })
-}
-```
-
-## Codegen
-```rust
-// In codegen.rs
-Instruction::TailCall { func, args } => {
-    let fn_val = self.get_function(&func)?;
-    let arg_vals: Vec<_> = args.iter()
-        .map(|a| self.compile_expr(a))
-        .collect::<Result<_>>()?;
-    
-    let call = self.builder.build_call(fn_val, &arg_vals, "tailcall");
-    call.set_tail_call(true);
-    self.builder.build_return(Some(&call.try_as_basic_value().left().unwrap()));
-}
-```
-
-## Verifier Checks
-1. Must be in tail position (last instruction before implicit ret)
-2. Return type must match function return type
-3. No owned values pending drop after tailcall
-
-## Test Cases
-```gherkin
-Scenario: Simple tail call
-  Given the expression (define (loop void) () (block entry (tailcall @loop)))
-  Then compilation succeeds
-
-Scenario: Tail recursive factorial
-  Given the expression (define (fact-tail i64) ((i64 n) (i64 acc)) (block entry (br (icmp eq n (i64 0)) done recurse)) (block done (ret acc)) (block recurse (tailcall @fact-tail (sub n (i64 1)) (mul n acc))))
-  When I call fact-tail with (i64 5) (i64 1)
-  Then the result is (i64 120)
-
-Scenario: Mutual tail recursion
-  Given the expression (define (even? i1) ((i64 n)) (block entry (br (icmp eq n (i64 0)) yes no)) (block yes (ret (i1 1))) (block no (tailcall @odd? (sub n (i64 1)))))
-  And the expression (define (odd? i1) ((i64 n)) (block entry (br (icmp eq n (i64 0)) no yes)) (block no (ret (i1 0))) (block yes (tailcall @even? (sub n (i64 1)))))
-  # Test via wrapper returning i64
-```
-
-## Acceptance Criteria
-- [ ] `tailcall` parses
-- [ ] Codegen emits LLVM tail call
-- [ ] Tail position verified
-- [ ] Return type verified
-- [ ] Feature file passes
-EOF
-
-# -----------------------------------------------------------------------------
-# Feature 2: Bounds-Checked Arrays
-# -----------------------------------------------------------------------------
-
-moth new "lIR: bounds-checked arrays" -s high --no-edit --stdin << 'EOF'
-## Summary
-Add fixed-size arrays with bounds-checked access to lIR.
-
-## Types
-```lisp
-(array T N)         ; Fixed-size array of N elements of type T
-```
-
-## Operations
-```lisp
-(array-alloc T N)           ; Stack allocate array
-(array-get arr idx)         ; Bounds-checked read, panics if OOB
-(array-set arr idx val)     ; Bounds-checked write, panics if OOB
-(array-len arr)             ; Get length (compile-time constant)
-(array-ptr arr)             ; Get raw pointer (for FFI)
+(atom initial-value)     ; Create atomic cell
+(swap! atom fn)          ; Atomic update: atom = fn(current)
+(reset! atom value)      ; Atomic set
+@atom                    ; Atomic read (deref)
+(compare-and-set! atom old new)  ; CAS
 ```
 
 ## AST Additions
 ```rust
-pub enum Type {
+pub enum Expr {
     // ... existing ...
-    Array { elem: Box<Type>, size: usize },
-}
-
-pub enum Instruction {
-    // ... existing ...
-    ArrayAlloc { elem_type: ScalarType, size: usize },
-    ArrayGet { array: Box<Expr>, index: Box<Expr> },
-    ArraySet { array: Box<Expr>, index: Box<Expr>, value: Box<Expr> },
-    ArrayLen { array: Box<Expr> },
-    ArrayPtr { array: Box<Expr> },
-}
-```
-
-## Codegen
-```rust
-// array-alloc: alloca [N x T]
-Instruction::ArrayAlloc { elem_type, size } => {
-    let arr_type = elem_type.llvm_type(ctx).array_type(size as u32);
-    self.builder.build_alloca(arr_type, "arr")
-}
-
-// array-get: bounds check then GEP + load
-Instruction::ArrayGet { array, index } => {
-    let arr = self.compile_expr(array)?;
-    let idx = self.compile_expr(index)?;
-    let len = /* get from type */;
-    
-    // Bounds check
-    let in_bounds = self.builder.build_int_compare(
-        IntPredicate::ULT, idx, len.into(), "bounds");
-    let panic_block = self.append_block("panic");
-    let ok_block = self.append_block("ok");
-    self.builder.build_conditional_branch(in_bounds, ok_block, panic_block);
-    
-    // Panic path
-    self.builder.position_at_end(panic_block);
-    self.builder.build_call(self.get_panic_fn(), &[], "");
-    self.builder.build_unreachable();
-    
-    // OK path
-    self.builder.position_at_end(ok_block);
-    let ptr = self.builder.build_gep(arr, &[zero, idx], "elem_ptr");
-    self.builder.build_load(ptr, "elem")
-}
-```
-
-## Bounds Check Elimination
-When index is a constant and provably in-bounds, skip runtime check:
-```rust
-if let Expr::Literal(Literal::Int(i)) = index {
-    if (i as usize) < size {
-        // Skip bounds check, direct GEP
-    }
-}
-```
-
-## Test Cases
-```gherkin
-Scenario: Array allocation and access
-  Given the expression (define (test-array i64) () (block entry (let ((arr (array-alloc i64 10))) (array-set arr (i64 5) (i64 42)) (ret (array-get arr (i64 5))))))
-  When I call test-array
-  Then the result is (i64 42)
-
-Scenario: Array length
-  Given the expression (define (test-len i64) () (block entry (let ((arr (array-alloc i64 10))) (ret (array-len arr)))))
-  When I call test-len
-  Then the result is (i64 10)
-
-Scenario: Static bounds elimination
-  Given the expression (define (static-access i64) () (block entry (let ((arr (array-alloc i64 10))) (array-set arr (i64 0) (i64 99)) (ret (array-get arr (i64 0))))))
-  When I call static-access
-  Then the result is (i64 99)
-  # Verify no bounds check in LLVM IR (manual inspection)
-```
-
-## Acceptance Criteria
-- [ ] Array type parses
-- [ ] array-alloc works
-- [ ] array-get with bounds check works
-- [ ] array-set with bounds check works
-- [ ] array-len returns size
-- [ ] Static bounds elimination for constant indices
-- [ ] Out-of-bounds access panics
-EOF
-
-# -----------------------------------------------------------------------------
-# Feature 3: Native Closures
-# -----------------------------------------------------------------------------
-
-moth new "lIR: native closures" -s crit --no-edit --stdin << 'EOF'
-## Summary
-Add native closure support to lIR, replacing the struct+function encoding.
-
-## Syntax
-```lisp
-; Closure definition
-(closure NAME ((CAPTURE-MODE TYPE NAME) ...)
-  (fn RETURN-TYPE ((TYPE PARAM) ...)
-    BODY))
-
-; Closure type declaration
-(closuretype NAME RETURN-TYPE (PARAM-TYPES...))
-
-; Closure call
-(closure-call CLOSURE ARGS...)
-```
-
-## Capture Modes
-```lisp
-own    ; Move into closure, closure owns value
-ref    ; Borrow, closure cannot escape scope  
-rc     ; Reference-counted, shared ownership
-```
-
-## AST Additions
-```rust
-pub enum Item {
-    // ... existing ...
-    Closure {
-        name: String,
-        captures: Vec<Capture>,
-        params: Vec<Param>,
-        return_type: ReturnType,
-        body: Vec<Block>,
-    },
-    ClosureType {
-        name: String,
-        return_type: ReturnType,
-        param_types: Vec<ParamType>,
-    },
-}
-
-pub struct Capture {
-    pub mode: CaptureMode,
-    pub ty: ParamType,
-    pub name: String,
-}
-
-pub enum CaptureMode {
-    Own,
-    Ref,
-    Rc,
-}
-
-pub enum Instruction {
-    // ... existing ...
-    ClosureCall {
-        closure: Box<Expr>,
-        args: Vec<Expr>,
+    Atom(Box<Spanned<Expr>>),           // (atom x)
+    Swap(Box<Spanned<Expr>>, Box<Spanned<Expr>>),  // (swap! atom fn)
+    Reset(Box<Spanned<Expr>>, Box<Spanned<Expr>>), // (reset! atom val)
+    AtomDeref(Box<Spanned<Expr>>),      // @atom
+    CompareAndSet {                      // (compare-and-set! atom old new)
+        atom: Box<Spanned<Expr>>,
+        old: Box<Spanned<Expr>>,
+        new: Box<Spanned<Expr>>,
     },
 }
 ```
 
-## Codegen Strategy
-Closures compile to:
-1. Environment struct (captures)
-2. Function taking (env_ptr, args...)
-3. Closure object = { env_ptr, fn_ptr }
-
+## Lexer Additions
 ```rust
-// closure add-n ((own i64 n)) (fn i64 ((i64 x)) ...)
-// becomes:
-
-// 1. Env struct
-%closure_add_n_env = type { i64 }
-
-// 2. Function
-define i64 @closure_add_n_fn(ptr %env, i64 %x) {
-    %n_ptr = getelementptr %closure_add_n_env, ptr %env, i32 0, i32 0
-    %n = load i64, ptr %n_ptr
-    %result = add i64 %n, %x
-    ret i64 %result
-}
-
-// 3. Closure type
-%closuretype_IntToInt = type { ptr, ptr }  ; { env, fn }
+'@' => TokenKind::At,        // For @atom deref
+"swap!" => TokenKind::Swap,
+"reset!" => TokenKind::Reset,
+"compare-and-set!" => TokenKind::CAS,
 ```
 
-## Closure Creation
+## Type Checking
 ```rust
-// At creation site:
-let env = self.builder.build_alloca(env_type, "closure_env");
-// Store captures into env
-for (i, capture) in captures.iter().enumerate() {
-    let ptr = self.builder.build_gep(env, &[zero, i.into()], "cap_ptr");
-    let val = self.get_local(&capture.name)?;
-    self.builder.build_store(val, ptr);
-}
-// Build closure struct
-let closure = self.builder.build_alloca(closure_type, "closure");
-let env_field = self.builder.build_gep(closure, &[zero, zero], "env_field");
-let fn_field = self.builder.build_gep(closure, &[zero, one], "fn_field");
-self.builder.build_store(env, env_field);
-self.builder.build_store(fn_ptr, fn_field);
+// atom creates Atom<T>
+// swap! takes Atom<T> and (T -> T), returns T
+// reset! takes Atom<T> and T, returns T
+// @atom returns T
+// compare-and-set! takes Atom<T>, T, T, returns bool
 ```
 
-## Closure Call
-```rust
-Instruction::ClosureCall { closure, args } => {
-    let closure_val = self.compile_expr(closure)?;
-    let env = self.builder.build_extract_value(closure_val, 0, "env");
-    let fn_ptr = self.builder.build_extract_value(closure_val, 1, "fn");
-    let mut call_args = vec![env];
-    call_args.extend(args.iter().map(|a| self.compile_expr(a)).collect::<Result<Vec<_>>>()?);
-    self.builder.build_indirect_call(fn_type, fn_ptr, &call_args, "closure_result")
-}
+## Codegen to lIR
+```lisp
+; (atom 0) compiles to:
+(rc-alloc i64)  ; Atoms are ref-counted for sharing
+
+; (swap! a inc) compiles to:
+; CAS loop:
+(block swap_loop
+  (let ((current (load i64 (rc-ptr a))))
+    (let ((new (call @inc current)))
+      (br (cmpxchg a current new) swap_done swap_loop))))
+
+; @atom compiles to:
+(load i64 (rc-ptr a))
 ```
 
 ## Test Cases
-```gherkin
-Scenario: Simple closure with capture
-  Given the expression (closure add-n ((own i64 n)) (fn i64 ((i64 x)) (block entry (ret (add n x)))))
-  And the expression (define (test-closure i64) () (block entry (let ((f (make-closure add-n (i64 10)))) (ret (closure-call f (i64 32))))))
-  When I call test-closure
-  Then the result is (i64 42)
+```lisp
+; Basic atom
+(let ((a (atom 0)))
+  (swap! a inc)
+  @a)  ; => 1
 
-Scenario: Closure with multiple captures
-  Given the expression (closure add-mul ((own i64 a) (own i64 b)) (fn i64 ((i64 x)) (block entry (ret (add (mul a x) b)))))
-  And the expression (define (test i64) () (block entry (let ((f (make-closure add-mul (i64 2) (i64 3)))) (ret (closure-call f (i64 10))))))
-  When I call test
-  Then the result is (i64 23)
-
-Scenario: Closure passed to function
-  Given the expression (closuretype IntToInt i64 (i64))
-  And the expression (define (apply i64) ((own IntToInt f) (i64 x)) (block entry (ret (closure-call f x))))
-  # ... setup closure and call apply
+; In plet
+(let ((counter (atom 0)))
+  (plet ((a (swap! counter inc))
+         (b (swap! counter inc)))
+    @counter))  ; => 2 (both swaps complete)
 ```
 
 ## Acceptance Criteria
-- [ ] Closure syntax parses
-- [ ] Closuretype parses
-- [ ] Env struct generated correctly
-- [ ] Captures stored in env
-- [ ] closure-call works
-- [ ] own capture moves value
-- [ ] ref capture borrows (verification in borrow checker moth)
-- [ ] Feature file passes
+- [ ] atom creates atomic cell
+- [ ] swap! performs atomic update
+- [ ] reset! performs atomic set
+- [ ] @atom reads atomically
+- [ ] compare-and-set! works
+- [ ] Thread-safe in plet
 EOF
 
 # -----------------------------------------------------------------------------
-# Feature 4: Reference Counting
-# -----------------------------------------------------------------------------
 
-moth new "lIR: reference counting" -s high --no-edit --stdin << 'EOF'
+moth new "liar: plet verification (ADR-009)" -s high --no-edit --stdin << 'EOF'
 ## Summary
-Add reference-counted pointers to lIR with automatic inc/dec.
+plet is a compile-time construct that marks closures as thread-safe.
+It executes sequentially like let, but enforces that only atoms are
+used for mutable state. This enables passing plet-closures to pmap/pfilter.
 
-## Type
+## Semantics
 ```lisp
-rc T        ; Reference-counted pointer to T
+; plet marks closure as Sync (thread-safe)
+; Mutable state must use atoms
+; Non-atom bindings are treated as constants
+
+(plet ((cache (atom []))    ; mutable — atom required
+       (multiplier 10))     ; immutable — constant
+  (fn (x) 
+    (swap! cache ...)       ; OK: atom
+    (set! multiplier 20)))  ; ERROR: not an atom
 ```
 
-## Operations
-```lisp
-(rc-alloc T)        ; Allocate with refcount 1, returns rc T
-(rc-clone x)        ; Increment refcount, return alias
-(rc-drop x)         ; Decrement refcount, free if zero
-(rc-count x)        ; Get current refcount (for debugging)
-(rc-get x)          ; Get value (like load)
-(rc-ptr x)          ; Get raw pointer (unsafe)
-```
+## Verification Rules
 
-## AST Additions
+### In plet body:
+1. `set!` on non-atom binding = ERROR
+2. Mutation through non-atom reference = ERROR
+3. Capturing non-atom mutable state = ERROR
+
+### Closure color:
+- let-closure with mutable captures → NonSync
+- plet-closure → Sync (verified safe)
+
+## Implementation
 ```rust
-pub enum ParamType {
-    // ... existing ...
-    Rc(Box<ScalarType>),
+// In ownership.rs or new plet_check.rs
+
+pub struct PletChecker {
+    atom_bindings: HashSet<String>,
+    errors: Vec<PletError>,
 }
 
-pub enum Instruction {
-    // ... existing ...
-    RcAlloc { ty: ScalarType },
-    RcClone { value: Box<Expr> },
-    RcDrop { value: Box<Expr> },
-    RcCount { value: Box<Expr> },
-    RcGet { value: Box<Expr> },
-    RcPtr { value: Box<Expr> },
-}
-```
-
-## Memory Layout
-```
-+----------+----------+
-| refcount | data ... |
-+----------+----------+
-  i64        T
-```
-
-## Codegen: rc-alloc
-```rust
-Instruction::RcAlloc { ty } => {
-    // Allocate: sizeof(i64) + sizeof(T)
-    let size = 8 + ty.size_of();
-    let ptr = self.builder.build_call(malloc, &[size.into()], "rc_ptr");
-    
-    // Initialize refcount to 1
-    let rc_ptr = self.builder.build_bitcast(ptr, i64_ptr_type, "rc_field");
-    self.builder.build_store(1i64.into(), rc_ptr);
-    
-    // Return pointer (past refcount header)
-    self.builder.build_gep(ptr, &[8i64.into()], "data_ptr")
-}
-```
-
-## Codegen: rc-clone
-```rust
-Instruction::RcClone { value } => {
-    let ptr = self.compile_expr(value)?;
-    // Get refcount field (8 bytes before data)
-    let rc_ptr = self.builder.build_gep(ptr, &[(-8i64).into()], "rc_field");
-    let rc_ptr = self.builder.build_bitcast(rc_ptr, i64_ptr_type, "rc_i64");
-    
-    // Atomic increment
-    self.builder.build_atomicrmw(
-        AtomicRMWBinOp::Add, rc_ptr, 1i64.into(),
-        AtomicOrdering::SeqCst, "new_rc");
-    
-    ptr  // Return same pointer
-}
-```
-
-## Codegen: rc-drop
-```rust
-Instruction::RcDrop { value } => {
-    let ptr = self.compile_expr(value)?;
-    let rc_ptr = self.builder.build_gep(ptr, &[(-8i64).into()], "rc_field");
-    let rc_ptr = self.builder.build_bitcast(rc_ptr, i64_ptr_type, "rc_i64");
-    
-    // Atomic decrement
-    let old_rc = self.builder.build_atomicrmw(
-        AtomicRMWBinOp::Sub, rc_ptr, 1i64.into(),
-        AtomicOrdering::SeqCst, "old_rc");
-    
-    // If was 1 (now 0), free
-    let was_one = self.builder.build_int_compare(
-        IntPredicate::EQ, old_rc, 1i64.into(), "was_one");
-    
-    let free_block = self.append_block("rc_free");
-    let cont_block = self.append_block("rc_cont");
-    self.builder.build_conditional_branch(was_one, free_block, cont_block);
-    
-    self.builder.position_at_end(free_block);
-    let base_ptr = self.builder.build_gep(ptr, &[(-8i64).into()], "base");
-    self.builder.build_call(free, &[base_ptr], "");
-    self.builder.build_unconditional_branch(cont_block);
-    
-    self.builder.position_at_end(cont_block);
-}
-```
-
-## Implicit RC in Let Bindings
-When binding an `rc` value, implicit clone:
-```lisp
-(let ((x (rc-alloc i64)))
-  (rc-set x (i64 42))
-  (let ((y x))           ; implicit rc-clone
-    (rc-get y))          ; use y
-  (rc-get x))            ; x still valid
-; implicit rc-drop for x and y at scope end
-```
-
-## Test Cases
-```gherkin
-Scenario: RC allocate and read
-  Given the expression (define (test-rc i64) () (block entry (let ((x (rc-alloc i64))) (store (i64 42) (rc-ptr x)) (let ((v (load i64 (rc-ptr x)))) (rc-drop x) (ret v)))))
-  When I call test-rc
-  Then the result is (i64 42)
-
-Scenario: RC clone maintains value
-  Given the expression (define (test-rc-clone i64) () (block entry (let ((x (rc-alloc i64))) (store (i64 42) (rc-ptr x)) (let ((y (rc-clone x))) (rc-drop x) (let ((v (load i64 (rc-ptr y)))) (rc-drop y) (ret v))))))
-  When I call test-rc-clone
-  Then the result is (i64 42)
-
-Scenario: RC count
-  Given the expression (define (test-rc-count i64) () (block entry (let ((x (rc-alloc i64))) (let ((y (rc-clone x))) (let ((c (rc-count x))) (rc-drop y) (rc-drop x) (ret c))))))
-  When I call test-rc-count
-  Then the result is (i64 2)
-```
-
-## Acceptance Criteria
-- [ ] `rc T` type parses
-- [ ] rc-alloc allocates with refcount 1
-- [ ] rc-clone increments atomically
-- [ ] rc-drop decrements, frees at zero
-- [ ] rc-count returns current count
-- [ ] No use-after-free (manual verification)
-- [ ] Feature file passes
-EOF
-
-# -----------------------------------------------------------------------------
-# Feature 5: Ownership and Borrow Checking
-# -----------------------------------------------------------------------------
-
-moth new "lIR: ownership types" -s crit --no-edit --stdin << 'EOF'
-## Summary
-Add ownership pointer types to lIR: own, ref, refmut.
-
-## Types
-```lisp
-own T       ; Owned pointer — dropped when out of scope
-ref T       ; Shared borrow — read-only, lifetime-bound
-refmut T    ; Mutable borrow — exclusive, lifetime-bound
-```
-
-## AST Additions
-```rust
-pub enum ParamType {
-    Scalar(ScalarType),
-    Ptr,
-    Own(Box<ScalarType>),
-    Ref(Box<ScalarType>),
-    RefMut(Box<ScalarType>),
-    Rc(Box<ScalarType>),
-}
-```
-
-## Operations
-```lisp
-(alloc own T)           ; Allocate owned
-(borrow ref x)          ; Create shared borrow
-(borrow refmut x)       ; Create mutable borrow
-(drop x)                ; Explicit drop
-(move x)                ; Explicit move
-```
-
-## Codegen
-Ownership types compile to raw pointers at LLVM level.
-The safety is enforced by the verifier, not runtime.
-
-```rust
-// own T -> ptr in LLVM
-// ref T -> ptr in LLVM
-// refmut T -> ptr in LLVM
-
-// alloc own T -> alloca or malloc depending on escape analysis
-// drop x -> call destructor, then free if heap-allocated
-// borrow ref x -> just the pointer (no-op at runtime)
-// borrow refmut x -> just the pointer (no-op at runtime)
-```
-
-## Test Cases (Parser/Codegen Only)
-```gherkin
-Scenario: Parse own type
-  Given the expression (define (take void) ((own i64 x)) (block entry (drop x) (ret)))
-  Then parsing succeeds
-
-Scenario: Parse ref type
-  Given the expression (define (peek i64) ((ref i64 x)) (block entry (ret (load i64 x))))
-  Then parsing succeeds
-
-Scenario: Parse refmut type
-  Given the expression (define (poke void) ((refmut i64 x)) (block entry (store (i64 42) x) (ret)))
-  Then parsing succeeds
-
-Scenario: Alloc and drop
-  Given the expression (define (test i64) () (block entry (let ((x (alloc own i64))) (store (i64 42) x) (let ((v (load i64 x))) (drop x) (ret v)))))
-  When I call test
-  Then the result is (i64 42)
-```
-
-## Acceptance Criteria
-- [ ] own, ref, refmut types parse
-- [ ] alloc own T works
-- [ ] borrow ref/refmut works
-- [ ] drop works
-- [ ] Compiles to correct LLVM IR
-- [ ] Verification is separate moth
-EOF
-
-# -----------------------------------------------------------------------------
-# Feature 6: Borrow Checker (Verifier)
-# -----------------------------------------------------------------------------
-
-moth new "lIR: borrow checker verifier" -s crit --no-edit --stdin << 'EOF'
-## Summary
-Implement the borrow checker as a verification pass over lIR.
-Runs before codegen, rejects invalid programs.
-
-## Verification Pass
-```rust
-pub struct BorrowChecker {
-    bindings: HashMap<String, OwnershipState>,
-    borrows: HashMap<String, BorrowInfo>,
-    errors: Vec<BorrowError>,
-}
-
-pub enum OwnershipState {
-    Owned,
-    Moved,
-    Borrowed { by: Vec<String> },
-    BorrowedMut { by: String },
-    Dropped,
-}
-
-pub struct BorrowInfo {
-    kind: BorrowKind,
-    source: String,      // What is borrowed
-    scope_depth: usize,  // When borrow ends
-}
-```
-
-## Rules Enforced
-
-### Rule 1: No use after move
-```lisp
-; REJECT
-(let ((x (alloc own i64)))
-  (let ((y x))          ; x moved to y
-    (load i64 x)))      ; ERROR: x moved
-```
-
-### Rule 2: No use after drop
-```lisp
-; REJECT
-(let ((x (alloc own i64)))
-  (drop x)
-  (load i64 x))         ; ERROR: x dropped
-```
-
-### Rule 3: Mutable borrow is exclusive
-```lisp
-; REJECT
-(let ((x (alloc own i64)))
-  (let ((a (borrow refmut x))
-        (b (borrow ref x)))   ; ERROR: x already mutably borrowed
-    ...))
-```
-
-### Rule 4: Cannot borrow moved value
-```lisp
-; REJECT
-(let ((x (alloc own i64)))
-  (let ((y x))          ; x moved
-    (borrow ref x)))    ; ERROR: x moved
-```
-
-### Rule 5: Borrow cannot outlive owner
-```lisp
-; REJECT
-(define (bad ref i64) ()
-  (block entry
-    (let ((x (alloc own i64)))
-      (ret (borrow ref x)))))  ; ERROR: x dropped, borrow escapes
-```
-
-### Rule 6: All owned values must be dropped
-```lisp
-; REJECT (memory leak)
-(define (leak void) ()
-  (block entry
-    (let ((x (alloc own i64)))
-      (ret))))          ; ERROR: x not dropped
-```
-
-## Algorithm
-```rust
-impl BorrowChecker {
-    pub fn check_function(&mut self, func: &Function) -> Result<(), Vec<BorrowError>> {
-        // Initialize params
-        for param in &func.params {
-            match &param.ty {
-                ParamType::Own(_) => self.bindings.insert(param.name.clone(), OwnershipState::Owned),
-                ParamType::Ref(_) => self.bindings.insert(param.name.clone(), OwnershipState::Borrowed { by: vec![] }),
-                // ...
+impl PletChecker {
+    pub fn check_plet(&mut self, bindings: &[LetBinding], body: &Expr) {
+        // Identify which bindings are atoms
+        for binding in bindings {
+            if self.is_atom_expr(&binding.value) {
+                self.atom_bindings.insert(binding.name.clone());
             }
         }
         
-        // Walk blocks in control flow order
-        for block in &func.blocks {
-            self.check_block(block)?;
-        }
-        
-        // At function end, verify all owned dropped or returned
-        self.verify_cleanup()?;
-        
-        if self.errors.is_empty() {
-            Ok(())
-        } else {
-            Err(std::mem::take(&mut self.errors))
-        }
+        // Check body for non-atom mutations
+        self.check_mutations(body);
     }
     
-    fn check_instruction(&mut self, inst: &Instruction) -> Result<(), BorrowError> {
-        match inst {
-            Instruction::Let { bindings, body } => {
-                let scope_depth = self.enter_scope();
-                for (name, expr) in bindings {
-                    self.check_expr(expr)?;
-                    // Track ownership based on expr result
+    fn check_mutations(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Set(name, _) => {
+                if !self.atom_bindings.contains(&name.value) {
+                    self.errors.push(PletError::NonAtomMutation(name.clone()));
                 }
-                for inst in body {
-                    self.check_instruction(inst)?;
-                }
-                self.exit_scope(scope_depth)?;  // Verify borrows ended, insert drops
             }
-            // ... other instructions
-        }
-    }
-    
-    fn check_use(&mut self, name: &str) -> Result<(), BorrowError> {
-        match self.bindings.get(name) {
-            Some(OwnershipState::Moved) => Err(BorrowError::UseAfterMove(name.to_string())),
-            Some(OwnershipState::Dropped) => Err(BorrowError::UseAfterDrop(name.to_string())),
-            Some(_) => Ok(()),
-            None => Err(BorrowError::Undefined(name.to_string())),
+            // ... recurse into sub-expressions
         }
     }
 }
@@ -722,63 +241,1086 @@ impl BorrowChecker {
 
 ## Error Messages
 ```
-error: use of moved value `x`
-  --> test.lir:5:10
+error: cannot mutate non-atom binding in plet
+  --> src/main.liar:10:5
    |
- 3 |   (let ((y x))
-   |            - value moved here
- 4 |     ...
- 5 |     (load i64 x))
-   |              ^ value used here after move
+ 8 | (plet ((counter 0))
+   |        ------- binding is not an atom
+ 9 |   (fn ()
+10 |     (set! counter (+ counter 1))))
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ mutation requires atom
+   |
+   = help: use (atom 0) instead of 0
+```
 
-error: cannot borrow `x` as immutable because it is already borrowed as mutable
-  --> test.lir:4:20
-   |
- 3 |   (let ((a (borrow refmut x))
-   |                           - mutable borrow occurs here
- 4 |         (b (borrow ref x)))
-   |                        ^ immutable borrow occurs here
+## Codegen
+plet compiles identically to let — the safety is compile-time only:
+```lisp
+; (plet ((x (atom 0))) body)
+; compiles to same as:
+; (let ((x (atom 0))) body)
+```
+
+## Integration with pmap
+```lisp
+; let-closure: NonSync color
+(let ((cache []))
+  (fn (x) (append cache x)))
+
+(pmap let-closure data)  ; ERROR: NonSync closure to parallel op
+
+; plet-closure: Sync color
+(plet ((cache (atom [])))
+  (fn (x) (swap! cache (fn (c) (append c x)))))
+
+(pmap plet-closure data)  ; OK: Sync closure
+```
+
+## Acceptance Criteria
+- [ ] plet parses (already done)
+- [ ] Non-atom mutation in plet body = error
+- [ ] plet closures marked as Sync color
+- [ ] let closures with mutable captures marked NonSync
+- [ ] pmap rejects NonSync closures
+- [ ] Good error messages with suggestions
+EOF
+
+# -----------------------------------------------------------------------------
+
+moth new "liar: pmap/pfilter parallel execution" -s med --no-edit --stdin << 'EOF'
+## Summary
+Implement parallel map and filter operations that execute across
+multiple threads. These require Sync closures (from plet).
+
+## Syntax
+```lisp
+(pmap fn collection)       ; Parallel map
+(pfilter pred collection)  ; Parallel filter
+(preduce fn init coll)     ; Parallel reduce
+```
+
+## Semantics
+```lisp
+; pmap applies fn in parallel across collection
+(pmap (fn (x) (* x x)) [1 2 3 4])  ; => [1 4 9 16]
+
+; Only Sync closures allowed
+(plet ((factor 2))
+  (pmap (fn (x) (* x factor)) data))  ; OK: plet closure is Sync
+
+(let ((factor 2))
+  (pmap (fn (x) (* x factor)) data))  ; ERROR: let closure is NonSync
+```
+
+## Type Checking
+```rust
+fn check_pmap_call(&mut self, fn_expr: &Expr, coll_expr: &Expr) {
+    let fn_ty = self.infer(fn_expr)?;
+    let color = self.get_closure_color(fn_expr);
+    
+    if color != ClosureColor::Sync && color != ClosureColor::Pure {
+        self.error(TypeError::NonSyncToPmap {
+            found: color,
+            span: fn_expr.span,
+        });
+    }
+}
+```
+
+## Runtime Implementation
+Options:
+1. **Rayon** - Work-stealing thread pool (Rust crate)
+2. **pthreads** - Direct FFI to POSIX threads
+3. **Custom** - Simple thread pool
+
+## Codegen to lIR
+```lisp
+; (pmap f coll) conceptually becomes:
+(declare pmap_impl ptr (ptr ptr))  ; runtime function
+
+; Or inline:
+(let ((results (array-alloc T (len coll)))
+      (threads (array-alloc ptr (len coll))))
+  ; spawn thread per element (or chunk)
+  ; join all
+  ; return results)
+```
+
+## Chunking Strategy
+For large collections, divide into chunks:
+```lisp
+; Don't spawn 1M threads for 1M elements
+; Chunk into (num-cores) pieces
+```
+
+## Acceptance Criteria
+- [ ] pmap executes in parallel
+- [ ] pfilter executes in parallel
+- [ ] Only Sync/Pure closures accepted
+- [ ] NonSync closure = compile error
+- [ ] Proper thread pool management
+- [ ] Results maintain order
+EOF
+
+# -----------------------------------------------------------------------------
+
+moth new "liar: dosync transactions (ADR-012)" -s med --no-edit --stdin << 'EOF'
+## Summary
+Implement Software Transactional Memory (STM) for coordinated updates
+to multiple refs.
+
+## Syntax
+```lisp
+(ref initial-value)      ; Create transactional ref
+(dosync body...)         ; Transaction block
+(ref-set ref value)      ; Set in transaction
+(alter ref fn args...)   ; Update in transaction
+(commute ref fn args...) ; Commutative update
+```
+
+## Semantics
+- Transactions are atomic, consistent, isolated
+- Conflicts cause automatic retry
+- No locks, no deadlocks
+
+## Example
+```lisp
+(let ((account-a (ref 100))
+      (account-b (ref 200)))
+  (dosync
+    (let ((amount 50))
+      (alter account-a - amount)
+      (alter account-b + amount))))
+```
+
+## AST Additions
+```rust
+pub enum Expr {
+    // ... existing ...
+    MakeRef(Box<Spanned<Expr>>),
+    Dosync(Vec<Spanned<Expr>>),
+    RefSet(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    Alter {
+        ref_expr: Box<Spanned<Expr>>,
+        fn_expr: Box<Spanned<Expr>>,
+        args: Vec<Spanned<Expr>>,
+    },
+    Commute {
+        ref_expr: Box<Spanned<Expr>>,
+        fn_expr: Box<Spanned<Expr>>,
+        args: Vec<Spanned<Expr>>,
+    },
+}
+```
+
+## Implementation Notes
+- Use MVCC (Multi-Version Concurrency Control)
+- Track read/write sets per transaction
+- Validate at commit time
+- Retry on conflict
+
+## Acceptance Criteria
+- [ ] ref creates transactional reference
+- [ ] dosync provides transaction scope
+- [ ] alter updates in transaction
+- [ ] Automatic retry on conflict
+- [ ] No deadlocks possible
+EOF
+
+# -----------------------------------------------------------------------------
+
+moth new "liar: async/await (ADR-014)" -s med --no-edit --stdin << 'EOF'
+## Summary
+Implement async/await for non-blocking I/O operations.
+Async blocks must use plet semantics (thread-safe).
+
+## Syntax
+```lisp
+(async body)             ; Create future
+(await future)           ; Block until complete
+(.await future)          ; Alternative syntax
+```
+
+## Semantics
+```lisp
+; Async returns a Future<T>
+(let ((f (async (fetch-url "https://..."))))
+  (await f))  ; Blocks, returns result
+
+; Parallel async
+(plet ((a (async (fetch "url1")))
+       (b (async (fetch "url2"))))
+  (list (await a) (await b)))
+```
+
+## AST Additions
+```rust
+pub enum Expr {
+    // ... existing ...
+    Async(Box<Spanned<Expr>>),
+    Await(Box<Spanned<Expr>>),
+}
+```
+
+## Type System
+```rust
+// async creates Future<T> where T is body return type
+// await takes Future<T>, returns T
+```
+
+## Closure Color Integration
+- async body must be Sync (no Local closures)
+- Captured state must be Send + Sync
+
+## Codegen
+Likely targets tokio or async-std runtime.
+May need runtime initialization.
+
+## Acceptance Criteria
+- [ ] async creates future
+- [ ] await blocks until complete
+- [ ] Works with plet for parallel await
+- [ ] Closure color enforced (Sync required)
+- [ ] Integration with I/O runtime
+EOF
+
+# -----------------------------------------------------------------------------
+# COLLECTIONS
+# -----------------------------------------------------------------------------
+
+moth new "liar: persistent collections (ADR-018)" -s high --no-edit --stdin << 'EOF'
+## Summary
+Implement persistent (immutable, structural sharing) collections:
+vector, map, list.
+
+## Syntax
+```lisp
+[1 2 3]           ; Persistent vector
+{:a 1 :b 2}       ; Persistent map
+'(1 2 3)          ; List (linked)
+```
+
+## Operations
+```lisp
+; Vector
+(conj [1 2] 3)         ; => [1 2 3]
+(get [1 2 3] 0)        ; => 1
+(assoc [1 2 3] 1 99)   ; => [1 99 3]
+(count [1 2 3])        ; => 3
+(subvec [1 2 3 4] 1 3) ; => [2 3]
+
+; Map
+(assoc {:a 1} :b 2)    ; => {:a 1 :b 2}
+(dissoc {:a 1 :b 2} :a); => {:b 2}
+(get {:a 1} :a)        ; => 1
+(keys {:a 1 :b 2})     ; => (:a :b)
+(vals {:a 1 :b 2})     ; => (1 2)
+
+; List
+(cons 0 '(1 2))        ; => (0 1 2)
+(first '(1 2 3))       ; => 1
+(rest '(1 2 3))        ; => (2 3)
+```
+
+## AST Additions
+```rust
+pub enum Expr {
+    // ... existing ...
+    Vector(Vec<Spanned<Expr>>),
+    Map(Vec<(Spanned<Expr>, Spanned<Expr>)>),
+    List(Vec<Spanned<Expr>>),
+    Keyword(String),  // :foo
+}
+```
+
+## Lexer Additions
+```rust
+'[' => TokenKind::LBracket,
+']' => TokenKind::RBracket,
+'{' => TokenKind::LBrace,
+'}' => TokenKind::RBrace,
+':' followed by symbol => TokenKind::Keyword(s)
+```
+
+## Implementation Options
+1. Use im-rs crate (Rust persistent collections)
+2. Build custom HAMTs/RRB-trees
+3. Start simple (copy-on-write), optimize later
+
+## Type System
+```rust
+Ty::Vector(Box<Ty>),      // [T]
+Ty::Map(Box<Ty>, Box<Ty>), // {K V}
+Ty::List(Box<Ty>),         // '(T)
+Ty::Keyword,               // :keyword
+```
+
+## Acceptance Criteria
+- [ ] Vector literal parses and evaluates
+- [ ] Map literal parses and evaluates  
+- [ ] List literal parses and evaluates
+- [ ] Keywords parse (:foo)
+- [ ] conj, get, assoc work
+- [ ] Structural sharing (verify no deep copies)
+EOF
+
+# -----------------------------------------------------------------------------
+
+moth new "liar: conventional (mutable) collections (ADR-018)" -s med --no-edit --stdin << 'EOF'
+## Summary
+Implement conventional (mutable, O(1) access) collections alongside
+persistent ones.
+
+## Syntax
+```lisp
+<[1 2 3]>         ; Conventional vector
+<{:a 1 :b 2}>     ; Conventional map
+```
+
+## Operations
+```lisp
+; Mutable operations (with !)
+(push! vec item)       ; Append in place
+(set! vec idx val)     ; Update in place
+(put! map key val)     ; Insert in place
+(remove! map key)      ; Remove in place
+
+; Same read operations as persistent
+(get vec idx)
+(count vec)
+```
+
+## AST Additions
+```rust
+pub enum Expr {
+    // ... existing ...
+    ConvVector(Vec<Spanned<Expr>>),
+    ConvMap(Vec<(Spanned<Expr>, Spanned<Expr>)>),
+}
+```
+
+## Lexer
+```rust
+// <[ starts conventional vector
+// <{ starts conventional map
+// Need lookahead for < followed by [ or {
+```
+
+## Ownership
+- Conventional collections are owned
+- Mutations require &mut
+- Cannot be shared without atoms/rc
+
+## Type System
+```rust
+Ty::ConvVector(Box<Ty>),    // <[T]>
+Ty::ConvMap(Box<Ty>, Box<Ty>), // <{K V}>
+```
+
+## Implementation
+Use Rust's Vec and HashMap under the hood.
+
+## Acceptance Criteria
+- [ ] <[...]> syntax parses
+- [ ] <{...}> syntax parses
+- [ ] Mutable operations work
+- [ ] Ownership rules apply
+- [ ] Performance: O(1) access
+EOF
+
+# -----------------------------------------------------------------------------
+# SIMD
+# -----------------------------------------------------------------------------
+
+moth new "liar: SIMD vectors (ADR-016)" -s med --no-edit --stdin << 'EOF'
+## Summary
+Implement SIMD vector literals and operations for data parallelism.
+
+## Syntax
+```lisp
+<<1 2 3 4>>              ; v4 i64 (inferred)
+<<1.0 2.0 3.0 4.0>>      ; v4 f64 (inferred)
+<i8<1 2 3 4>>            ; v4 i8 (explicit type)
+<f32<1.0 2.0 3.0 4.0>>   ; v4 f32 (explicit type)
+```
+
+## Operations
+```lisp
+; Arithmetic broadcasts to all lanes
+(+ <<1 2 3 4>> <<5 6 7 8>>)   ; => <<6 8 10 12>>
+(* 2 <<1 2 3 4>>)             ; => <<2 4 6 8>>
+
+; Lane access
+(lane vec idx)                 ; Extract single lane
+(with-lane vec idx val)        ; Return vec with lane updated
+
+; Horizontal operations
+(hsum <<1 2 3 4>>)            ; => 10 (horizontal sum)
+(hmin <<1 2 3 4>>)            ; => 1
+(hmax <<1 2 3 4>>)            ; => 4
+```
+
+## AST Additions
+```rust
+pub enum Expr {
+    // ... existing ...
+    SimdVector(Vec<Spanned<Expr>>),           // <<...>>
+    SimdVectorTyped(String, Vec<Spanned<Expr>>), // <i8<...>>
+}
+```
+
+## Lexer
+```rust
+"<<" => TokenKind::DoubleLAngle,
+">>" => TokenKind::DoubleRAngle,
+// <i8< needs careful parsing
+```
+
+## Type System
+```rust
+Ty::SimdVector(Box<Ty>, usize),  // <N x T>
+```
+
+## Codegen to lIR
+```lisp
+; <<1 2 3 4>> compiles to:
+(vector <4 x i64> (i64 1) (i64 2) (i64 3) (i64 4))
+
+; (+ a b) on vectors compiles to:
+(add a b)  ; lIR add works on vectors
+```
+
+## Constraints
+- Vector width must be power of 2
+- All elements same type
+- Operations maintain lane correspondence
+
+## Acceptance Criteria
+- [ ] <<...>> syntax parses
+- [ ] <type<...>> syntax parses
+- [ ] Arithmetic works on vectors
+- [ ] Scalar broadcast works
+- [ ] Horizontal operations work
+- [ ] Maps to lIR vector types
+EOF
+
+# -----------------------------------------------------------------------------
+# NUMERIC
+# -----------------------------------------------------------------------------
+
+moth new "liar: numeric overflow handling (ADR-017)" -s low --no-edit --stdin << 'EOF'
+## Summary
+Implement explicit overflow handling modes: boxed (auto-promote),
+wrapping (C-style), and checked (default).
+
+## Syntax
+```lisp
+; Default: checked (panic on overflow)
+(+ x y)
+
+; Boxed: promotes to biginteger, never overflows
+(boxed (* BIG BIGGER))
+
+; Wrapping: C-style silent wrap
+(wrapping (* x y))
+```
+
+## AST Additions
+```rust
+pub enum Expr {
+    // ... existing ...
+    Boxed(Box<Spanned<Expr>>),
+    Wrapping(Box<Spanned<Expr>>),
+}
+```
+
+## Codegen
+
+### Checked (default)
+```lisp
+; Uses LLVM's overflow intrinsics
+(let ((result (call.overflow @llvm.sadd.with.overflow.i64 a b)))
+  (br (extractvalue result 1) overflow_handler continue))
+```
+
+### Wrapping
+```lisp
+; Just regular add, wraps naturally
+(add a b)
+```
+
+### Boxed
+```lisp
+; Check for potential overflow, promote if needed
+; Requires bigint library integration
+```
+
+## Implementation Notes
+- Boxed requires bigint library (num-bigint, rug, or custom)
+- Checked needs runtime panic handler
+- Wrapping is simplest (current behavior)
+
+## Acceptance Criteria
+- [ ] boxed syntax parses
+- [ ] wrapping syntax parses  
+- [ ] Checked arithmetic panics on overflow
+- [ ] Wrapping arithmetic wraps silently
+- [ ] Boxed promotes to bigint
+EOF
+
+# -----------------------------------------------------------------------------
+# OTHER
+# -----------------------------------------------------------------------------
+
+moth new "liar: share and clone (ADR ownership)" -s high --no-edit --stdin << 'EOF'
+## Summary
+Implement share (reference counting) and clone (deep copy) operations.
+
+## Syntax
+```lisp
+(share x)    ; Create reference-counted value
+(clone x)    ; Deep copy, returns owned value
+```
+
+## Semantics
+
+### share
+```lisp
+(let ((x (share (cons 1 2))))   ; refcount=1
+  (let ((y x))                   ; refcount=2 (implicit clone of rc)
+    (car y))                     ; access through y
+  (car x))                       ; still valid, refcount=1
+                                 ; refcount=0 here, freed
+```
+
+### clone
+```lisp
+(let ((x (cons 1 2)))
+  (let ((y (clone x)))  ; y owns a deep copy
+    (set-car! y 99)     ; mutate copy
+    (cons (car x)       ; x unchanged => 1
+          (car y))))    ; y changed => 99
+```
+
+## AST Additions
+```rust
+pub enum Expr {
+    // ... existing ...
+    Share(Box<Spanned<Expr>>),
+    Clone(Box<Spanned<Expr>>),
+}
+```
+
+## Type System
+```rust
+// share: T -> Rc<T>
+// clone: T -> T (where T: Clone)
+```
+
+## Codegen to lIR
+```lisp
+; (share x) compiles to:
+(rc-alloc <type>)
+(store x (rc-ptr result))
+
+; (clone x) compiles to:
+; Deep copy - depends on type
+; For primitives: just copy
+; For structs: allocate new + copy fields
+; For rc: rc-clone (refcount++)
+```
+
+## Ownership Implications
+- share creates Rc<T>, multiple owners
+- clone creates fresh owned value
+- Shared values immutable (use atoms for mutation)
+
+## Acceptance Criteria
+- [ ] share creates reference-counted value
+- [ ] clone creates deep copy
+- [ ] Shared values are immutable
+- [ ] Proper refcount management
+- [ ] Works with borrow checker
+EOF
+
+# -----------------------------------------------------------------------------
+
+moth new "liar: byte arrays and regex (syntax)" -s low --no-edit --stdin << 'EOF'
+## Summary
+Implement byte array literals and regex reader macro.
+
+## Syntax
+```lisp
+#[0x48 0x65 0x6c 0x6c 0x6f]  ; Byte array: "Hello"
+#r"pattern"                   ; Regex literal
+#r"foo.*bar"i                 ; Regex with flags
+```
+
+## AST Additions
+```rust
+pub enum Expr {
+    // ... existing ...
+    ByteArray(Vec<u8>),
+    Regex(String, RegexFlags),
+}
+
+pub struct RegexFlags {
+    pub case_insensitive: bool,
+    pub multiline: bool,
+    pub dotall: bool,
+}
+```
+
+## Lexer
+```rust
+// #[ starts byte array
+// #r" starts regex
+'#' => match self.peek() {
+    Some('[') => self.lex_byte_array(),
+    Some('r') => self.lex_regex(),
+    _ => error,
+}
+```
+
+## Byte Array Operations
+```lisp
+(byte-array 72 101 108 108 111)  ; From integers
+(bytes "Hello")                   ; From string
+(get bytes 0)                     ; => 72
+(len bytes)                       ; => 5
+(slice bytes 1 3)                 ; => #[101 108]
+```
+
+## Regex Operations
+```lisp
+(match? #r"foo" "foobar")        ; => true
+(find #r"(\d+)" "abc123")        ; => "123"
+(replace #r"foo" "bar" "foobar") ; => "barbar"
+```
+
+## Implementation Notes
+- Byte arrays: Vec<u8> or &[u8]
+- Regex: Use regex crate, compile at parse time
+
+## Acceptance Criteria
+- [ ] #[...] byte array syntax parses
+- [ ] #r"..." regex syntax parses
+- [ ] Byte array operations work
+- [ ] Regex matching works
+- [ ] Regex compiled at parse time (perf)
+EOF
+
+# =============================================================================
+# lIR ATOMIC PRIMITIVES
+# =============================================================================
+
+moth new "lIR: atomic load/store" -s high --no-edit --stdin << 'EOF'
+## Summary
+Add atomic load and store instructions with memory ordering to lIR.
+These are LLVM primitives needed for implementing atoms.
+
+## Syntax
+```lisp
+(atomic-load ordering type ptr)       ; Atomic load
+(atomic-store ordering value ptr)     ; Atomic store
+```
+
+## Memory Orderings
+```lisp
+monotonic   ; Minimal ordering, no synchronization
+acquire     ; Acquire semantics (loads)
+release     ; Release semantics (stores)
+acq_rel     ; Acquire-release (read-modify-write)
+seq_cst     ; Sequential consistency (strongest)
+```
+
+## AST Additions
+```rust
+pub enum MemoryOrdering {
+    Monotonic,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst,
+}
+
+pub enum Expr {
+    // ... existing ...
+    AtomicLoad {
+        ordering: MemoryOrdering,
+        ty: ScalarType,
+        ptr: Box<Expr>,
+    },
+    AtomicStore {
+        ordering: MemoryOrdering,
+        value: Box<Expr>,
+        ptr: Box<Expr>,
+    },
+}
+```
+
+## Parser
+```rust
+// (atomic-load seq_cst i64 ptr)
+"atomic-load" => {
+    let ordering = self.parse_ordering()?;
+    let ty = self.parse_scalar_type()?;
+    let ptr = self.parse_expr()?;
+    Ok(Expr::AtomicLoad { ordering, ty, ptr: Box::new(ptr) })
+}
+
+// (atomic-store seq_cst value ptr)
+"atomic-store" => {
+    let ordering = self.parse_ordering()?;
+    let value = self.parse_expr()?;
+    let ptr = self.parse_expr()?;
+    Ok(Expr::AtomicStore { ordering, value: Box::new(value), ptr: Box::new(ptr) })
+}
+
+fn parse_ordering(&mut self) -> Result<MemoryOrdering> {
+    match self.expect_symbol()?.as_str() {
+        "monotonic" => Ok(MemoryOrdering::Monotonic),
+        "acquire" => Ok(MemoryOrdering::Acquire),
+        "release" => Ok(MemoryOrdering::Release),
+        "acq_rel" => Ok(MemoryOrdering::AcqRel),
+        "seq_cst" => Ok(MemoryOrdering::SeqCst),
+        other => Err(ParseError::InvalidOrdering(other.to_string())),
+    }
+}
+```
+
+## Codegen
+```rust
+Expr::AtomicLoad { ordering, ty, ptr } => {
+    let ptr_val = self.compile_expr(ptr)?;
+    let llvm_ordering = match ordering {
+        MemoryOrdering::Monotonic => AtomicOrdering::Monotonic,
+        MemoryOrdering::Acquire => AtomicOrdering::Acquire,
+        MemoryOrdering::Release => AtomicOrdering::Release,
+        MemoryOrdering::AcqRel => AtomicOrdering::AcquireRelease,
+        MemoryOrdering::SeqCst => AtomicOrdering::SequentiallyConsistent,
+    };
+    let load = self.builder.build_load(ty.to_llvm(self.ctx), ptr_val, "atomic_load");
+    load.set_atomic_ordering(llvm_ordering)?;
+    Ok(load)
+}
 ```
 
 ## Test Cases
 ```gherkin
-Scenario: Reject use after move
-  Given the expression (define (bad void) () (block entry (let ((x (alloc own i64))) (let ((y x)) (load i64 x)) (ret))))
-  Then verification fails with "use of moved value"
-
-Scenario: Reject double mutable borrow
-  Given the expression (define (bad void) () (block entry (let ((x (alloc own i64))) (let ((a (borrow refmut x)) (b (borrow refmut x))) ...) (ret))))
-  Then verification fails with "already borrowed as mutable"
-
-Scenario: Accept valid borrows
-  Given the expression (define (ok void) () (block entry (let ((x (alloc own i64))) (let ((a (borrow ref x)) (b (borrow ref x))) (add (load i64 a) (load i64 b))) (drop x) (ret))))
-  Then verification succeeds
+Scenario: Atomic load and store
+  Given the expression (define (test i64) () (block entry (let ((p (alloca i64))) (atomic-store seq_cst (i64 42) p) (ret (atomic-load seq_cst i64 p)))))
+  When I call test
+  Then the result is (i64 42)
 ```
 
 ## Acceptance Criteria
-- [ ] Use after move detected
-- [ ] Use after drop detected
-- [ ] Mutable exclusivity enforced
-- [ ] Borrow escape detected
-- [ ] Missing drop detected (optional: auto-insert)
-- [ ] Good error messages with locations
-- [ ] All valid programs pass
+- [ ] atomic-load parses with all orderings
+- [ ] atomic-store parses with all orderings
+- [ ] Codegen produces LLVM atomic instructions
+- [ ] Invalid ordering = parse error
+- [ ] Feature file passes
+EOF
+
+# -----------------------------------------------------------------------------
+
+moth new "lIR: atomicrmw (atomic read-modify-write)" -s high --no-edit --stdin << 'EOF'
+## Summary
+Add atomicrmw instruction for atomic read-modify-write operations.
+Used for lock-free counters, accumulators, etc.
+
+## Syntax
+```lisp
+(atomicrmw op ordering ptr value)
+```
+
+## Operations
+```lisp
+xchg    ; Exchange (swap)
+add     ; Add
+sub     ; Subtract  
+and     ; Bitwise AND
+or      ; Bitwise OR
+xor     ; Bitwise XOR
+min     ; Signed minimum
+max     ; Signed maximum
+umin    ; Unsigned minimum
+umax    ; Unsigned maximum
+```
+
+## Examples
+```lisp
+; Atomic increment
+(atomicrmw add seq_cst counter (i64 1))  ; returns old value
+
+; Atomic swap
+(atomicrmw xchg seq_cst ptr new_value)   ; returns old value
+
+; Atomic max
+(atomicrmw max seq_cst ptr candidate)    ; returns old value
+```
+
+## AST Addition
+```rust
+pub enum AtomicRMWOp {
+    Xchg,
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+    Min,
+    Max,
+    UMin,
+    UMax,
+}
+
+pub enum Expr {
+    // ... existing ...
+    AtomicRMW {
+        op: AtomicRMWOp,
+        ordering: MemoryOrdering,
+        ptr: Box<Expr>,
+        value: Box<Expr>,
+    },
+}
+```
+
+## Codegen
+```rust
+Expr::AtomicRMW { op, ordering, ptr, value } => {
+    let ptr_val = self.compile_expr(ptr)?;
+    let val = self.compile_expr(value)?;
+    let llvm_op = match op {
+        AtomicRMWOp::Xchg => AtomicRMWBinOp::Xchg,
+        AtomicRMWOp::Add => AtomicRMWBinOp::Add,
+        AtomicRMWOp::Sub => AtomicRMWBinOp::Sub,
+        // ... etc
+    };
+    self.builder.build_atomicrmw(llvm_op, ptr_val, val, ordering.to_llvm())
+}
+```
+
+## Use in RC (refactor)
+Current RC implementation can use this explicitly:
+```lisp
+; rc-clone becomes:
+(atomicrmw add seq_cst refcount_ptr (i64 1))
+
+; rc-drop becomes:
+(let ((old (atomicrmw sub seq_cst refcount_ptr (i64 1))))
+  (br (icmp eq old (i64 1)) free_block continue_block))
+```
+
+## Test Cases
+```gherkin
+Scenario: Atomic increment
+  Given the expression (define (test i64) () (block entry (let ((p (alloca i64))) (store (i64 10) p) (let ((old (atomicrmw add seq_cst p (i64 5)))) (ret old)))))
+  When I call test
+  Then the result is (i64 10)
+
+Scenario: Atomic increment - verify new value
+  Given the expression (define (test i64) () (block entry (let ((p (alloca i64))) (store (i64 10) p) (atomicrmw add seq_cst p (i64 5)) (ret (load i64 p)))))
+  When I call test
+  Then the result is (i64 15)
+```
+
+## Acceptance Criteria
+- [ ] atomicrmw parses with all ops and orderings
+- [ ] Returns old value
+- [ ] Codegen produces LLVM atomicrmw
+- [ ] All operations work (add, sub, xchg, etc.)
+EOF
+
+# -----------------------------------------------------------------------------
+
+moth new "lIR: cmpxchg (compare-and-swap)" -s high --no-edit --stdin << 'EOF'
+## Summary
+Add cmpxchg (compare-and-exchange) instruction for lock-free algorithms.
+This is the fundamental primitive for implementing swap! loops.
+
+## Syntax
+```lisp
+(cmpxchg ordering ptr expected new)
+; Returns { old_value, success_flag }
+```
+
+## Semantics
+```
+if *ptr == expected:
+    *ptr = new
+    return { expected, true }
+else:
+    return { *ptr, false }
+```
+
+## AST Addition
+```rust
+pub enum Expr {
+    // ... existing ...
+    CmpXchg {
+        ordering: MemoryOrdering,
+        ptr: Box<Expr>,
+        expected: Box<Expr>,
+        new_value: Box<Expr>,
+    },
+}
+```
+
+## Return Type
+CmpXchg returns a struct { T, i1 }:
+- First element: the value that was in memory
+- Second element: whether the exchange succeeded
+
+```lisp
+(let ((result (cmpxchg seq_cst ptr expected new)))
+  (let ((old_val (extractvalue result 0))
+        (success (extractvalue result 1)))
+    (br success done retry)))
+```
+
+## Use for swap!
+```lisp
+; (swap! atom fn) compiles to CAS loop:
+(block swap_loop
+  (let ((old (atomic-load seq_cst i64 ptr)))
+    (let ((new (call fn old)))
+      (let ((result (cmpxchg seq_cst ptr old new)))
+        (br (extractvalue result 1) swap_done swap_loop)))))
+(block swap_done
+  (ret new))
+```
+
+## Codegen
+```rust
+Expr::CmpXchg { ordering, ptr, expected, new_value } => {
+    let ptr_val = self.compile_expr(ptr)?;
+    let exp_val = self.compile_expr(expected)?;
+    let new_val = self.compile_expr(new_value)?;
+    
+    // LLVM cmpxchg has success and failure orderings
+    self.builder.build_cmpxchg(
+        ptr_val,
+        exp_val, 
+        new_val,
+        ordering.to_llvm(),  // success ordering
+        ordering.to_llvm(),  // failure ordering (often can be weaker)
+    )
+}
+```
+
+## Test Cases
+```gherkin
+Scenario: CmpXchg success
+  Given the expression (define (test i64) () (block entry (let ((p (alloca i64))) (store (i64 10) p) (let ((result (cmpxchg seq_cst p (i64 10) (i64 20)))) (ret (extractvalue result 0))))))
+  When I call test
+  Then the result is (i64 10)
+
+Scenario: CmpXchg failure
+  Given the expression (define (test i64) () (block entry (let ((p (alloca i64))) (store (i64 10) p) (let ((result (cmpxchg seq_cst p (i64 99) (i64 20)))) (ret (extractvalue result 0))))))
+  When I call test
+  Then the result is (i64 10)
+```
+
+## Acceptance Criteria
+- [ ] cmpxchg parses
+- [ ] Returns { old_value, success }
+- [ ] extractvalue works on result
+- [ ] Success case: memory updated
+- [ ] Failure case: memory unchanged
+- [ ] Can implement CAS loop
+EOF
+
+# -----------------------------------------------------------------------------
+
+moth new "lIR: fence (memory barrier)" -s low --no-edit --stdin << 'EOF'
+## Summary
+Add fence instruction for explicit memory barriers.
+Usually not needed (atomic ops have implicit fences), but useful for
+advanced lock-free algorithms.
+
+## Syntax
+```lisp
+(fence ordering)
+```
+
+## Semantics
+- Prevents reordering of memory operations across the fence
+- No return value (void)
+
+## AST Addition
+```rust
+pub enum Expr {
+    // ... existing ...
+    Fence {
+        ordering: MemoryOrdering,
+    },
+}
+```
+
+## Codegen
+```rust
+Expr::Fence { ordering } => {
+    self.builder.build_fence(ordering.to_llvm(), "");
+    // Returns void/unit
+}
+```
+
+## Use Cases
+- Implementing spin locks
+- Memory barriers for non-atomic data
+- Synchronizing with hardware
+
+## Test Cases
+```gherkin
+Scenario: Fence compiles
+  Given the expression (define (test void) () (block entry (fence seq_cst) (ret)))
+  Then compilation succeeds
+```
+
+## Acceptance Criteria
+- [ ] fence parses with all orderings
+- [ ] Codegen produces LLVM fence
+- [ ] No return value
 EOF
 
 echo ""
-echo "Created 6 moths for lIR safety features (ADR-021):"
+echo "Created 16 moths for missing liar/lIR features:"
 echo ""
-echo "  1. [HIGH] Tail calls - guaranteed TCO"
-echo "  2. [HIGH] Bounds-checked arrays - safe indexing"
-echo "  3. [CRIT] Native closures - captures, types"
-echo "  4. [HIGH] Reference counting - rc type, auto inc/dec"
-echo "  5. [CRIT] Ownership types - own/ref/refmut"
-echo "  6. [CRIT] Borrow checker - verification pass"
+echo "THREADING (6):"
+echo "  [HIGH] Closure color tracking (ADR-010)"
+echo "  [HIGH] Atoms for shared state (ADR-011)"
+echo "  [HIGH] plet verification (ADR-009)"
+echo "  [MED]  pmap/pfilter parallel execution"
+echo "  [MED]  dosync transactions (ADR-012)"
+echo "  [MED]  async/await (ADR-014)"
 echo ""
-echo "Implementation order:"
-echo "  1 (tailcall) - isolated, easy win"
-echo "  2 (arrays) - useful, moderate complexity"
-echo "  5 (ownership types) - foundation for borrow checking"
-echo "  6 (borrow checker) - the big one"
-echo "  4 (rc) - builds on ownership"
-echo "  3 (closures) - most complex, needs ownership"
+echo "COLLECTIONS (2):"
+echo "  [HIGH] Persistent collections (ADR-018)"
+echo "  [MED]  Conventional collections (ADR-018)"
+echo ""
+echo "SIMD (1):"
+echo "  [MED]  SIMD vectors (ADR-016)"
+echo ""
+echo "NUMERIC (1):"
+echo "  [LOW]  Numeric overflow handling (ADR-017)"
+echo ""
+echo "OTHER (2):"
+echo "  [HIGH] share and clone"
+echo "  [LOW]  Byte arrays and regex"
+echo ""
+echo "lIR ATOMICS (4):"
+echo "  [HIGH] atomic-load/store"
+echo "  [HIGH] atomicrmw (read-modify-write)"
+echo "  [HIGH] cmpxchg (compare-and-swap)"
+echo "  [LOW]  fence (memory barrier)"
+echo ""
+echo "Suggested implementation order:"
+echo "  1. lIR atomics (foundation for atoms)"
+echo "  2. share/clone (RC semantics)"
+echo "  3. Closure color (thread safety)"
+echo "  4. Atoms (swap!, @, etc.)"
+echo "  5. plet verification (uses color)"
+echo "  6. Persistent collections"
+echo "  7. pmap/pfilter (parallel execution)"
+echo "  8. SIMD, dosync, async as needed"

@@ -359,6 +359,15 @@ impl BorrowChecker {
             Expr::RcPtr { value } => {
                 self.check_expr(value);
             }
+
+            // Atomic memory operations - check pointer expression
+            Expr::AtomicLoad { ptr, .. } => {
+                self.check_expr(ptr);
+            }
+            Expr::AtomicStore { value, ptr, .. } => {
+                self.check_expr(value);
+                self.check_expr(ptr);
+            }
         }
     }
 

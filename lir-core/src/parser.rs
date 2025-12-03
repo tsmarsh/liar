@@ -302,6 +302,10 @@ impl<'a> Parser<'a> {
             "rc-count" => self.parse_rc_count(),
             "rc-ptr" => self.parse_rc_ptr(),
 
+            // Atomic memory operations
+            "atomic-load" => self.parse_atomic_load(),
+            "atomic-store" => self.parse_atomic_store(),
+
             // Let bindings
             "let" => self.parse_let(),
 
@@ -953,6 +957,71 @@ impl<'a> Parser<'a> {
         let value = self.parse_expr()?;
         Ok(Expr::RcPtr {
             value: Box::new(value),
+        })
+    }
+
+    /// Parse memory ordering for atomic operations
+    fn parse_ordering(&mut self) -> Result<MemoryOrdering, ParseError> {
+        match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => match s.as_str() {
+                "monotonic" => Ok(MemoryOrdering::Monotonic),
+                "acquire" => Ok(MemoryOrdering::Acquire),
+                "release" => Ok(MemoryOrdering::Release),
+                "acq_rel" => Ok(MemoryOrdering::AcqRel),
+                "seq_cst" => Ok(MemoryOrdering::SeqCst),
+                _ => Err(ParseError::UnknownOperation(format!(
+                    "invalid memory ordering: {}",
+                    s
+                ))),
+            },
+            Some(tok) => Err(ParseError::Expected {
+                expected: "memory ordering".to_string(),
+                found: format!("{}", tok),
+            }),
+            None => Err(ParseError::UnexpectedEof),
+        }
+    }
+
+    /// Parse atomic-load: (atomic-load ordering type ptr)
+    fn parse_atomic_load(&mut self) -> Result<Expr, ParseError> {
+        let ordering = self.parse_ordering()?;
+
+        // Parse the type to load
+        let ty = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse the pointer
+        let ptr = self.parse_expr()?;
+
+        Ok(Expr::AtomicLoad {
+            ordering,
+            ty,
+            ptr: Box::new(ptr),
+        })
+    }
+
+    /// Parse atomic-store: (atomic-store ordering value ptr)
+    fn parse_atomic_store(&mut self) -> Result<Expr, ParseError> {
+        let ordering = self.parse_ordering()?;
+
+        // Parse the value to store
+        let value = self.parse_expr()?;
+
+        // Parse the pointer
+        let ptr = self.parse_expr()?;
+
+        Ok(Expr::AtomicStore {
+            ordering,
+            value: Box::new(value),
+            ptr: Box::new(ptr),
         })
     }
 

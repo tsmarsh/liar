@@ -7,13 +7,14 @@ use inkwell::types::{
     BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, VectorType as LLVMVectorType,
 };
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PhiValue, VectorValue as LLVMVectorValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PhiValue,
+    VectorValue as LLVMVectorValue,
 };
 
-use inkwell::{FloatPredicate, IntPredicate};
+use inkwell::{AtomicOrdering, FloatPredicate, IntPredicate};
 use lir_core::ast::{
     BranchTarget, Expr, ExternDecl, FCmpPred, FloatValue, FunctionDef, GepType, GlobalDef,
-    ICmpPred, ParamType, ReturnType, ScalarType, Type, VectorType,
+    ICmpPred, MemoryOrdering, ParamType, ReturnType, ScalarType, Type, VectorType,
 };
 use lir_core::error::TypeError;
 use std::collections::HashMap;
@@ -64,6 +65,35 @@ impl<'ctx> CodeGen<'ctx> {
             ScalarType::I32 => self.context.i32_type(),
             ScalarType::I64 => self.context.i64_type(),
             _ => panic!("not an integer type: {}", ty),
+        }
+    }
+
+    /// Convert MemoryOrdering to LLVM AtomicOrdering
+    fn atomic_ordering(ordering: &MemoryOrdering) -> AtomicOrdering {
+        match ordering {
+            MemoryOrdering::Monotonic => AtomicOrdering::Monotonic,
+            MemoryOrdering::Acquire => AtomicOrdering::Acquire,
+            MemoryOrdering::Release => AtomicOrdering::Release,
+            MemoryOrdering::AcqRel => AtomicOrdering::AcquireRelease,
+            MemoryOrdering::SeqCst => AtomicOrdering::SequentiallyConsistent,
+        }
+    }
+
+    /// Get required alignment for a value (in bytes)
+    fn value_alignment(val: &BasicValueEnum<'ctx>) -> u32 {
+        match val {
+            BasicValueEnum::IntValue(v) => (v.get_type().get_bit_width() / 8).max(1),
+            BasicValueEnum::FloatValue(_) => {
+                // f32 = 4 bytes, f64 = 8 bytes
+                // inkwell doesn't expose bit width directly for floats, but we can use the type
+                // For now, assume 8 bytes for double, 4 for float
+                8 // Default to 8 for safety
+            }
+            BasicValueEnum::PointerValue(_) => 8, // Assume 64-bit pointers
+            BasicValueEnum::VectorValue(_) => 16, // Vectors typically need 16-byte alignment
+            BasicValueEnum::ScalableVectorValue(_) => 16, // Scalable vectors
+            BasicValueEnum::ArrayValue(_) => 8,
+            BasicValueEnum::StructValue(_) => 8,
         }
     }
 
@@ -808,6 +838,79 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(None)
             }
 
+            // Atomic Load
+            Expr::AtomicLoad { ordering, ty, ptr } => {
+                let ptr_val = self
+                    .compile_expr_with_deferred_phis(ptr, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| {
+                        CodeGenError::CodeGen("atomic load pointer must produce a value".into())
+                    })?
+                    .into_pointer_value();
+
+                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("invalid atomic load type: {:?}", ty))
+                })?;
+
+                let load = self
+                    .builder
+                    .build_load(llvm_ty, ptr_val, "atomic_load")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Set atomic ordering and alignment on the load instruction
+                let inst = load.as_instruction_value().ok_or_else(|| {
+                    CodeGenError::CodeGen("failed to get instruction from load".into())
+                })?;
+                inst.set_atomic_ordering(Self::atomic_ordering(ordering))
+                    .map_err(|e| {
+                        CodeGenError::CodeGen(format!("failed to set atomic ordering: {}", e))
+                    })?;
+                // Atomic operations require proper alignment (at least size of the type)
+                let align = (ty.bit_width() / 8).max(1);
+                inst.set_alignment(align).map_err(|e| {
+                    CodeGenError::CodeGen(format!("failed to set alignment: {}", e))
+                })?;
+
+                Ok(Some(load))
+            }
+
+            // Atomic Store
+            Expr::AtomicStore {
+                ordering,
+                value,
+                ptr,
+            } => {
+                let val = self
+                    .compile_expr_with_deferred_phis(value, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| {
+                        CodeGenError::CodeGen("atomic store value must produce a value".into())
+                    })?;
+                let ptr_val = self
+                    .compile_expr_with_deferred_phis(ptr, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| {
+                        CodeGenError::CodeGen("atomic store pointer must produce a value".into())
+                    })?
+                    .into_pointer_value();
+
+                let store = self
+                    .builder
+                    .build_store(ptr_val, val)
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Set atomic ordering and alignment on the store instruction
+                store
+                    .set_atomic_ordering(Self::atomic_ordering(ordering))
+                    .map_err(|e| {
+                        CodeGenError::CodeGen(format!("failed to set atomic ordering: {}", e))
+                    })?;
+                // Get the value type's bit width for alignment
+                let align = Self::value_alignment(&val);
+                store.set_alignment(align).map_err(|e| {
+                    CodeGenError::CodeGen(format!("failed to set alignment: {}", e))
+                })?;
+
+                Ok(None)
+            }
+
             // Ownership operations
             Expr::AllocOwn { elem_type } => {
                 // Allocate space for the owned value on the stack
@@ -1536,6 +1639,67 @@ impl<'ctx> CodeGen<'ctx> {
                 self.compile_rc_count_ptr(data_ptr)
             }
             Expr::RcPtr { value } => self.compile_expr_recursive(value, locals),
+
+            // Atomic operations with locals context
+            Expr::AtomicLoad { ordering, ty, ptr } => {
+                let ptr_val = self
+                    .compile_expr_recursive(ptr, locals)?
+                    .into_pointer_value();
+
+                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("invalid atomic load type: {:?}", ty))
+                })?;
+
+                let load = self
+                    .builder
+                    .build_load(llvm_ty, ptr_val, "atomic_load")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Set atomic ordering and alignment on the load instruction
+                let inst = load.as_instruction_value().ok_or_else(|| {
+                    CodeGenError::CodeGen("failed to get instruction from load".into())
+                })?;
+                inst.set_atomic_ordering(Self::atomic_ordering(ordering))
+                    .map_err(|e| {
+                        CodeGenError::CodeGen(format!("failed to set atomic ordering: {}", e))
+                    })?;
+                let align = (ty.bit_width() / 8).max(1);
+                inst.set_alignment(align).map_err(|e| {
+                    CodeGenError::CodeGen(format!("failed to set alignment: {}", e))
+                })?;
+
+                Ok(load)
+            }
+            Expr::AtomicStore {
+                ordering,
+                value,
+                ptr,
+            } => {
+                let val = self.compile_expr_recursive(value, locals)?;
+                let ptr_val = self
+                    .compile_expr_recursive(ptr, locals)?
+                    .into_pointer_value();
+
+                let store = self
+                    .builder
+                    .build_store(ptr_val, val)
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Set atomic ordering and alignment on the store instruction
+                store
+                    .set_atomic_ordering(Self::atomic_ordering(ordering))
+                    .map_err(|e| {
+                        CodeGenError::CodeGen(format!("failed to set atomic ordering: {}", e))
+                    })?;
+                let align = Self::value_alignment(&val);
+                store.set_alignment(align).map_err(|e| {
+                    CodeGenError::CodeGen(format!("failed to set alignment: {}", e))
+                })?;
+
+                // Return null pointer as void indicator
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().into())
+            }
 
             // For any other expressions, fall back to compile_expr
             _ => self.compile_expr(expr),
@@ -2308,6 +2472,63 @@ impl<'ctx> CodeGen<'ctx> {
                 self.compile_expr(value)
             }
 
+            // Atomic operations
+            Expr::AtomicLoad { ordering, ty, ptr } => {
+                let ptr_val = self.compile_expr(ptr)?.into_pointer_value();
+
+                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("invalid atomic load type: {:?}", ty))
+                })?;
+
+                let load = self
+                    .builder
+                    .build_load(llvm_ty, ptr_val, "atomic_load")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Set atomic ordering and alignment on the load instruction
+                let inst = load.as_instruction_value().ok_or_else(|| {
+                    CodeGenError::CodeGen("failed to get instruction from load".into())
+                })?;
+                inst.set_atomic_ordering(Self::atomic_ordering(ordering))
+                    .map_err(|e| {
+                        CodeGenError::CodeGen(format!("failed to set atomic ordering: {}", e))
+                    })?;
+                let align = (ty.bit_width() / 8).max(1);
+                inst.set_alignment(align).map_err(|e| {
+                    CodeGenError::CodeGen(format!("failed to set alignment: {}", e))
+                })?;
+
+                Ok(load)
+            }
+            Expr::AtomicStore {
+                ordering,
+                value,
+                ptr,
+            } => {
+                let val = self.compile_expr(value)?;
+                let ptr_val = self.compile_expr(ptr)?.into_pointer_value();
+
+                let store = self
+                    .builder
+                    .build_store(ptr_val, val)
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Set atomic ordering and alignment on the store instruction
+                store
+                    .set_atomic_ordering(Self::atomic_ordering(ordering))
+                    .map_err(|e| {
+                        CodeGenError::CodeGen(format!("failed to set atomic ordering: {}", e))
+                    })?;
+                let align = Self::value_alignment(&val);
+                store.set_alignment(align).map_err(|e| {
+                    CodeGenError::CodeGen(format!("failed to set alignment: {}", e))
+                })?;
+
+                // Return null pointer as void indicator
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().into())
+            }
+
             // Let bindings - use the recursive helper with empty initial locals
             Expr::Let { bindings, body } => {
                 let locals: HashMap<String, BasicValueEnum<'ctx>> = HashMap::new();
@@ -2755,6 +2976,63 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_load(llvm_type, ptr_val, "load")
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?)
+            }
+
+            // Atomic operations with locals support
+            Expr::AtomicLoad { ordering, ty, ptr } => {
+                let ptr_val = self.compile_with_locals(ptr, locals)?.into_pointer_value();
+
+                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("invalid atomic load type: {:?}", ty))
+                })?;
+
+                let load = self
+                    .builder
+                    .build_load(llvm_ty, ptr_val, "atomic_load")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Set atomic ordering and alignment on the load instruction
+                let inst = load.as_instruction_value().ok_or_else(|| {
+                    CodeGenError::CodeGen("failed to get instruction from load".into())
+                })?;
+                inst.set_atomic_ordering(Self::atomic_ordering(ordering))
+                    .map_err(|e| {
+                        CodeGenError::CodeGen(format!("failed to set atomic ordering: {}", e))
+                    })?;
+                let align = (ty.bit_width() / 8).max(1);
+                inst.set_alignment(align).map_err(|e| {
+                    CodeGenError::CodeGen(format!("failed to set alignment: {}", e))
+                })?;
+
+                Ok(load)
+            }
+            Expr::AtomicStore {
+                ordering,
+                value,
+                ptr,
+            } => {
+                let val = self.compile_with_locals(value, locals)?;
+                let ptr_val = self.compile_with_locals(ptr, locals)?.into_pointer_value();
+
+                let store = self
+                    .builder
+                    .build_store(ptr_val, val)
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Set atomic ordering and alignment on the store instruction
+                store
+                    .set_atomic_ordering(Self::atomic_ordering(ordering))
+                    .map_err(|e| {
+                        CodeGenError::CodeGen(format!("failed to set atomic ordering: {}", e))
+                    })?;
+                let align = Self::value_alignment(&val);
+                store.set_alignment(align).map_err(|e| {
+                    CodeGenError::CodeGen(format!("failed to set alignment: {}", e))
+                })?;
+
+                // Return null pointer as void indicator
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().into())
             }
 
             // For simple literals and non-nested expressions, delegate to compile_expr
