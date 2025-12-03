@@ -196,6 +196,38 @@ impl std::fmt::Display for MemoryOrdering {
     }
 }
 
+/// Atomic read-modify-write operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicRMWOp {
+    Xchg, // Exchange (swap)
+    Add,  // Add
+    Sub,  // Subtract
+    And,  // Bitwise AND
+    Or,   // Bitwise OR
+    Xor,  // Bitwise XOR
+    Min,  // Signed minimum
+    Max,  // Signed maximum
+    UMin, // Unsigned minimum
+    UMax, // Unsigned maximum
+}
+
+impl std::fmt::Display for AtomicRMWOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Xchg => write!(f, "xchg"),
+            Self::Add => write!(f, "add"),
+            Self::Sub => write!(f, "sub"),
+            Self::And => write!(f, "and"),
+            Self::Or => write!(f, "or"),
+            Self::Xor => write!(f, "xor"),
+            Self::Min => write!(f, "min"),
+            Self::Max => write!(f, "max"),
+            Self::UMin => write!(f, "umin"),
+            Self::UMax => write!(f, "umax"),
+        }
+    }
+}
+
 /// Float comparison predicates
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FCmpPred {
@@ -513,6 +545,13 @@ pub enum Expr {
         ordering: MemoryOrdering,
         value: Box<Expr>,
         ptr: Box<Expr>,
+    },
+    // (atomicrmw op ordering ptr value) - atomic read-modify-write
+    AtomicRMW {
+        op: AtomicRMWOp,
+        ordering: MemoryOrdering,
+        ptr: Box<Expr>,
+        value: Box<Expr>,
     },
 
     // Let binding for SSA values

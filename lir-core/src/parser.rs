@@ -305,6 +305,7 @@ impl<'a> Parser<'a> {
             // Atomic memory operations
             "atomic-load" => self.parse_atomic_load(),
             "atomic-store" => self.parse_atomic_store(),
+            "atomicrmw" => self.parse_atomicrmw(),
 
             // Let bindings
             "let" => self.parse_let(),
@@ -1023,6 +1024,55 @@ impl<'a> Parser<'a> {
             value: Box::new(value),
             ptr: Box::new(ptr),
         })
+    }
+
+    /// Parse atomicrmw: (atomicrmw op ordering ptr value)
+    fn parse_atomicrmw(&mut self) -> Result<Expr, ParseError> {
+        // Parse the operation
+        let op = self.parse_atomicrmw_op()?;
+
+        // Parse the ordering
+        let ordering = self.parse_ordering()?;
+
+        // Parse the pointer
+        let ptr = self.parse_expr()?;
+
+        // Parse the value
+        let value = self.parse_expr()?;
+
+        Ok(Expr::AtomicRMW {
+            op,
+            ordering,
+            ptr: Box::new(ptr),
+            value: Box::new(value),
+        })
+    }
+
+    /// Parse atomic read-modify-write operation
+    fn parse_atomicrmw_op(&mut self) -> Result<AtomicRMWOp, ParseError> {
+        match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => match s.as_str() {
+                "xchg" => Ok(AtomicRMWOp::Xchg),
+                "add" => Ok(AtomicRMWOp::Add),
+                "sub" => Ok(AtomicRMWOp::Sub),
+                "and" => Ok(AtomicRMWOp::And),
+                "or" => Ok(AtomicRMWOp::Or),
+                "xor" => Ok(AtomicRMWOp::Xor),
+                "min" => Ok(AtomicRMWOp::Min),
+                "max" => Ok(AtomicRMWOp::Max),
+                "umin" => Ok(AtomicRMWOp::UMin),
+                "umax" => Ok(AtomicRMWOp::UMax),
+                _ => Err(ParseError::UnknownOperation(format!(
+                    "invalid atomicrmw operation: {}",
+                    s
+                ))),
+            },
+            Some(tok) => Err(ParseError::Expected {
+                expected: "atomicrmw operation".to_string(),
+                found: format!("{}", tok),
+            }),
+            None => Err(ParseError::UnexpectedEof),
+        }
     }
 
     /// Parse let: (let ((name1 expr1) (name2 expr2) ...) body...)

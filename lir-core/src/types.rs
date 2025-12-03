@@ -741,6 +741,16 @@ impl TypeChecker {
                 // Store returns void
                 Ok(Type::Scalar(ScalarType::Void))
             }
+            Expr::AtomicRMW { ptr, value, .. } => {
+                // Pointer must be a pointer type
+                let ptr_ty = self.check(ptr)?;
+                if !ptr_ty.is_pointer() {
+                    return Err(TypeError::LoadRequiresPointer);
+                }
+                // Check the value type and return it (atomicrmw returns the old value)
+                let val_ty = self.check(value)?;
+                Ok(val_ty)
+            }
         }
     }
 }

@@ -368,6 +368,10 @@ impl BorrowChecker {
                 self.check_expr(value);
                 self.check_expr(ptr);
             }
+            Expr::AtomicRMW { ptr, value, .. } => {
+                self.check_expr(ptr);
+                self.check_expr(value);
+            }
         }
     }
 

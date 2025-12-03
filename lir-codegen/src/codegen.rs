@@ -11,10 +11,10 @@ use inkwell::values::{
     VectorValue as LLVMVectorValue,
 };
 
-use inkwell::{AtomicOrdering, FloatPredicate, IntPredicate};
+use inkwell::{AtomicOrdering, AtomicRMWBinOp, FloatPredicate, IntPredicate};
 use lir_core::ast::{
-    BranchTarget, Expr, ExternDecl, FCmpPred, FloatValue, FunctionDef, GepType, GlobalDef,
-    ICmpPred, MemoryOrdering, ParamType, ReturnType, ScalarType, Type, VectorType,
+    AtomicRMWOp, BranchTarget, Expr, ExternDecl, FCmpPred, FloatValue, FunctionDef, GepType,
+    GlobalDef, ICmpPred, MemoryOrdering, ParamType, ReturnType, ScalarType, Type, VectorType,
 };
 use lir_core::error::TypeError;
 use std::collections::HashMap;
@@ -76,6 +76,22 @@ impl<'ctx> CodeGen<'ctx> {
             MemoryOrdering::Release => AtomicOrdering::Release,
             MemoryOrdering::AcqRel => AtomicOrdering::AcquireRelease,
             MemoryOrdering::SeqCst => AtomicOrdering::SequentiallyConsistent,
+        }
+    }
+
+    /// Convert AtomicRMWOp to LLVM AtomicRMWBinOp
+    fn atomic_rmw_op(op: &AtomicRMWOp) -> AtomicRMWBinOp {
+        match op {
+            AtomicRMWOp::Xchg => AtomicRMWBinOp::Xchg,
+            AtomicRMWOp::Add => AtomicRMWBinOp::Add,
+            AtomicRMWOp::Sub => AtomicRMWBinOp::Sub,
+            AtomicRMWOp::And => AtomicRMWBinOp::And,
+            AtomicRMWOp::Or => AtomicRMWBinOp::Or,
+            AtomicRMWOp::Xor => AtomicRMWBinOp::Xor,
+            AtomicRMWOp::Min => AtomicRMWBinOp::Min,
+            AtomicRMWOp::Max => AtomicRMWBinOp::Max,
+            AtomicRMWOp::UMin => AtomicRMWBinOp::UMin,
+            AtomicRMWOp::UMax => AtomicRMWBinOp::UMax,
         }
     }
 
@@ -911,6 +927,39 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(None)
             }
 
+            // Atomic Read-Modify-Write
+            Expr::AtomicRMW {
+                op,
+                ordering,
+                ptr,
+                value,
+            } => {
+                let ptr_val = self
+                    .compile_expr_with_deferred_phis(ptr, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| {
+                        CodeGenError::CodeGen("atomicrmw pointer must produce a value".into())
+                    })?
+                    .into_pointer_value();
+                let val = self
+                    .compile_expr_with_deferred_phis(value, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| {
+                        CodeGenError::CodeGen("atomicrmw value must produce a value".into())
+                    })?
+                    .into_int_value();
+
+                let result = self
+                    .builder
+                    .build_atomicrmw(
+                        Self::atomic_rmw_op(op),
+                        ptr_val,
+                        val,
+                        Self::atomic_ordering(ordering),
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(Some(result.into()))
+            }
+
             // Ownership operations
             Expr::AllocOwn { elem_type } => {
                 // Allocate space for the owned value on the stack
@@ -1699,6 +1748,29 @@ impl<'ctx> CodeGen<'ctx> {
                 // Return null pointer as void indicator
                 let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
                 Ok(ptr_type.const_null().into())
+            }
+            Expr::AtomicRMW {
+                op,
+                ordering,
+                ptr,
+                value,
+            } => {
+                let ptr_val = self
+                    .compile_expr_recursive(ptr, locals)?
+                    .into_pointer_value();
+                let val = self.compile_expr_recursive(value, locals)?.into_int_value();
+
+                let result = self
+                    .builder
+                    .build_atomicrmw(
+                        Self::atomic_rmw_op(op),
+                        ptr_val,
+                        val,
+                        Self::atomic_ordering(ordering),
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(result.into())
             }
 
             // For any other expressions, fall back to compile_expr
@@ -2528,6 +2600,27 @@ impl<'ctx> CodeGen<'ctx> {
                 let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
                 Ok(ptr_type.const_null().into())
             }
+            Expr::AtomicRMW {
+                op,
+                ordering,
+                ptr,
+                value,
+            } => {
+                let ptr_val = self.compile_expr(ptr)?.into_pointer_value();
+                let val = self.compile_expr(value)?.into_int_value();
+
+                let result = self
+                    .builder
+                    .build_atomicrmw(
+                        Self::atomic_rmw_op(op),
+                        ptr_val,
+                        val,
+                        Self::atomic_ordering(ordering),
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(result.into())
+            }
 
             // Let bindings - use the recursive helper with empty initial locals
             Expr::Let { bindings, body } => {
@@ -3033,6 +3126,27 @@ impl<'ctx> CodeGen<'ctx> {
                 // Return null pointer as void indicator
                 let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
                 Ok(ptr_type.const_null().into())
+            }
+            Expr::AtomicRMW {
+                op,
+                ordering,
+                ptr,
+                value,
+            } => {
+                let ptr_val = self.compile_with_locals(ptr, locals)?.into_pointer_value();
+                let val = self.compile_with_locals(value, locals)?.into_int_value();
+
+                let result = self
+                    .builder
+                    .build_atomicrmw(
+                        Self::atomic_rmw_op(op),
+                        ptr_val,
+                        val,
+                        Self::atomic_ordering(ordering),
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(result.into())
             }
 
             // For simple literals and non-nested expressions, delegate to compile_expr
