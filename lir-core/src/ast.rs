@@ -399,6 +399,42 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    // Tail call (guaranteed tail call optimization)
+    TailCall {
+        name: String,
+        args: Vec<Expr>,
+    },
+
+    // Array operations (bounds-checked)
+    // (array-alloc type size) - allocate array on stack
+    ArrayAlloc {
+        elem_type: ScalarType,
+        size: u32,
+    },
+    // (array-get type size arr idx) - bounds-checked read
+    ArrayGet {
+        elem_type: ScalarType,
+        size: u32,
+        array: Box<Expr>,
+        index: Box<Expr>,
+    },
+    // (array-set type size arr idx val) - bounds-checked write
+    ArraySet {
+        elem_type: ScalarType,
+        size: u32,
+        array: Box<Expr>,
+        index: Box<Expr>,
+        value: Box<Expr>,
+    },
+    // (array-len size) - returns compile-time constant size
+    ArrayLen {
+        size: u32,
+    },
+    // (array-ptr arr) - get raw pointer (for FFI)
+    ArrayPtr {
+        array: Box<Expr>,
+    },
+
     // Let binding for SSA values
     Let {
         bindings: Vec<(String, Box<Expr>)>, // (name, value) pairs

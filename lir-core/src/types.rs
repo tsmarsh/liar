@@ -473,6 +473,81 @@ impl TypeChecker {
                 Ok(Type::Scalar(ScalarType::I32))
             }
 
+            Expr::TailCall { args, .. } => {
+                // Type check all arguments
+                for arg in args {
+                    self.check(arg)?;
+                }
+                // Tail calls return whatever the called function returns
+                // Without function context, assume i32
+                Ok(Type::Scalar(ScalarType::I32))
+            }
+
+            // Array operations
+            Expr::ArrayAlloc { .. } => {
+                // ArrayAlloc returns a pointer to the array
+                Ok(Type::Ptr)
+            }
+            Expr::ArrayGet {
+                array,
+                index,
+                elem_type,
+                ..
+            } => {
+                // Check array is a pointer
+                let arr_ty = self.check(array)?;
+                if !arr_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Check index is an integer
+                let idx_ty = self.check(index)?;
+                if !idx_ty.is_integer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Return the element type
+                Ok(Type::Scalar(elem_type.clone()))
+            }
+            Expr::ArraySet {
+                array,
+                index,
+                value,
+                elem_type,
+                ..
+            } => {
+                // Check array is a pointer
+                let arr_ty = self.check(array)?;
+                if !arr_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Check index is an integer
+                let idx_ty = self.check(index)?;
+                if !idx_ty.is_integer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Check value matches element type
+                let val_ty = self.check(value)?;
+                let expected_ty = Type::Scalar(elem_type.clone());
+                if val_ty != expected_ty {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Array set returns void (nothing useful)
+                Ok(Type::Scalar(ScalarType::Void))
+            }
+            Expr::ArrayLen { .. } => {
+                // array-len just returns a compile-time constant size
+                // Length returns i64
+                Ok(Type::Scalar(ScalarType::I64))
+            }
+            Expr::ArrayPtr { array } => {
+                // Check array is a pointer
+                let arr_ty = self.check(array)?;
+                if !arr_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Returns a pointer
+                Ok(Type::Ptr)
+            }
+
             // Struct literal
             Expr::StructLit(fields) => {
                 // Check all field types - each field is a valid expression

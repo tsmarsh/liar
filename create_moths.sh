@@ -1,932 +1,784 @@
 #!/bin/bash
 
 # =============================================================================
-# Moths for liar compiler
+# Moths for lIR Safety Features (ADR-021)
 # =============================================================================
 
-moth new "liar: compiler crate structure" -s crit --no-edit --stdin << 'EOF'
+# -----------------------------------------------------------------------------
+# Feature 1: Tail Calls
+# -----------------------------------------------------------------------------
+
+moth new "lIR: tailcall instruction" -s high --no-edit --stdin << 'EOF'
 ## Summary
-Create the liar compiler crate that parses liar source and emits lIR.
+Add guaranteed tail call instruction to lIR.
 
-## Architecture
-```
-liar/
-  Cargo.toml
-  src/
-    lib.rs           # Public API
-    lexer.rs         # Tokenization
-    parser.rs        # S-expr parsing → AST
-    ast.rs           # liar AST types
-    resolve.rs       # Name resolution
-    types.rs         # Type representation
-    infer.rs         # Type inference
-    ownership.rs     # Borrow checking
-    closures.rs      # Closure analysis (capture, color)
-    codegen.rs       # AST → lIR emission
-    error.rs         # Compiler errors with spans
-    span.rs          # Source locations
+## Syntax
+```lisp
+(tailcall @function args...)
 ```
 
-## Cargo.toml
-```toml
-[package]
-name = "liar"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-name = "liar"
-path = "src/lib.rs"
-
-[[bin]]
-name = "liarc"
-path = "src/bin/main.rs"
-
-[dependencies]
-lir-core = { path = "../lir-core" }
-```
-
-## Compiler pipeline
-```
-Source → Lexer → Tokens
-              ↓
-         Parser → AST
-              ↓
-         Resolve → AST with resolved names
-              ↓
-         Infer → Typed AST
-              ↓
-         Ownership → Verified AST (borrow-checked)
-              ↓
-         Closures → AST with closure info
-              ↓
-         Codegen → lIR items
-```
-
-## Public API
+## AST Addition
 ```rust
-// src/lib.rs
-pub fn compile(source: &str) -> Result<Vec<lir_core::Item>, Error>;
-pub fn compile_to_string(source: &str) -> Result<String, Error>;
-```
-
-## Acceptance criteria
-- [ ] Crate compiles
-- [ ] Pipeline skeleton in place
-- [ ] Can parse `(+ 1 2)` and emit lIR
-EOF
-
-# =============================================================================
-
-moth new "liar: lexer" -s high --no-edit --stdin << 'EOF'
-## Summary
-Tokenize liar source into tokens with spans for error reporting.
-
-## Token types
-```rust
-pub enum Token {
-    // Delimiters
-    LParen,           // (
-    RParen,           // )
-    LBracket,         // [
-    RBracket,         // ]
-    LBrace,           // {
-    RBrace,           // }
-    
-    // Literals
-    Int(i64),
-    Float(f64),
-    String(String),
-    Char(char),
-    
-    // Identifiers and keywords
-    Symbol(String),   // foo, bar, +, -, etc.
-    Keyword(String),  // :foo
-    
-    // Special
-    Quote,            // '
-    Quasiquote,       // `
-    Unquote,          // ,
-    UnquoteSplice,    // ,@
-    Ampersand,        // &
-    AmpersandMut,     // &mut
-    Caret,            // ^
-    
-    // SIMD vector delimiters
-    DoubleLAngle,     // <<
-    DoubleRAngle,     // >>
-}
-```
-
-## Span tracking
-```rust
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-    pub file: Option<String>,
-}
-
-pub struct Spanned<T> {
-    pub value: T,
-    pub span: Span,
-}
-
-pub type SpannedToken = Spanned<Token>;
-```
-
-## Lexer API
-```rust
-pub struct Lexer<'a> {
-    source: &'a str,
-    pos: usize,
-}
-
-impl<'a> Lexer<'a> {
-    pub fn new(source: &'a str) -> Self;
-    pub fn next_token(&mut self) -> Result<Option<SpannedToken>, LexError>;
-    pub fn tokenize_all(&mut self) -> Result<Vec<SpannedToken>, LexError>;
-}
-```
-
-## Special cases
-- Comments: `;` to end of line
-- Nested comments: `#| ... |#` (optional)
-- String escapes: `\n`, `\t`, `\\`, `\"`, `\xHH`
-- Character literals: `\a`, `\newline`, `\space`
-- Numeric literals: `42`, `-42`, `3.14`, `0xFF`, `0b1010`
-
-## Acceptance criteria
-- [ ] All token types recognized
-- [ ] Spans are accurate
-- [ ] Comments skipped
-- [ ] String escapes handled
-- [ ] Hex/binary literals work
-EOF
-
-# =============================================================================
-
-moth new "liar: parser and AST" -s high --no-edit --stdin << 'EOF'
-## Summary
-Parse tokens into liar AST. S-expression based with special forms.
-
-## AST types
-```rust
-pub enum Expr {
-    // Literals
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    String(String),
-    Char(char),
-    Symbol(String),
-    Keyword(String),
-    Nil,
-    
-    // Collections
-    List(Vec<Expr>),            // '(1 2 3)
-    Vector(Vec<Expr>),          // [1 2 3]
-    Map(Vec<(Expr, Expr)>),     // {:a 1 :b 2}
-    SimdVector(Vec<Expr>),      // <<1 2 3 4>>
-    
-    // References
-    Borrow(Box<Expr>),          // &x
-    BorrowMut(Box<Expr>),       // &mut x
-    Move(Box<Expr>),            // ^x
-    
-    // Special forms
-    If {
-        cond: Box<Expr>,
-        then_: Box<Expr>,
-        else_: Option<Box<Expr>>,
-    },
-    Let {
-        bindings: Vec<(Pattern, Expr)>,
-        body: Vec<Expr>,
-    },
-    Fn {
-        params: Vec<Param>,
-        body: Vec<Expr>,
-    },
-    Do(Vec<Expr>),
-    Quote(Box<Expr>),
-    Quasiquote(Box<Expr>),
-    Unquote(Box<Expr>),
-    UnquoteSplice(Box<Expr>),
-    
-    // Application
-    Call {
-        func: Box<Expr>,
+// In ast.rs
+pub enum Instruction {
+    // ... existing ...
+    TailCall {
+        func: String,
         args: Vec<Expr>,
     },
-    
-    // Pattern matching
-    Match {
-        expr: Box<Expr>,
-        arms: Vec<(Pattern, Expr)>,
-    },
-    
-    // Loops
-    Loop {
-        bindings: Vec<(String, Expr)>,
-        body: Vec<Expr>,
-    },
-    Recur(Vec<Expr>),
-}
-
-pub enum Pattern {
-    Wildcard,                   // _
-    Binding(String),            // x
-    BorrowBinding(String),      // &x
-    Literal(Expr),              // 42, "foo"
-    Constructor {               // (Some x), (Point x y)
-        name: String,
-        fields: Vec<Pattern>,
-    },
-    Vector(Vec<Pattern>),       // [a b c]
-    VectorRest {                // [a b . rest]
-        init: Vec<Pattern>,
-        rest: String,
-    },
-}
-
-pub struct Param {
-    pub name: String,
-    pub mode: ParamMode,
-    pub ty: Option<Type>,       // optional type annotation
-}
-
-pub enum ParamMode {
-    Move,       // default
-    Borrow,     // &
-    BorrowMut,  // &mut
 }
 ```
 
-## Top-level forms
+## Parser Addition
 ```rust
-pub enum TopLevel {
-    Define {
-        name: String,
-        params: Vec<Param>,
-        body: Vec<Expr>,
-    },
-    DefStruct {
-        name: String,
-        fields: Vec<(String, Option<Type>)>,
-    },
-    DefEnum {
-        name: String,
-        variants: Vec<Variant>,
-    },
-    DefMacro {
-        name: String,
-        params: Vec<String>,
-        body: Expr,
-    },
-    Expr(Expr),
+// In parser.rs, parse_instruction()
+"tailcall" => {
+    let func = self.parse_func_ref()?;
+    let args = self.parse_args()?;
+    Ok(Instruction::TailCall { func, args })
 }
 ```
 
-## Parser API
+## Codegen
 ```rust
-pub struct Parser<'a> {
-    tokens: &'a [SpannedToken],
-    pos: usize,
-}
-
-impl<'a> Parser<'a> {
-    pub fn new(tokens: &'a [SpannedToken]) -> Self;
-    pub fn parse_expr(&mut self) -> Result<Expr, ParseError>;
-    pub fn parse_top_level(&mut self) -> Result<TopLevel, ParseError>;
-    pub fn parse_program(&mut self) -> Result<Vec<TopLevel>, ParseError>;
+// In codegen.rs
+Instruction::TailCall { func, args } => {
+    let fn_val = self.get_function(&func)?;
+    let arg_vals: Vec<_> = args.iter()
+        .map(|a| self.compile_expr(a))
+        .collect::<Result<_>>()?;
+    
+    let call = self.builder.build_call(fn_val, &arg_vals, "tailcall");
+    call.set_tail_call(true);
+    self.builder.build_return(Some(&call.try_as_basic_value().left().unwrap()));
 }
 ```
 
-## Acceptance criteria
-- [ ] All expression types parsed
-- [ ] Special forms recognized (if, let, fn, do, match, loop)
-- [ ] Patterns parsed
-- [ ] Top-level forms parsed (define, defstruct, defenum, defmacro)
-- [ ] Error messages include spans
+## Verifier Checks
+1. Must be in tail position (last instruction before implicit ret)
+2. Return type must match function return type
+3. No owned values pending drop after tailcall
+
+## Test Cases
+```gherkin
+Scenario: Simple tail call
+  Given the expression (define (loop void) () (block entry (tailcall @loop)))
+  Then compilation succeeds
+
+Scenario: Tail recursive factorial
+  Given the expression (define (fact-tail i64) ((i64 n) (i64 acc)) (block entry (br (icmp eq n (i64 0)) done recurse)) (block done (ret acc)) (block recurse (tailcall @fact-tail (sub n (i64 1)) (mul n acc))))
+  When I call fact-tail with (i64 5) (i64 1)
+  Then the result is (i64 120)
+
+Scenario: Mutual tail recursion
+  Given the expression (define (even? i1) ((i64 n)) (block entry (br (icmp eq n (i64 0)) yes no)) (block yes (ret (i1 1))) (block no (tailcall @odd? (sub n (i64 1)))))
+  And the expression (define (odd? i1) ((i64 n)) (block entry (br (icmp eq n (i64 0)) no yes)) (block no (ret (i1 0))) (block yes (tailcall @even? (sub n (i64 1)))))
+  # Test via wrapper returning i64
+```
+
+## Acceptance Criteria
+- [ ] `tailcall` parses
+- [ ] Codegen emits LLVM tail call
+- [ ] Tail position verified
+- [ ] Return type verified
+- [ ] Feature file passes
 EOF
 
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Feature 2: Bounds-Checked Arrays
+# -----------------------------------------------------------------------------
 
-moth new "liar: name resolution" -s high --no-edit --stdin << 'EOF'
+moth new "lIR: bounds-checked arrays" -s high --no-edit --stdin << 'EOF'
 ## Summary
-Resolve all names to their definitions. Detect undefined variables,
-duplicate definitions, and build scope information.
+Add fixed-size arrays with bounds-checked access to lIR.
 
-## Scope tracking
-```rust
-pub struct Scope {
-    bindings: HashMap<String, BindingInfo>,
-    parent: Option<Box<Scope>>,
-}
-
-pub struct BindingInfo {
-    pub kind: BindingKind,
-    pub span: Span,
-    pub id: BindingId,  // Unique ID for later passes
-}
-
-pub enum BindingKind {
-    Local,
-    Parameter,
-    Function,
-    Struct,
-    Enum,
-    EnumVariant,
-    Macro,
-}
+## Types
+```lisp
+(array T N)         ; Fixed-size array of N elements of type T
 ```
 
-## Resolution pass
-```rust
-pub struct Resolver {
-    scopes: Vec<Scope>,
-    current_function: Option<String>,
-    errors: Vec<ResolveError>,
-}
-
-impl Resolver {
-    pub fn resolve(&mut self, program: &[TopLevel]) -> Result<ResolvedProgram, Vec<ResolveError>>;
-}
+## Operations
+```lisp
+(array-alloc T N)           ; Stack allocate array
+(array-get arr idx)         ; Bounds-checked read, panics if OOB
+(array-set arr idx val)     ; Bounds-checked write, panics if OOB
+(array-len arr)             ; Get length (compile-time constant)
+(array-ptr arr)             ; Get raw pointer (for FFI)
 ```
 
-## What gets resolved
-- Variable references → binding site
-- Function calls → function definition
-- Struct constructors → struct definition
-- Enum variants → enum definition
-- Forward references (mutual recursion)
-
-## Errors detected
-- Undefined variable
-- Undefined function
-- Duplicate definition in same scope
-- Use of variable in own initializer (except recursion)
-
-## Acceptance criteria
-- [ ] All names resolved to binding sites
-- [ ] Scopes correctly nested
-- [ ] Forward references work for functions
-- [ ] Undefined variable detected
-- [ ] Duplicate definition detected
-EOF
-
-# =============================================================================
-
-moth new "liar: type system and inference" -s high --no-edit --stdin << 'EOF'
-## Summary
-Implement type representation and Hindley-Milner style inference.
-No explicit type annotations required (but allowed).
-
-## Type representation
+## AST Additions
 ```rust
 pub enum Type {
-    // Primitives
-    Int(IntSize),       // i8, i16, i32, i64
-    Float(FloatSize),   // f32, f64
-    Bool,
-    Char,
-    String,
-    Unit,               // ()
+    // ... existing ...
+    Array { elem: Box<Type>, size: usize },
+}
+
+pub enum Instruction {
+    // ... existing ...
+    ArrayAlloc { elem_type: ScalarType, size: usize },
+    ArrayGet { array: Box<Expr>, index: Box<Expr> },
+    ArraySet { array: Box<Expr>, index: Box<Expr>, value: Box<Expr> },
+    ArrayLen { array: Box<Expr> },
+    ArrayPtr { array: Box<Expr> },
+}
+```
+
+## Codegen
+```rust
+// array-alloc: alloca [N x T]
+Instruction::ArrayAlloc { elem_type, size } => {
+    let arr_type = elem_type.llvm_type(ctx).array_type(size as u32);
+    self.builder.build_alloca(arr_type, "arr")
+}
+
+// array-get: bounds check then GEP + load
+Instruction::ArrayGet { array, index } => {
+    let arr = self.compile_expr(array)?;
+    let idx = self.compile_expr(index)?;
+    let len = /* get from type */;
     
-    // References
-    Ref(Box<Type>),     // &T
-    RefMut(Box<Type>),  // &mut T
+    // Bounds check
+    let in_bounds = self.builder.build_int_compare(
+        IntPredicate::ULT, idx, len.into(), "bounds");
+    let panic_block = self.append_block("panic");
+    let ok_block = self.append_block("ok");
+    self.builder.build_conditional_branch(in_bounds, ok_block, panic_block);
     
-    // Collections
-    List(Box<Type>),
-    Vector(Box<Type>),
-    Map(Box<Type>, Box<Type>),
-    SimdVector(Box<Type>, usize),  // <T x N>
+    // Panic path
+    self.builder.position_at_end(panic_block);
+    self.builder.build_call(self.get_panic_fn(), &[], "");
+    self.builder.build_unreachable();
     
-    // Functions
-    Fn {
-        params: Vec<Type>,
-        ret: Box<Type>,
+    // OK path
+    self.builder.position_at_end(ok_block);
+    let ptr = self.builder.build_gep(arr, &[zero, idx], "elem_ptr");
+    self.builder.build_load(ptr, "elem")
+}
+```
+
+## Bounds Check Elimination
+When index is a constant and provably in-bounds, skip runtime check:
+```rust
+if let Expr::Literal(Literal::Int(i)) = index {
+    if (i as usize) < size {
+        // Skip bounds check, direct GEP
+    }
+}
+```
+
+## Test Cases
+```gherkin
+Scenario: Array allocation and access
+  Given the expression (define (test-array i64) () (block entry (let ((arr (array-alloc i64 10))) (array-set arr (i64 5) (i64 42)) (ret (array-get arr (i64 5))))))
+  When I call test-array
+  Then the result is (i64 42)
+
+Scenario: Array length
+  Given the expression (define (test-len i64) () (block entry (let ((arr (array-alloc i64 10))) (ret (array-len arr)))))
+  When I call test-len
+  Then the result is (i64 10)
+
+Scenario: Static bounds elimination
+  Given the expression (define (static-access i64) () (block entry (let ((arr (array-alloc i64 10))) (array-set arr (i64 0) (i64 99)) (ret (array-get arr (i64 0))))))
+  When I call static-access
+  Then the result is (i64 99)
+  # Verify no bounds check in LLVM IR (manual inspection)
+```
+
+## Acceptance Criteria
+- [ ] Array type parses
+- [ ] array-alloc works
+- [ ] array-get with bounds check works
+- [ ] array-set with bounds check works
+- [ ] array-len returns size
+- [ ] Static bounds elimination for constant indices
+- [ ] Out-of-bounds access panics
+EOF
+
+# -----------------------------------------------------------------------------
+# Feature 3: Native Closures
+# -----------------------------------------------------------------------------
+
+moth new "lIR: native closures" -s crit --no-edit --stdin << 'EOF'
+## Summary
+Add native closure support to lIR, replacing the struct+function encoding.
+
+## Syntax
+```lisp
+; Closure definition
+(closure NAME ((CAPTURE-MODE TYPE NAME) ...)
+  (fn RETURN-TYPE ((TYPE PARAM) ...)
+    BODY))
+
+; Closure type declaration
+(closuretype NAME RETURN-TYPE (PARAM-TYPES...))
+
+; Closure call
+(closure-call CLOSURE ARGS...)
+```
+
+## Capture Modes
+```lisp
+own    ; Move into closure, closure owns value
+ref    ; Borrow, closure cannot escape scope  
+rc     ; Reference-counted, shared ownership
+```
+
+## AST Additions
+```rust
+pub enum Item {
+    // ... existing ...
+    Closure {
+        name: String,
+        captures: Vec<Capture>,
+        params: Vec<Param>,
+        return_type: ReturnType,
+        body: Vec<Block>,
     },
-    
-    // User-defined
-    Struct(String),
-    Enum(String),
-    
-    // Inference
-    Var(TypeVarId),     // Unresolved type variable
-    
-    // Special
-    Never,              // ! (diverges)
-    Error,              // Type error placeholder
-}
-```
-
-## Inference algorithm
-```rust
-pub struct Inferencer {
-    substitutions: HashMap<TypeVarId, Type>,
-    constraints: Vec<Constraint>,
-    next_var: TypeVarId,
-}
-
-pub enum Constraint {
-    Equal(Type, Type),              // T1 = T2
-    Subtype(Type, Type),            // T1 <: T2 (for numeric promotion)
-}
-
-impl Inferencer {
-    pub fn fresh_var(&mut self) -> Type;
-    pub fn unify(&mut self, t1: &Type, t2: &Type) -> Result<(), TypeError>;
-    pub fn infer_expr(&mut self, expr: &Expr, env: &TypeEnv) -> Result<Type, TypeError>;
-    pub fn solve(&mut self) -> Result<Substitution, TypeError>;
-}
-```
-
-## Type rules
-- Literals: `42` → `i64`, `3.14` → `f64`
-- Arithmetic: operands must match, result is same type
-- Comparison: operands must match, result is `Bool`
-- If: branches must have same type
-- Let: binding type inferred from initializer
-- Fn: param types from usage, return type from body
-- Call: function type must match arg types
-
-## Numeric promotion (ADR-017)
-- Integer literals polymorphic until constrained
-- Explicit type wins: `(i32 42)` is `i32`
-- Mixed operations: error (no implicit promotion)
-- Explicit promotion: `(as i64 x)`
-
-## Acceptance criteria
-- [ ] All types representable
-- [ ] Literal types inferred
-- [ ] Arithmetic types unified
-- [ ] Function types inferred from usage
-- [ ] Unification algorithm works
-- [ ] Good error messages for type mismatches
-EOF
-
-# =============================================================================
-
-moth new "liar: ownership and borrow checking" -s crit --no-edit --stdin << 'EOF'
-## Summary
-Implement the borrow checker per ADRs 001-007. Track ownership state,
-detect use-after-move, verify borrow rules.
-
-## Ownership states
-```rust
-pub enum OwnershipState {
-    Owned,              // Value is owned here
-    Moved,              // Value has been moved away
-    Borrowed(BorrowId), // Immutably borrowed
-    BorrowedMut(BorrowId), // Mutably borrowed
-    Shared,             // Reference counted (no move tracking)
-}
-```
-
-## Borrow tracking
-```rust
-pub struct BorrowChecker {
-    bindings: HashMap<BindingId, OwnershipState>,
-    active_borrows: HashMap<BorrowId, BorrowInfo>,
-    errors: Vec<BorrowError>,
-}
-
-pub struct BorrowInfo {
-    pub kind: BorrowKind,
-    pub borrowed_from: BindingId,
-    pub span: Span,
-    pub scope_end: ScopeId,
-}
-```
-
-## Rules to enforce
-
-### ADR-001: Immutability by default
-- Values are immutable unless explicitly mutated via `&mut`
-
-### ADR-002: Pass by reference  
-- Function args are references under the hood (optimization)
-- But semantically, value types move
-
-### ADR-003: Mutable reference sigil
-- `&x` = shared borrow
-- `&mut x` = exclusive mutable borrow
-
-### ADR-004: Lexical ownership
-- Every value has one owner
-- Owner controls lifetime
-- When owner goes out of scope, value is dropped
-
-### ADR-005: Closure captures
-- Closures capture by move (default)
-- Or by borrow if `&x` used in closure
-- Closure cannot escape if it borrows
-
-### ADR-006: No redefinition
-- Cannot shadow in same scope
-- Inner scope shadowing OK
-
-### ADR-007: Aliasing allowed
-- Multiple shared borrows OK
-- Mutable borrow is exclusive
-- No mutable + shared at same time
-
-## Checker algorithm
-```rust
-impl BorrowChecker {
-    pub fn check_function(&mut self, func: &Function) -> Result<(), Vec<BorrowError>>;
-    
-    fn check_expr(&mut self, expr: &Expr) -> Result<(), BorrowError>;
-    fn check_move(&mut self, binding: BindingId, span: Span) -> Result<(), BorrowError>;
-    fn check_borrow(&mut self, binding: BindingId, kind: BorrowKind, span: Span) -> Result<(), BorrowError>;
-    fn end_borrow(&mut self, borrow: BorrowId);
-    fn end_scope(&mut self, scope: ScopeId);
-}
-```
-
-## Errors detected
-- Use after move
-- Move of borrowed value
-- Mutable borrow while borrowed
-- Double mutable borrow
-- Borrow escapes scope
-- Return reference to local
-
-## Acceptance criteria
-- [ ] Use-after-move detected
-- [ ] Borrow rules enforced
-- [ ] Mutable exclusivity enforced
-- [ ] Borrow escape detected
-- [ ] Drop insertion at scope end
-- [ ] Good error messages with spans
-EOF
-
-# =============================================================================
-
-moth new "liar: closure analysis" -s high --no-edit --stdin << 'EOF'
-## Summary
-Analyze closures for captures and color (ADR-010). Determine what
-each closure captures and whether it's Send/Sync safe.
-
-## Capture analysis
-```rust
-pub struct CaptureInfo {
-    pub captured: Vec<Capture>,
-    pub color: ClosureColor,
+    ClosureType {
+        name: String,
+        return_type: ReturnType,
+        param_types: Vec<ParamType>,
+    },
 }
 
 pub struct Capture {
-    pub binding: BindingId,
     pub mode: CaptureMode,
+    pub ty: ParamType,
+    pub name: String,
 }
 
 pub enum CaptureMode {
-    Move,       // Closure owns the value
-    Borrow,     // Closure borrows (cannot escape)
-    Clone,      // Closure owns a clone
+    Own,
+    Ref,
+    Rc,
+}
+
+pub enum Instruction {
+    // ... existing ...
+    ClosureCall {
+        closure: Box<Expr>,
+        args: Vec<Expr>,
+    },
 }
 ```
 
-## Closure color (ADR-010)
+## Codegen Strategy
+Closures compile to:
+1. Environment struct (captures)
+2. Function taking (env_ptr, args...)
+3. Closure object = { env_ptr, fn_ptr }
+
 ```rust
-pub enum ClosureColor {
-    Pure,       // No captures, can go anywhere
-    Local,      // Captures borrows, cannot escape scope
-    Sync,       // Captures only Send+Sync values, thread-safe
-    NonSync,    // Captures non-Send values, single-threaded only
+// closure add-n ((own i64 n)) (fn i64 ((i64 x)) ...)
+// becomes:
+
+// 1. Env struct
+%closure_add_n_env = type { i64 }
+
+// 2. Function
+define i64 @closure_add_n_fn(ptr %env, i64 %x) {
+    %n_ptr = getelementptr %closure_add_n_env, ptr %env, i32 0, i32 0
+    %n = load i64, ptr %n_ptr
+    %result = add i64 %n, %x
+    ret i64 %result
 }
+
+// 3. Closure type
+%closuretype_IntToInt = type { ptr, ptr }  ; { env, fn }
 ```
 
-Color propagation:
-- Pure + anything = that thing
-- Local + anything = Local
-- Sync + Sync = Sync
-- NonSync + anything = NonSync
-
-## Analysis pass
+## Closure Creation
 ```rust
-pub struct ClosureAnalyzer {
-    current_scope_bindings: HashSet<BindingId>,
+// At creation site:
+let env = self.builder.build_alloca(env_type, "closure_env");
+// Store captures into env
+for (i, capture) in captures.iter().enumerate() {
+    let ptr = self.builder.build_gep(env, &[zero, i.into()], "cap_ptr");
+    let val = self.get_local(&capture.name)?;
+    self.builder.build_store(val, ptr);
 }
+// Build closure struct
+let closure = self.builder.build_alloca(closure_type, "closure");
+let env_field = self.builder.build_gep(closure, &[zero, zero], "env_field");
+let fn_field = self.builder.build_gep(closure, &[zero, one], "fn_field");
+self.builder.build_store(env, env_field);
+self.builder.build_store(fn_ptr, fn_field);
+```
 
-impl ClosureAnalyzer {
-    pub fn analyze_closure(&mut self, closure: &Fn, env: &Env) -> CaptureInfo;
-    fn find_free_variables(&self, body: &[Expr]) -> Vec<BindingId>;
-    fn determine_capture_mode(&self, binding: BindingId, usage: &Usage) -> CaptureMode;
-    fn compute_color(&self, captures: &[Capture]) -> ClosureColor;
+## Closure Call
+```rust
+Instruction::ClosureCall { closure, args } => {
+    let closure_val = self.compile_expr(closure)?;
+    let env = self.builder.build_extract_value(closure_val, 0, "env");
+    let fn_ptr = self.builder.build_extract_value(closure_val, 1, "fn");
+    let mut call_args = vec![env];
+    call_args.extend(args.iter().map(|a| self.compile_expr(a)).collect::<Result<Vec<_>>>()?);
+    self.builder.build_indirect_call(fn_type, fn_ptr, &call_args, "closure_result")
 }
 ```
 
-## Code generation implications
-- Move capture: value moved into closure struct
-- Borrow capture: closure has lifetime bound to scope
-- Clone capture: clone called, closure owns copy
-- Color affects where closure can be passed (spawn, async, etc.)
+## Test Cases
+```gherkin
+Scenario: Simple closure with capture
+  Given the expression (closure add-n ((own i64 n)) (fn i64 ((i64 x)) (block entry (ret (add n x)))))
+  And the expression (define (test-closure i64) () (block entry (let ((f (make-closure add-n (i64 10)))) (ret (closure-call f (i64 32))))))
+  When I call test-closure
+  Then the result is (i64 42)
 
-## Acceptance criteria
-- [ ] Free variables identified
-- [ ] Capture mode determined correctly
-- [ ] Closure color computed
-- [ ] Borrow captures prevent escape
-- [ ] Color propagates through nested closures
+Scenario: Closure with multiple captures
+  Given the expression (closure add-mul ((own i64 a) (own i64 b)) (fn i64 ((i64 x)) (block entry (ret (add (mul a x) b)))))
+  And the expression (define (test i64) () (block entry (let ((f (make-closure add-mul (i64 2) (i64 3)))) (ret (closure-call f (i64 10))))))
+  When I call test
+  Then the result is (i64 23)
+
+Scenario: Closure passed to function
+  Given the expression (closuretype IntToInt i64 (i64))
+  And the expression (define (apply i64) ((own IntToInt f) (i64 x)) (block entry (ret (closure-call f x))))
+  # ... setup closure and call apply
+```
+
+## Acceptance Criteria
+- [ ] Closure syntax parses
+- [ ] Closuretype parses
+- [ ] Env struct generated correctly
+- [ ] Captures stored in env
+- [ ] closure-call works
+- [ ] own capture moves value
+- [ ] ref capture borrows (verification in borrow checker moth)
+- [ ] Feature file passes
 EOF
 
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Feature 4: Reference Counting
+# -----------------------------------------------------------------------------
 
-moth new "liar: codegen to lIR" -s crit --no-edit --stdin << 'EOF'
+moth new "lIR: reference counting" -s high --no-edit --stdin << 'EOF'
 ## Summary
-Generate lIR from typed, ownership-checked AST.
+Add reference-counted pointers to lIR with automatic inc/dec.
 
-## Code generation context
+## Type
+```lisp
+rc T        ; Reference-counted pointer to T
+```
+
+## Operations
+```lisp
+(rc-alloc T)        ; Allocate with refcount 1, returns rc T
+(rc-clone x)        ; Increment refcount, return alias
+(rc-drop x)         ; Decrement refcount, free if zero
+(rc-count x)        ; Get current refcount (for debugging)
+(rc-get x)          ; Get value (like load)
+(rc-ptr x)          ; Get raw pointer (unsafe)
+```
+
+## AST Additions
 ```rust
-pub struct CodeGen {
-    items: Vec<lir_core::Item>,
-    current_function: Option<FunctionBuilder>,
-    locals: HashMap<BindingId, String>,  // binding → lIR variable name
-    label_counter: usize,
-    temp_counter: usize,
+pub enum ParamType {
+    // ... existing ...
+    Rc(Box<ScalarType>),
 }
 
-struct FunctionBuilder {
-    name: String,
-    params: Vec<(String, lir_core::ParamType)>,
-    return_type: lir_core::ReturnType,
-    blocks: Vec<BlockBuilder>,
-    current_block: usize,
+pub enum Instruction {
+    // ... existing ...
+    RcAlloc { ty: ScalarType },
+    RcClone { value: Box<Expr> },
+    RcDrop { value: Box<Expr> },
+    RcCount { value: Box<Expr> },
+    RcGet { value: Box<Expr> },
+    RcPtr { value: Box<Expr> },
 }
 ```
 
-## Translation rules
-
-### Primitives
-```lisp
-; liar                → lIR
-42                   → (i64 42)
-3.14                 → (double 3.14)
-true                 → (i1 1)
-false                → (i1 0)
+## Memory Layout
+```
++----------+----------+
+| refcount | data ... |
++----------+----------+
+  i64        T
 ```
 
-### Arithmetic
-```lisp
-; liar                → lIR
-(+ a b)              → (add a b)      ; integers
-(+ a b)              → (fadd a b)     ; floats
-(- a b)              → (sub a b)
-(* a b)              → (mul a b)
-(/ a b)              → (sdiv a b)     ; signed
-(rem a b)            → (srem a b)
+## Codegen: rc-alloc
+```rust
+Instruction::RcAlloc { ty } => {
+    // Allocate: sizeof(i64) + sizeof(T)
+    let size = 8 + ty.size_of();
+    let ptr = self.builder.build_call(malloc, &[size.into()], "rc_ptr");
+    
+    // Initialize refcount to 1
+    let rc_ptr = self.builder.build_bitcast(ptr, i64_ptr_type, "rc_field");
+    self.builder.build_store(1i64.into(), rc_ptr);
+    
+    // Return pointer (past refcount header)
+    self.builder.build_gep(ptr, &[8i64.into()], "data_ptr")
+}
 ```
 
-### Comparison
-```lisp
-; liar                → lIR
-(= a b)              → (icmp eq a b)
-(< a b)              → (icmp slt a b)
-(> a b)              → (icmp sgt a b)
-(<= a b)             → (icmp sle a b)
-(>= a b)             → (icmp sge a b)
+## Codegen: rc-clone
+```rust
+Instruction::RcClone { value } => {
+    let ptr = self.compile_expr(value)?;
+    // Get refcount field (8 bytes before data)
+    let rc_ptr = self.builder.build_gep(ptr, &[(-8i64).into()], "rc_field");
+    let rc_ptr = self.builder.build_bitcast(rc_ptr, i64_ptr_type, "rc_i64");
+    
+    // Atomic increment
+    self.builder.build_atomicrmw(
+        AtomicRMWBinOp::Add, rc_ptr, 1i64.into(),
+        AtomicOrdering::SeqCst, "new_rc");
+    
+    ptr  // Return same pointer
+}
 ```
 
-### Conditionals
-```lisp
-; liar
-(if cond then else)
-
-; lIR
-(block entry
-  (br cond then_label else_label))
-(block then_label
-  ... then code ...
-  (br merge))
-(block else_label
-  ... else code ...
-  (br merge))
-(block merge
-  (ret (phi T (then_label then_val) (else_label else_val))))
+## Codegen: rc-drop
+```rust
+Instruction::RcDrop { value } => {
+    let ptr = self.compile_expr(value)?;
+    let rc_ptr = self.builder.build_gep(ptr, &[(-8i64).into()], "rc_field");
+    let rc_ptr = self.builder.build_bitcast(rc_ptr, i64_ptr_type, "rc_i64");
+    
+    // Atomic decrement
+    let old_rc = self.builder.build_atomicrmw(
+        AtomicRMWBinOp::Sub, rc_ptr, 1i64.into(),
+        AtomicOrdering::SeqCst, "old_rc");
+    
+    // If was 1 (now 0), free
+    let was_one = self.builder.build_int_compare(
+        IntPredicate::EQ, old_rc, 1i64.into(), "was_one");
+    
+    let free_block = self.append_block("rc_free");
+    let cont_block = self.append_block("rc_cont");
+    self.builder.build_conditional_branch(was_one, free_block, cont_block);
+    
+    self.builder.position_at_end(free_block);
+    let base_ptr = self.builder.build_gep(ptr, &[(-8i64).into()], "base");
+    self.builder.build_call(free, &[base_ptr], "");
+    self.builder.build_unconditional_branch(cont_block);
+    
+    self.builder.position_at_end(cont_block);
+}
 ```
 
-### Let bindings
+## Implicit RC in Let Bindings
+When binding an `rc` value, implicit clone:
 ```lisp
-; liar
-(let ((x 10) (y 20))
-  (+ x y))
-
-; lIR
-(let ((x (i64 10))
-      (y (i64 20)))
-  (add x y))
+(let ((x (rc-alloc i64)))
+  (rc-set x (i64 42))
+  (let ((y x))           ; implicit rc-clone
+    (rc-get y))          ; use y
+  (rc-get x))            ; x still valid
+; implicit rc-drop for x and y at scope end
 ```
 
-### Functions
-```lisp
-; liar
-(define (add a b)
-  (+ a b))
+## Test Cases
+```gherkin
+Scenario: RC allocate and read
+  Given the expression (define (test-rc i64) () (block entry (let ((x (rc-alloc i64))) (store (i64 42) (rc-ptr x)) (let ((v (load i64 (rc-ptr x)))) (rc-drop x) (ret v)))))
+  When I call test-rc
+  Then the result is (i64 42)
 
-; lIR
-(define (add i64) ((i64 a) (i64 b))
-  (block entry
-    (ret (add a b))))
+Scenario: RC clone maintains value
+  Given the expression (define (test-rc-clone i64) () (block entry (let ((x (rc-alloc i64))) (store (i64 42) (rc-ptr x)) (let ((y (rc-clone x))) (rc-drop x) (let ((v (load i64 (rc-ptr y)))) (rc-drop y) (ret v))))))
+  When I call test-rc-clone
+  Then the result is (i64 42)
+
+Scenario: RC count
+  Given the expression (define (test-rc-count i64) () (block entry (let ((x (rc-alloc i64))) (let ((y (rc-clone x))) (let ((c (rc-count x))) (rc-drop y) (rc-drop x) (ret c))))))
+  When I call test-rc-count
+  Then the result is (i64 2)
 ```
 
-### Closures
-Closures become a struct (environment) + function:
-
-```lisp
-; liar
-(let ((x 10))
-  (fn (y) (+ x y)))
-
-; lIR
-(defstruct closure_env_0 (i64))  ; captured x
-
-(define (closure_fn_0 i64) ((ptr env) (i64 y))
-  (block entry
-    (let ((x (load i64 (getelementptr %struct.closure_env_0 env (i64 0) (i32 0)))))
-      (ret (add x y)))))
-
-; At closure creation site:
-(let ((env (alloca i64)))
-  (store (i64 10) env)
-  ; return {env, closure_fn_0} as closure object
-  ...)
-```
-
-### Structs
-```lisp
-; liar
-(defstruct Point x y)
-(Point 10 20)
-(Point-x p)
-
-; lIR
-(defstruct Point (i64 i64))
-
-; Constructor - allocate and populate
-(let ((p (alloca i64 (i32 2))))
-  (store (i64 10) (getelementptr %struct.Point p (i64 0) (i32 0)))
-  (store (i64 20) (getelementptr %struct.Point p (i64 0) (i32 1)))
-  p)
-
-; Accessor
-(load i64 (getelementptr %struct.Point p (i64 0) (i32 0)))
-```
-
-### Pattern matching
-Compiles to nested conditionals:
-
-```lisp
-; liar
-(match x
-  (0 "zero")
-  (1 "one")
-  (_ "many"))
-
-; lIR
-(block entry
-  (br (icmp eq x (i64 0)) case_0 check_1))
-(block check_1
-  (br (icmp eq x (i64 1)) case_1 case_default))
-(block case_0
-  (br merge))
-(block case_1
-  (br merge))
-(block case_default
-  (br merge))
-(block merge
-  (ret (phi ptr (case_0 str_zero) (case_1 str_one) (case_default str_many))))
-```
-
-### Memory management
-Insert drops at scope exits:
-
-```lisp
-; liar
-(let ((x (make-big-thing)))
-  (use x))
-; x dropped here
-
-; lIR
-(let ((x (call @make_big_thing)))
-  (call @use x)
-  (call @drop_big_thing x))  ; inserted by compiler
-```
-
-## Acceptance criteria
-- [ ] All expression types compile
-- [ ] Functions compile with correct signatures
-- [ ] Closures compile to struct + function
-- [ ] Structs compile to lIR structs
-- [ ] Pattern matching compiles to branches
-- [ ] Drop calls inserted at scope exits
-- [ ] Output is valid lIR (parseable by lir-core)
+## Acceptance Criteria
+- [ ] `rc T` type parses
+- [ ] rc-alloc allocates with refcount 1
+- [ ] rc-clone increments atomically
+- [ ] rc-drop decrements, frees at zero
+- [ ] rc-count returns current count
+- [ ] No use-after-free (manual verification)
+- [ ] Feature file passes
 EOF
 
-# =============================================================================
+# -----------------------------------------------------------------------------
+# Feature 5: Ownership and Borrow Checking
+# -----------------------------------------------------------------------------
 
-moth new "liar: CLI binary (liarc)" -s med --no-edit --stdin << 'EOF'
+moth new "lIR: ownership types" -s crit --no-edit --stdin << 'EOF'
 ## Summary
-Create the liar compiler CLI that compiles .liar to .lir.
+Add ownership pointer types to lIR: own, ref, refmut.
 
-## Usage
-```bash
-# Compile to lIR (stdout)
-liarc input.liar
-
-# Compile to lIR file
-liarc input.liar -o output.lir
-
-# Compile and assemble (requires lair)
-liarc input.liar --emit=obj -o output.o
-liarc input.liar --emit=exe -o program
-
-# Check only (no output)
-liarc input.liar --check
-
-# Verbose (show passes)
-liarc input.liar -v
+## Types
+```lisp
+own T       ; Owned pointer — dropped when out of scope
+ref T       ; Shared borrow — read-only, lifetime-bound
+refmut T    ; Mutable borrow — exclusive, lifetime-bound
 ```
 
-## Options
+## AST Additions
 ```rust
-#[derive(Parser)]
-pub struct Args {
-    /// Input .liar file
-    pub input: PathBuf,
-    
-    /// Output file (default: stdout)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
-    
-    /// Output format
-    #[arg(long, default_value = "lir")]
-    pub emit: Emit,
-    
-    /// Type check only, no codegen
-    #[arg(long)]
-    pub check: bool,
-    
-    /// Verbose output
-    #[arg(short, long)]
-    pub verbose: bool,
-    
-    /// Dump AST
-    #[arg(long)]
-    pub dump_ast: bool,
-    
-    /// Dump typed AST
-    #[arg(long)]
-    pub dump_typed: bool,
-}
-
-pub enum Emit {
-    Lir,    // .lir text
-    Obj,    // .o (via lair)
-    Exe,    // executable (via lair)
+pub enum ParamType {
+    Scalar(ScalarType),
+    Ptr,
+    Own(Box<ScalarType>),
+    Ref(Box<ScalarType>),
+    RefMut(Box<ScalarType>),
+    Rc(Box<ScalarType>),
 }
 ```
 
-## Error output
-Errors should be human-readable with source locations:
-
-```
-error[E0382]: use of moved value: `x`
- --> input.liar:10:5
-  |
-8 |     (consume x)
-  |              - value moved here
-9 |     ...
-10|     x
-  |     ^ value used here after move
-  |
-  = note: move occurs because `x` has type `Pair`, which does not implement `Copy`
+## Operations
+```lisp
+(alloc own T)           ; Allocate owned
+(borrow ref x)          ; Create shared borrow
+(borrow refmut x)       ; Create mutable borrow
+(drop x)                ; Explicit drop
+(move x)                ; Explicit move
 ```
 
-## Acceptance criteria
-- [ ] Compiles .liar to .lir
-- [ ] --check validates without output
-- [ ] Error messages have source locations
-- [ ] --verbose shows pipeline stages
-- [ ] Exit code 0 on success, 1 on error
+## Codegen
+Ownership types compile to raw pointers at LLVM level.
+The safety is enforced by the verifier, not runtime.
+
+```rust
+// own T -> ptr in LLVM
+// ref T -> ptr in LLVM
+// refmut T -> ptr in LLVM
+
+// alloc own T -> alloca or malloc depending on escape analysis
+// drop x -> call destructor, then free if heap-allocated
+// borrow ref x -> just the pointer (no-op at runtime)
+// borrow refmut x -> just the pointer (no-op at runtime)
+```
+
+## Test Cases (Parser/Codegen Only)
+```gherkin
+Scenario: Parse own type
+  Given the expression (define (take void) ((own i64 x)) (block entry (drop x) (ret)))
+  Then parsing succeeds
+
+Scenario: Parse ref type
+  Given the expression (define (peek i64) ((ref i64 x)) (block entry (ret (load i64 x))))
+  Then parsing succeeds
+
+Scenario: Parse refmut type
+  Given the expression (define (poke void) ((refmut i64 x)) (block entry (store (i64 42) x) (ret)))
+  Then parsing succeeds
+
+Scenario: Alloc and drop
+  Given the expression (define (test i64) () (block entry (let ((x (alloc own i64))) (store (i64 42) x) (let ((v (load i64 x))) (drop x) (ret v)))))
+  When I call test
+  Then the result is (i64 42)
+```
+
+## Acceptance Criteria
+- [ ] own, ref, refmut types parse
+- [ ] alloc own T works
+- [ ] borrow ref/refmut works
+- [ ] drop works
+- [ ] Compiles to correct LLVM IR
+- [ ] Verification is separate moth
+EOF
+
+# -----------------------------------------------------------------------------
+# Feature 6: Borrow Checker (Verifier)
+# -----------------------------------------------------------------------------
+
+moth new "lIR: borrow checker verifier" -s crit --no-edit --stdin << 'EOF'
+## Summary
+Implement the borrow checker as a verification pass over lIR.
+Runs before codegen, rejects invalid programs.
+
+## Verification Pass
+```rust
+pub struct BorrowChecker {
+    bindings: HashMap<String, OwnershipState>,
+    borrows: HashMap<String, BorrowInfo>,
+    errors: Vec<BorrowError>,
+}
+
+pub enum OwnershipState {
+    Owned,
+    Moved,
+    Borrowed { by: Vec<String> },
+    BorrowedMut { by: String },
+    Dropped,
+}
+
+pub struct BorrowInfo {
+    kind: BorrowKind,
+    source: String,      // What is borrowed
+    scope_depth: usize,  // When borrow ends
+}
+```
+
+## Rules Enforced
+
+### Rule 1: No use after move
+```lisp
+; REJECT
+(let ((x (alloc own i64)))
+  (let ((y x))          ; x moved to y
+    (load i64 x)))      ; ERROR: x moved
+```
+
+### Rule 2: No use after drop
+```lisp
+; REJECT
+(let ((x (alloc own i64)))
+  (drop x)
+  (load i64 x))         ; ERROR: x dropped
+```
+
+### Rule 3: Mutable borrow is exclusive
+```lisp
+; REJECT
+(let ((x (alloc own i64)))
+  (let ((a (borrow refmut x))
+        (b (borrow ref x)))   ; ERROR: x already mutably borrowed
+    ...))
+```
+
+### Rule 4: Cannot borrow moved value
+```lisp
+; REJECT
+(let ((x (alloc own i64)))
+  (let ((y x))          ; x moved
+    (borrow ref x)))    ; ERROR: x moved
+```
+
+### Rule 5: Borrow cannot outlive owner
+```lisp
+; REJECT
+(define (bad ref i64) ()
+  (block entry
+    (let ((x (alloc own i64)))
+      (ret (borrow ref x)))))  ; ERROR: x dropped, borrow escapes
+```
+
+### Rule 6: All owned values must be dropped
+```lisp
+; REJECT (memory leak)
+(define (leak void) ()
+  (block entry
+    (let ((x (alloc own i64)))
+      (ret))))          ; ERROR: x not dropped
+```
+
+## Algorithm
+```rust
+impl BorrowChecker {
+    pub fn check_function(&mut self, func: &Function) -> Result<(), Vec<BorrowError>> {
+        // Initialize params
+        for param in &func.params {
+            match &param.ty {
+                ParamType::Own(_) => self.bindings.insert(param.name.clone(), OwnershipState::Owned),
+                ParamType::Ref(_) => self.bindings.insert(param.name.clone(), OwnershipState::Borrowed { by: vec![] }),
+                // ...
+            }
+        }
+        
+        // Walk blocks in control flow order
+        for block in &func.blocks {
+            self.check_block(block)?;
+        }
+        
+        // At function end, verify all owned dropped or returned
+        self.verify_cleanup()?;
+        
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(std::mem::take(&mut self.errors))
+        }
+    }
+    
+    fn check_instruction(&mut self, inst: &Instruction) -> Result<(), BorrowError> {
+        match inst {
+            Instruction::Let { bindings, body } => {
+                let scope_depth = self.enter_scope();
+                for (name, expr) in bindings {
+                    self.check_expr(expr)?;
+                    // Track ownership based on expr result
+                }
+                for inst in body {
+                    self.check_instruction(inst)?;
+                }
+                self.exit_scope(scope_depth)?;  // Verify borrows ended, insert drops
+            }
+            // ... other instructions
+        }
+    }
+    
+    fn check_use(&mut self, name: &str) -> Result<(), BorrowError> {
+        match self.bindings.get(name) {
+            Some(OwnershipState::Moved) => Err(BorrowError::UseAfterMove(name.to_string())),
+            Some(OwnershipState::Dropped) => Err(BorrowError::UseAfterDrop(name.to_string())),
+            Some(_) => Ok(()),
+            None => Err(BorrowError::Undefined(name.to_string())),
+        }
+    }
+}
+```
+
+## Error Messages
+```
+error: use of moved value `x`
+  --> test.lir:5:10
+   |
+ 3 |   (let ((y x))
+   |            - value moved here
+ 4 |     ...
+ 5 |     (load i64 x))
+   |              ^ value used here after move
+
+error: cannot borrow `x` as immutable because it is already borrowed as mutable
+  --> test.lir:4:20
+   |
+ 3 |   (let ((a (borrow refmut x))
+   |                           - mutable borrow occurs here
+ 4 |         (b (borrow ref x)))
+   |                        ^ immutable borrow occurs here
+```
+
+## Test Cases
+```gherkin
+Scenario: Reject use after move
+  Given the expression (define (bad void) () (block entry (let ((x (alloc own i64))) (let ((y x)) (load i64 x)) (ret))))
+  Then verification fails with "use of moved value"
+
+Scenario: Reject double mutable borrow
+  Given the expression (define (bad void) () (block entry (let ((x (alloc own i64))) (let ((a (borrow refmut x)) (b (borrow refmut x))) ...) (ret))))
+  Then verification fails with "already borrowed as mutable"
+
+Scenario: Accept valid borrows
+  Given the expression (define (ok void) () (block entry (let ((x (alloc own i64))) (let ((a (borrow ref x)) (b (borrow ref x))) (add (load i64 a) (load i64 b))) (drop x) (ret))))
+  Then verification succeeds
+```
+
+## Acceptance Criteria
+- [ ] Use after move detected
+- [ ] Use after drop detected
+- [ ] Mutable exclusivity enforced
+- [ ] Borrow escape detected
+- [ ] Missing drop detected (optional: auto-insert)
+- [ ] Good error messages with locations
+- [ ] All valid programs pass
 EOF
 
 echo ""
-echo "Created 8 moths for the liar compiler:"
+echo "Created 6 moths for lIR safety features (ADR-021):"
 echo ""
-echo "  1. [CRIT] Crate structure - skeleton"
-echo "  2. [HIGH] Lexer - tokenization"
-echo "  3. [HIGH] Parser/AST - s-expr parsing"
-echo "  4. [HIGH] Name resolution - symbol lookup"
-echo "  5. [HIGH] Type inference - H-M style"
-echo "  6. [CRIT] Ownership/borrow checking - the hard part"
-echo "  7. [HIGH] Closure analysis - captures, color"
-echo "  8. [CRIT] Codegen - emit lIR"
-echo "  9. [MED]  CLI binary - liarc"
+echo "  1. [HIGH] Tail calls - guaranteed TCO"
+echo "  2. [HIGH] Bounds-checked arrays - safe indexing"
+echo "  3. [CRIT] Native closures - captures, types"
+echo "  4. [HIGH] Reference counting - rc type, auto inc/dec"
+echo "  5. [CRIT] Ownership types - own/ref/refmut"
+echo "  6. [CRIT] Borrow checker - verification pass"
 echo ""
-echo "Suggested implementation order:"
-echo "  1 → 2 → 3 → 4 → 8 (minimal pipeline, no types/ownership)"
-echo "  Then add: 5 → 6 → 7"
-echo "  Finally: 9"
+echo "Implementation order:"
+echo "  1 (tailcall) - isolated, easy win"
+echo "  2 (arrays) - useful, moderate complexity"
+echo "  5 (ownership types) - foundation for borrow checking"
+echo "  6 (borrow checker) - the big one"
+echo "  4 (rc) - builds on ownership"
+echo "  3 (closures) - most complex, needs ownership"

@@ -3,7 +3,9 @@
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, VectorType as LLVMVectorType};
+use inkwell::types::{
+    BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType, VectorType as LLVMVectorType,
+};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PhiValue, VectorValue as LLVMVectorValue,
 };
@@ -167,6 +169,79 @@ impl<'ctx> CodeGen<'ctx> {
                 .map(|t| (*t).into())
                 .ok_or_else(|| CodeGenError::CodeGen(format!("unknown struct type: {}", name))),
         }
+    }
+
+    /// Check if an index expression is a constant within bounds
+    fn is_constant_in_bounds(index: &Expr, size: u32) -> bool {
+        // Check if the index is a constant integer literal within bounds
+        if let Expr::IntLit { value, .. } = index {
+            if *value >= 0 && (*value as u32) < size {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Emit runtime bounds check for array access
+    fn emit_bounds_check(&self, idx: inkwell::values::IntValue<'ctx>, size: u32) -> Result<()> {
+        let current_fn = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| CodeGenError::CodeGen("no insert block".into()))?
+            .get_parent()
+            .ok_or_else(|| CodeGenError::CodeGen("block has no parent".into()))?;
+
+        let i64_type = self.context.i64_type();
+        let size_val = i64_type.const_int(size as u64, false);
+
+        // Extend idx to i64 if needed for comparison
+        let idx_i64 = if idx.get_type().get_bit_width() < 64 {
+            self.builder
+                .build_int_z_extend(idx, i64_type, "idx_ext")
+                .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+        } else {
+            idx
+        };
+
+        // Check: idx < size (unsigned comparison)
+        let in_bounds = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::ULT,
+                idx_i64,
+                size_val,
+                "bounds_check",
+            )
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Create blocks for bounds check
+        let ok_block = self.context.append_basic_block(current_fn, "bounds_ok");
+        let panic_block = self.context.append_basic_block(current_fn, "bounds_panic");
+
+        self.builder
+            .build_conditional_branch(in_bounds, ok_block, panic_block)
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Panic block: call abort
+        self.builder.position_at_end(panic_block);
+        // Use libc abort() - simpler than trying to use LLVM intrinsics
+        let abort_fn = self.module.get_function("abort").unwrap_or_else(|| {
+            let void_type = self.context.void_type();
+            let fn_type = void_type.fn_type(&[], false);
+            self.module
+                .add_function("abort", fn_type, Some(inkwell::module::Linkage::External))
+        });
+        self.builder
+            .build_call(abort_fn, &[], "")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+        self.builder
+            .build_unreachable()
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Continue in OK block
+        self.builder.position_at_end(ok_block);
+
+        Ok(())
     }
 
     /// Compile a function definition
@@ -464,6 +539,164 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
                 Ok(call_site.try_as_basic_value().basic())
+            }
+
+            Expr::TailCall { name, args } => {
+                let function = self.module.get_function(name).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("undefined function: {}", name))
+                })?;
+
+                let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                for arg in args {
+                    let val = self.compile_expr_recursive(arg, locals)?;
+                    compiled_args.push(val.into());
+                }
+
+                let call_site = self
+                    .builder
+                    .build_call(function, &compiled_args, "tailcall")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Mark as tail call
+                call_site.set_tail_call(true);
+
+                // Tail calls must be followed by a return
+                if let Some(ret_val) = call_site.try_as_basic_value().basic() {
+                    self.builder
+                        .build_return(Some(&ret_val))
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                } else {
+                    self.builder
+                        .build_return(None)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                }
+
+                // TailCall is a terminator, returns None
+                Ok(None)
+            }
+
+            // Array operations
+            Expr::ArrayAlloc { elem_type, size } => {
+                // Allocate array on stack: alloca [N x T]
+                let elem_llvm_ty = self
+                    .scalar_to_basic_type(elem_type)
+                    .ok_or_else(|| CodeGenError::CodeGen("cannot allocate void array".into()))?;
+                let array_ty = elem_llvm_ty.array_type(*size);
+                let ptr = self
+                    .builder
+                    .build_alloca(array_ty, "array")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                Ok(Some(ptr.into()))
+            }
+
+            Expr::ArrayGet {
+                elem_type,
+                size,
+                array,
+                index,
+            } => {
+                let arr_ptr = self
+                    .compile_expr_with_deferred_phis(array, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| CodeGenError::CodeGen("array must produce a value".into()))?
+                    .into_pointer_value();
+
+                let idx_val = self
+                    .compile_expr_with_deferred_phis(index, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| CodeGenError::CodeGen("index must produce a value".into()))?
+                    .into_int_value();
+
+                // Bounds check (unless we can statically prove it's safe)
+                let needs_check = !Self::is_constant_in_bounds(index, *size);
+                if needs_check {
+                    self.emit_bounds_check(idx_val, *size)?;
+                }
+
+                // GEP to get element pointer
+                let i64_type = self.context.i64_type();
+                let zero = i64_type.const_zero();
+                let elem_llvm_ty = self
+                    .scalar_to_basic_type(elem_type)
+                    .ok_or_else(|| CodeGenError::CodeGen("cannot array-get void type".into()))?;
+                let array_ty = elem_llvm_ty.array_type(*size);
+
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(array_ty, arr_ptr, &[zero, idx_val], "elem_ptr")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+
+                // Load the element
+                let value = self
+                    .builder
+                    .build_load(elem_llvm_ty, elem_ptr, "elem")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(Some(value))
+            }
+
+            Expr::ArraySet {
+                elem_type,
+                size,
+                array,
+                index,
+                value,
+            } => {
+                let arr_ptr = self
+                    .compile_expr_with_deferred_phis(array, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| CodeGenError::CodeGen("array must produce a value".into()))?
+                    .into_pointer_value();
+
+                let idx_val = self
+                    .compile_expr_with_deferred_phis(index, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| CodeGenError::CodeGen("index must produce a value".into()))?
+                    .into_int_value();
+
+                let val = self
+                    .compile_expr_with_deferred_phis(value, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| CodeGenError::CodeGen("value must produce a value".into()))?;
+
+                // Bounds check (unless we can statically prove it's safe)
+                let needs_check = !Self::is_constant_in_bounds(index, *size);
+                if needs_check {
+                    self.emit_bounds_check(idx_val, *size)?;
+                }
+
+                // GEP to get element pointer
+                let i64_type = self.context.i64_type();
+                let zero = i64_type.const_zero();
+                let elem_llvm_ty = self
+                    .scalar_to_basic_type(elem_type)
+                    .ok_or_else(|| CodeGenError::CodeGen("cannot array-set void type".into()))?;
+                let array_ty = elem_llvm_ty.array_type(*size);
+
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(array_ty, arr_ptr, &[zero, idx_val], "elem_ptr")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+
+                // Store the value
+                self.builder
+                    .build_store(elem_ptr, val)
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Returns nothing useful (void)
+                Ok(None)
+            }
+
+            Expr::ArrayLen { size, .. } => {
+                // Return the compile-time constant size
+                let i64_type = self.context.i64_type();
+                let len = i64_type.const_int(*size as u64, false);
+                Ok(Some(len.into()))
+            }
+
+            Expr::ArrayPtr { array } => {
+                // Just return the array pointer as-is (for FFI)
+                let arr_ptr = self
+                    .compile_expr_with_deferred_phis(array, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| CodeGenError::CodeGen("array must produce a value".into()))?;
+                Ok(Some(arr_ptr))
             }
 
             // Let bindings - thread through deferred_phis
@@ -1082,6 +1315,20 @@ impl<'ctx> CodeGen<'ctx> {
                     .basic()
                     .ok_or_else(|| CodeGenError::CodeGen("call returned void".to_string()))
             }
+
+            // Tail call - needs block context for proper use
+            Expr::TailCall { .. } => Err(CodeGenError::CodeGen(
+                "tailcall requires block context".to_string(),
+            )),
+
+            // Array operations - need block context
+            Expr::ArrayAlloc { .. }
+            | Expr::ArrayGet { .. }
+            | Expr::ArraySet { .. }
+            | Expr::ArrayLen { .. }
+            | Expr::ArrayPtr { .. } => Err(CodeGenError::CodeGen(
+                "array operations require block context".to_string(),
+            )),
 
             // Conversions - need locals for the value expression
             Expr::Trunc { ty, value } => {
@@ -1838,6 +2085,19 @@ impl<'ctx> CodeGen<'ctx> {
             )),
             Expr::Call { .. } => Err(CodeGenError::CodeGen(
                 "call requires function context".to_string(),
+            )),
+
+            Expr::TailCall { .. } => Err(CodeGenError::CodeGen(
+                "tailcall requires block context".to_string(),
+            )),
+
+            // Array operations - need block context
+            Expr::ArrayAlloc { .. }
+            | Expr::ArrayGet { .. }
+            | Expr::ArraySet { .. }
+            | Expr::ArrayLen { .. }
+            | Expr::ArrayPtr { .. } => Err(CodeGenError::CodeGen(
+                "array operations require block context".to_string(),
             )),
 
             // Struct literal: { val1 val2 ... }

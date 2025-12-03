@@ -280,6 +280,14 @@ impl<'a> Parser<'a> {
 
             // Function call
             "call" => self.parse_call(),
+            "tailcall" => self.parse_tailcall(),
+
+            // Array operations
+            "array-alloc" => self.parse_array_alloc(),
+            "array-get" => self.parse_array_get(),
+            "array-set" => self.parse_array_set(),
+            "array-len" => self.parse_array_len(),
+            "array-ptr" => self.parse_array_ptr(),
 
             // Let bindings
             "let" => self.parse_let(),
@@ -634,6 +642,182 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Expr::Call { name, args })
+    }
+
+    /// Parse tailcall: (tailcall @function-name args...)
+    fn parse_tailcall(&mut self) -> Result<Expr, ParseError> {
+        // Parse function name (must start with @)
+        let name = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) if s.starts_with('@') => s[1..].to_string(),
+            Some(Token::Ident(s)) => {
+                return Err(ParseError::Expected {
+                    expected: "function name starting with @".to_string(),
+                    found: s,
+                })
+            }
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "function name".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse arguments
+        let mut args = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            args.push(self.parse_expr()?);
+        }
+
+        Ok(Expr::TailCall { name, args })
+    }
+
+    /// Parse array-alloc: (array-alloc type size)
+    /// Example: (array-alloc i64 10)
+    fn parse_array_alloc(&mut self) -> Result<Expr, ParseError> {
+        // Parse the element type (must be a scalar type)
+        let elem_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "element type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse the size (must be a constant integer)
+        let size = match self.lexer.next_token_peeked()? {
+            Some(Token::Integer(n)) => n as u32,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "array size (integer)".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        Ok(Expr::ArrayAlloc { elem_type, size })
+    }
+
+    /// Parse array-get: (array-get type size arr idx)
+    /// Example: (array-get i64 10 arr (i64 5))
+    fn parse_array_get(&mut self) -> Result<Expr, ParseError> {
+        // Parse element type
+        let elem_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "element type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse array size
+        let size = match self.lexer.next_token_peeked()? {
+            Some(Token::Integer(n)) => n as u32,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "array size".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse array expression
+        let array = self.parse_expr()?;
+
+        // Parse index expression
+        let index = self.parse_expr()?;
+
+        Ok(Expr::ArrayGet {
+            elem_type,
+            size,
+            array: Box::new(array),
+            index: Box::new(index),
+        })
+    }
+
+    /// Parse array-set: (array-set type size arr idx val)
+    /// Example: (array-set i64 10 arr (i64 5) (i64 42))
+    fn parse_array_set(&mut self) -> Result<Expr, ParseError> {
+        // Parse element type
+        let elem_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "element type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse array size
+        let size = match self.lexer.next_token_peeked()? {
+            Some(Token::Integer(n)) => n as u32,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "array size".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse array expression
+        let array = self.parse_expr()?;
+
+        // Parse index expression
+        let index = self.parse_expr()?;
+
+        // Parse value expression
+        let value = self.parse_expr()?;
+
+        Ok(Expr::ArraySet {
+            elem_type,
+            size,
+            array: Box::new(array),
+            index: Box::new(index),
+            value: Box::new(value),
+        })
+    }
+
+    /// Parse array-len: (array-len size)
+    /// Returns the compile-time constant size
+    fn parse_array_len(&mut self) -> Result<Expr, ParseError> {
+        // Parse array size
+        let size = match self.lexer.next_token_peeked()? {
+            Some(Token::Integer(n)) => n as u32,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "array size".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        Ok(Expr::ArrayLen { size })
+    }
+
+    /// Parse array-ptr: (array-ptr array)
+    fn parse_array_ptr(&mut self) -> Result<Expr, ParseError> {
+        // Parse the array expression
+        let array = self.parse_expr()?;
+
+        Ok(Expr::ArrayPtr {
+            array: Box::new(array),
+        })
     }
 
     /// Parse let: (let ((name1 expr1) (name2 expr2) ...) body...)
