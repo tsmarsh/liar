@@ -1,0 +1,17 @@
+[package]
+name = "liar"
+version = "0.1.0"
+edition = "2021"
+description = "liar compiler - borrow-checked Lisp to lIR"
+
+[lib]
+name = "liar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "liarc"
+path = "src/bin/main.rs"
+
+[dependencies]
+lir-core = { path = "../lir-core" }
+thiserror = "1.0"

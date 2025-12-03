@@ -6,6 +6,7 @@ members = [
     "lir-repl",
     "lir-cli",
     "lir-lair",
+    "liar",
     "cert",
 ]
 
