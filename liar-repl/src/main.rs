@@ -1,12 +1,10 @@
 //! liar Interactive REPL
 //!
-//! Compiles liar to lIR, then JIT executes.
-//!
-//! Pipeline: liar source → liar compiler → lIR string → lIR parser → JIT
+//! Uses incremental JIT for fast evaluation.
 
 use inkwell::context::Context;
-use lir_codegen::JitEngine;
-use lir_core::parser::{ParseResult, Parser};
+use liar_repl::session::{format_value, Session};
+use liar_repl::EvalResult;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -33,158 +31,7 @@ Examples:
     );
 }
 
-struct ReplState {
-    /// Accumulated definitions (functions, structs, etc.) as liar source
-    definitions: String,
-}
-
-impl ReplState {
-    fn new() -> Self {
-        Self {
-            definitions: String::new(),
-        }
-    }
-
-    /// Compile liar source to lIR string
-    fn compile_to_lir(&self, input: &str) -> Result<String, String> {
-        let full_source = format!("{}\n{}", self.definitions, input);
-        liar::compile(&full_source).map_err(|errs| {
-            errs.iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-    }
-
-    /// Evaluate liar expression and return formatted result
-    fn eval(&mut self, input: &str) -> Result<String, String> {
-        // Check if this is a definition
-        let trimmed = input.trim();
-        if trimmed.starts_with("(defun")
-            || trimmed.starts_with("(def ")
-            || trimmed.starts_with("(defstruct")
-            || trimmed.starts_with("(defprotocol")
-        {
-            // Accumulate definitions
-            self.definitions.push_str(input);
-            self.definitions.push('\n');
-            return Ok("defined".to_string());
-        }
-
-        // Compile liar → lIR string
-        let lir_str = self.compile_to_lir(input)?;
-
-        // Parse lIR string → AST
-        let mut parser = Parser::new(&lir_str);
-        let items = parser
-            .parse_items()
-            .map_err(|e| format!("lIR parse error: {:?}", e))?;
-
-        // Find expression to evaluate (last item that's an expression)
-        let mut expr_to_eval = None;
-        for item in items.iter().rev() {
-            if let ParseResult::Expr(expr) = item {
-                expr_to_eval = Some(expr.clone());
-                break;
-            }
-        }
-
-        let expr = expr_to_eval.ok_or_else(|| "No expression to evaluate".to_string())?;
-
-        // JIT execute
-        let context = Context::create();
-        let jit = JitEngine::new(&context);
-        let value = jit
-            .eval(&expr)
-            .map_err(|e| format!("Evaluation error: {}", e))?;
-
-        Ok(format_result(&value))
-    }
-}
-
-fn format_result(value: &lir_codegen::Value) -> String {
-    use lir_codegen::Value;
-    match value {
-        Value::I1(b) => {
-            if *b {
-                "true"
-            } else {
-                "false"
-            }
-        }
-        .to_string(),
-        Value::I8(n) => n.to_string(),
-        Value::I16(n) => n.to_string(),
-        Value::I32(n) => n.to_string(),
-        Value::I64(n) => n.to_string(),
-        Value::Float(f) => format!("{}", f),
-        Value::Double(d) => format!("{}", d),
-        Value::Ptr(0) => "nil".to_string(),
-        Value::Ptr(p) => format!("<ptr {:x}>", p),
-        Value::VecI1(elems) => format!(
-            "[{}]",
-            elems
-                .iter()
-                .map(|b| if *b { "true" } else { "false" })
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        Value::VecI8(elems) => format!(
-            "[{}]",
-            elems
-                .iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        Value::VecI16(elems) => format!(
-            "[{}]",
-            elems
-                .iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        Value::VecI32(elems) => format!(
-            "[{}]",
-            elems
-                .iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        Value::VecI64(elems) => format!(
-            "[{}]",
-            elems
-                .iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        Value::VecFloat(elems) => format!(
-            "[{}]",
-            elems
-                .iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        Value::VecDouble(elems) => format!(
-            "[{}]",
-            elems
-                .iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        Value::Struct(fields) => {
-            let parts: Vec<String> = fields.iter().map(format_result).collect();
-            format!("{{{}}}", parts.join(" "))
-        }
-    }
-}
-
-fn eval_line(state: &mut ReplState, line: &str) {
+fn eval_line(session: &mut Session, line: &str) {
     let line = line.trim();
     if line.is_empty() {
         return;
@@ -203,10 +50,16 @@ fn eval_line(state: &mut ReplState, line: &str) {
                 }
                 let path = parts[1].trim();
                 match std::fs::read_to_string(path) {
-                    Ok(contents) => match state.eval(&contents) {
-                        Ok(result) => println!("{}", result),
-                        Err(e) => eprintln!("{}", e),
-                    },
+                    Ok(contents) => {
+                        // Evaluate each top-level form
+                        for form in split_forms(&contents) {
+                            match session.eval(&form) {
+                                EvalResult::Value(v) => println!("{}", format_value(&v)),
+                                EvalResult::Defined(n) => println!("defined: {}", n),
+                                EvalResult::Error(e) => eprintln!("{}", e),
+                            }
+                        }
+                    }
                     Err(e) => eprintln!("Error loading file: {}", e),
                 }
             }
@@ -215,7 +68,8 @@ fn eval_line(state: &mut ReplState, line: &str) {
                     println!("Usage: :lir <expression>");
                     return;
                 }
-                match state.compile_to_lir(parts[1]) {
+                // Just compile to lIR and show it
+                match liar::compile_expr(parts[1]) {
                     Ok(lir) => println!("{}", lir),
                     Err(e) => eprintln!("{}", e),
                 }
@@ -225,10 +79,76 @@ fn eval_line(state: &mut ReplState, line: &str) {
         return;
     }
 
-    match state.eval(line) {
-        Ok(result) => println!("{}", result),
-        Err(e) => eprintln!("{}", e),
+    match session.eval(line) {
+        EvalResult::Value(v) => println!("{}", format_value(&v)),
+        EvalResult::Defined(n) => println!("defined: {}", n),
+        EvalResult::Error(e) => eprintln!("{}", e),
     }
+}
+
+/// Split source into individual top-level forms
+fn split_forms(source: &str) -> Vec<String> {
+    let mut forms = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut in_comment = false;
+    let mut escape_next = false;
+
+    for c in source.chars() {
+        // Handle end of line comment
+        if in_comment {
+            if c == '\n' {
+                in_comment = false;
+            }
+            continue;
+        }
+
+        if escape_next {
+            current.push(c);
+            escape_next = false;
+            continue;
+        }
+
+        match c {
+            ';' if !in_string => {
+                in_comment = true;
+            }
+            '\\' if in_string => {
+                current.push(c);
+                escape_next = true;
+            }
+            '"' => {
+                current.push(c);
+                in_string = !in_string;
+            }
+            '(' if !in_string => {
+                current.push(c);
+                depth += 1;
+            }
+            ')' if !in_string => {
+                current.push(c);
+                depth -= 1;
+                if depth == 0 && !current.trim().is_empty() {
+                    forms.push(current.trim().to_string());
+                    current.clear();
+                }
+            }
+            _ => {
+                if depth > 0 || !c.is_whitespace() {
+                    current.push(c);
+                }
+            }
+        }
+    }
+
+    // Add any remaining content (but filter out comments)
+    let remaining = current.trim();
+    if !remaining.is_empty() && !remaining.starts_with(';') {
+        forms.push(remaining.to_string());
+    }
+
+    forms
 }
 
 fn main() {
@@ -242,14 +162,32 @@ fn main() {
         }
     };
 
-    let mut state = ReplState::new();
+    // Create LLVM context and session
+    let context = Context::create();
+    let mut session = match Session::new(&context, "repl".to_string()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to initialize session: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Load stdlib if it exists
+    let stdlib_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../lib/stdlib.liar");
+    if let Ok(stdlib) = std::fs::read_to_string(stdlib_path) {
+        for form in split_forms(&stdlib) {
+            if let EvalResult::Error(e) = session.eval(&form) {
+                eprintln!("Warning: stdlib load error: {}", e)
+            }
+        }
+    }
 
     loop {
         let readline = rl.readline("liar> ");
         match readline {
             Ok(line) => {
                 let _ = rl.add_history_entry(line.as_str());
-                eval_line(&mut state, &line);
+                eval_line(&mut session, &line);
             }
             Err(ReadlineError::Interrupted) => {
                 println!("^C");

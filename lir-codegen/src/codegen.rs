@@ -56,6 +56,17 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    /// Create a CodeGen with an existing module
+    pub fn with_module(context: &'ctx Context, module: Module<'ctx>) -> Self {
+        let builder = context.create_builder();
+        Self {
+            context,
+            module,
+            builder,
+            struct_types: HashMap::new(),
+        }
+    }
+
     /// Get LLVM integer type from ScalarType
     fn int_type(&self, ty: &ScalarType) -> IntType<'ctx> {
         match ty {

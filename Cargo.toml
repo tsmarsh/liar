@@ -8,6 +8,7 @@ members = [
     "lir-lair",
     "liar",
     "liar-repl",
+    "liar-nrepl",
     "liar-cert",
     "cert",
 ]

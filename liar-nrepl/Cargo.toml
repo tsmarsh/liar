@@ -1,0 +1,18 @@
+[package]
+name = "liar-nrepl"
+version.workspace = true
+edition.workspace = true
+description = "nREPL server for liar language"
+
+[[bin]]
+name = "liar-nrepl"
+path = "src/main.rs"
+
+[dependencies]
+liar-repl = { path = "../liar-repl" }
+lir-codegen = { path = "../lir-codegen" }
+inkwell = { version = "0.7.0", features = ["llvm21-1"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_bencode = "0.2"
+uuid = { version = "1", features = ["v4"] }

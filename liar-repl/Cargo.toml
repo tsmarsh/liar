@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 description = "Interactive REPL for liar language"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "liar-repl"
 path = "src/main.rs"
