@@ -13,6 +13,7 @@ use lir_cert::{execute, LirBackend};
 use lir_codegen::codegen::{CodeGen, Value};
 use lir_codegen::jit::JitEngine;
 use lir_core::ast::{ExternDecl, FunctionDef, StructDef};
+use lir_core::borrow::BorrowChecker;
 use lir_core::parser::{ParseResult, Parser};
 use std::collections::HashMap;
 
@@ -545,6 +546,57 @@ async fn then_result_is_not_null(world: &mut LirWorld) {
         }
     } else {
         panic!("Expected pointer result but got '{}'", world.stdout);
+    }
+}
+
+// Borrow checker verification steps
+
+#[then("borrow check passes")]
+async fn then_borrow_check_passes(world: &mut LirWorld) {
+    // Parse the expression as a function
+    let func = match try_parse_function(&world.expression) {
+        Some(f) => f,
+        None => panic!("PENDING: expected function definition for borrow check"),
+    };
+
+    // Run the borrow checker
+    let mut checker = BorrowChecker::new();
+    match checker.check_function(&func) {
+        Ok(()) => {} // Success
+        Err(errors) => {
+            let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+            panic!("Borrow check failed: {}", msgs.join(", "));
+        }
+    }
+}
+
+#[then(regex = r#"^borrow check fails with "(.+)"$"#)]
+async fn then_borrow_check_fails_with(world: &mut LirWorld, expected_msg: String) {
+    // Parse the expression as a function
+    let func = match try_parse_function(&world.expression) {
+        Some(f) => f,
+        None => panic!("PENDING: expected function definition for borrow check"),
+    };
+
+    // Run the borrow checker
+    let mut checker = BorrowChecker::new();
+    match checker.check_function(&func) {
+        Ok(()) => {
+            panic!(
+                "Expected borrow check to fail with '{}' but it passed",
+                expected_msg
+            );
+        }
+        Err(errors) => {
+            let all_msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+            let found = all_msgs.iter().any(|msg| msg.contains(&expected_msg));
+            assert!(
+                found,
+                "Expected error containing '{}', got: {}",
+                expected_msg,
+                all_msgs.join(", ")
+            );
+        }
     }
 }
 
