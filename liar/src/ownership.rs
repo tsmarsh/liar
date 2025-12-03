@@ -592,6 +592,52 @@ impl BorrowChecker {
                 // (per ADR: same ownership rules apply inside)
                 self.check_expr(inner);
             }
+
+            // Atom expressions (ADR-011)
+            Expr::Atom(value) => {
+                // Creating an atom moves the value into the atom
+                self.check_expr(value);
+                if let Expr::Var(name) = &value.node {
+                    self.move_value(name, value.span);
+                }
+            }
+            Expr::AtomDeref(atom) => {
+                // Reading an atom doesn't move it (atomic read)
+                self.check_expr(atom);
+            }
+            Expr::Reset(atom, value) => {
+                // Reset requires ownership of the new value
+                self.check_expr(atom);
+                self.check_expr(value);
+                if let Expr::Var(name) = &value.node {
+                    self.move_value(name, value.span);
+                }
+            }
+            Expr::Swap(atom, func) => {
+                // Swap uses the atom and the function
+                self.check_expr(atom);
+                self.check_expr(func);
+            }
+            Expr::CompareAndSet { atom, old, new } => {
+                // CAS checks old value, potentially moves new value
+                self.check_expr(atom);
+                self.check_expr(old);
+                self.check_expr(new);
+            }
+
+            // Persistent collections (ADR-018)
+            Expr::Vector(elements) => {
+                for elem in elements {
+                    self.check_expr(elem);
+                }
+            }
+            Expr::Map(pairs) => {
+                for (k, v) in pairs {
+                    self.check_expr(k);
+                    self.check_expr(v);
+                }
+            }
+            Expr::Keyword(_) => {}
         }
     }
 

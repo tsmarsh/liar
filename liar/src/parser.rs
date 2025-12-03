@@ -237,6 +237,28 @@ impl<'a> Parser<'a> {
                 let sym = self.parse_symbol()?;
                 Expr::Quote(sym.node)
             }
+            TokenKind::At => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Expr::AtomDeref(Box::new(expr))
+            }
+            TokenKind::Keyword(s) => {
+                let s = s.clone();
+                self.advance();
+                Expr::Keyword(s)
+            }
+            TokenKind::LBracket => {
+                self.advance();
+                let elements = self.parse_vector_elements()?;
+                self.expect(TokenKind::RBracket)?;
+                Expr::Vector(elements)
+            }
+            TokenKind::LBrace => {
+                self.advance();
+                let pairs = self.parse_map_pairs()?;
+                self.expect(TokenKind::RBrace)?;
+                Expr::Map(pairs)
+            }
             TokenKind::Symbol(s) => {
                 let s = s.clone();
                 self.advance();
@@ -314,6 +336,35 @@ impl<'a> Parser<'a> {
             TokenKind::Dot => {
                 self.advance();
                 self.parse_field_access()
+            }
+            // Atom operations
+            TokenKind::Atom => {
+                self.advance();
+                let value = self.parse_expr()?;
+                Ok(Expr::Atom(Box::new(value)))
+            }
+            TokenKind::Swap => {
+                self.advance();
+                let atom = self.parse_expr()?;
+                let func = self.parse_expr()?;
+                Ok(Expr::Swap(Box::new(atom), Box::new(func)))
+            }
+            TokenKind::Reset => {
+                self.advance();
+                let atom = self.parse_expr()?;
+                let value = self.parse_expr()?;
+                Ok(Expr::Reset(Box::new(atom), Box::new(value)))
+            }
+            TokenKind::CompareAndSet => {
+                self.advance();
+                let atom = self.parse_expr()?;
+                let old = self.parse_expr()?;
+                let new = self.parse_expr()?;
+                Ok(Expr::CompareAndSet {
+                    atom: Box::new(atom),
+                    old: Box::new(old),
+                    new: Box::new(new),
+                })
             }
             _ => self.parse_call(),
         }
@@ -468,6 +519,26 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse vector elements: 1 2 3
+    fn parse_vector_elements(&mut self) -> Result<Vec<Spanned<Expr>>> {
+        let mut elements = Vec::new();
+        while !self.check(TokenKind::RBracket) {
+            elements.push(self.parse_expr()?);
+        }
+        Ok(elements)
+    }
+
+    /// Parse map pairs: :a 1 :b 2
+    fn parse_map_pairs(&mut self) -> Result<Vec<(Spanned<Expr>, Spanned<Expr>)>> {
+        let mut pairs = Vec::new();
+        while !self.check(TokenKind::RBrace) {
+            let key = self.parse_expr()?;
+            let value = self.parse_expr()?;
+            pairs.push((key, value));
+        }
+        Ok(pairs)
+    }
+
     // Helper methods
 
     fn peek(&self) -> &Token {
@@ -529,6 +600,108 @@ mod tests {
                 assert_eq!(args.len(), 2);
             }
             _ => panic!("expected call"),
+        }
+    }
+
+    #[test]
+    fn test_parse_atom() {
+        let mut parser = Parser::new("(atom 0)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        assert!(matches!(expr.node, Expr::Atom(_)));
+    }
+
+    #[test]
+    fn test_parse_atom_deref() {
+        let mut parser = Parser::new("@counter").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::AtomDeref(inner) => {
+                assert!(matches!(inner.node, Expr::Var(s) if s == "counter"));
+            }
+            _ => panic!("expected atom deref"),
+        }
+    }
+
+    #[test]
+    fn test_parse_reset() {
+        let mut parser = Parser::new("(reset! counter 10)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        assert!(matches!(expr.node, Expr::Reset(_, _)));
+    }
+
+    #[test]
+    fn test_parse_swap() {
+        let mut parser = Parser::new("(swap! counter inc)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        assert!(matches!(expr.node, Expr::Swap(_, _)));
+    }
+
+    #[test]
+    fn test_parse_compare_and_set() {
+        let mut parser = Parser::new("(compare-and-set! counter 0 1)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        assert!(matches!(expr.node, Expr::CompareAndSet { .. }));
+    }
+
+    #[test]
+    fn test_parse_vector() {
+        let mut parser = Parser::new("[1 2 3]").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Vector(elements) => {
+                assert_eq!(elements.len(), 3);
+            }
+            _ => panic!("expected vector"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_vector() {
+        let mut parser = Parser::new("[]").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Vector(elements) => {
+                assert!(elements.is_empty());
+            }
+            _ => panic!("expected empty vector"),
+        }
+    }
+
+    #[test]
+    fn test_parse_map() {
+        let mut parser = Parser::new("{:a 1 :b 2}").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Map(pairs) => {
+                assert_eq!(pairs.len(), 2);
+            }
+            _ => panic!("expected map"),
+        }
+    }
+
+    #[test]
+    fn test_parse_keyword() {
+        let mut parser = Parser::new(":foo").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Keyword(name) => {
+                assert_eq!(name, "foo");
+            }
+            _ => panic!("expected keyword"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_collections() {
+        let mut parser = Parser::new("[1 [2 3] {:a 4}]").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Vector(elements) => {
+                assert_eq!(elements.len(), 3);
+                assert!(matches!(elements[1].node, Expr::Vector(_)));
+                assert!(matches!(elements[2].node, Expr::Map(_)));
+            }
+            _ => panic!("expected nested vector"),
         }
     }
 }

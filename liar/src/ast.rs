@@ -119,6 +119,30 @@ pub enum Expr {
     Quote(String),
     /// Unsafe block: (unsafe body)
     Unsafe(Box<Spanned<Expr>>),
+
+    // Atoms for thread-safe mutable state (ADR-011)
+    /// Create atom: (atom value)
+    Atom(Box<Spanned<Expr>>),
+    /// Atomic swap: (swap! atom fn) - applies fn to current value
+    Swap(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    /// Atomic reset: (reset! atom value) - sets new value
+    Reset(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    /// Atomic deref: @atom - reads current value
+    AtomDeref(Box<Spanned<Expr>>),
+    /// Compare and set: (compare-and-set! atom old new)
+    CompareAndSet {
+        atom: Box<Spanned<Expr>>,
+        old: Box<Spanned<Expr>>,
+        new: Box<Spanned<Expr>>,
+    },
+
+    // Persistent collections (ADR-018)
+    /// Vector literal: [1 2 3]
+    Vector(Vec<Spanned<Expr>>),
+    /// Map literal: {:a 1 :b 2}
+    Map(Vec<(Spanned<Expr>, Spanned<Expr>)>),
+    /// Keyword literal: :foo
+    Keyword(String),
 }
 
 /// Let binding

@@ -238,6 +238,41 @@ impl ClosureAnalyzer {
             }
 
             Expr::Quote(_) => {}
+
+            // Atom expressions
+            Expr::Atom(value) => {
+                self.analyze_expr(value);
+            }
+            Expr::Swap(atom, func) => {
+                self.analyze_expr(atom);
+                self.analyze_expr(func);
+            }
+            Expr::Reset(atom, value) => {
+                self.analyze_expr(atom);
+                self.analyze_expr(value);
+            }
+            Expr::AtomDeref(atom) => {
+                self.analyze_expr(atom);
+            }
+            Expr::CompareAndSet { atom, old, new } => {
+                self.analyze_expr(atom);
+                self.analyze_expr(old);
+                self.analyze_expr(new);
+            }
+
+            // Persistent collections
+            Expr::Vector(elements) => {
+                for elem in elements {
+                    self.analyze_expr(elem);
+                }
+            }
+            Expr::Map(pairs) => {
+                for (k, v) in pairs {
+                    self.analyze_expr(k);
+                    self.analyze_expr(v);
+                }
+            }
+            Expr::Keyword(_) => {}
         }
     }
 
@@ -427,6 +462,41 @@ impl ClosureAnalyzer {
             }
 
             Expr::Quote(_) => {}
+
+            // Atom expressions
+            Expr::Atom(value) => {
+                self.find_free_vars_lambda_inner(value, local, free);
+            }
+            Expr::Swap(atom, func) => {
+                self.find_free_vars_lambda_inner(atom, local, free);
+                self.find_free_vars_lambda_inner(func, local, free);
+            }
+            Expr::Reset(atom, value) => {
+                self.find_free_vars_lambda_inner(atom, local, free);
+                self.find_free_vars_lambda_inner(value, local, free);
+            }
+            Expr::AtomDeref(atom) => {
+                self.find_free_vars_lambda_inner(atom, local, free);
+            }
+            Expr::CompareAndSet { atom, old, new } => {
+                self.find_free_vars_lambda_inner(atom, local, free);
+                self.find_free_vars_lambda_inner(old, local, free);
+                self.find_free_vars_lambda_inner(new, local, free);
+            }
+
+            // Persistent collections
+            Expr::Vector(elements) => {
+                for elem in elements {
+                    self.find_free_vars_lambda_inner(elem, local, free);
+                }
+            }
+            Expr::Map(pairs) => {
+                for (k, v) in pairs {
+                    self.find_free_vars_lambda_inner(k, local, free);
+                    self.find_free_vars_lambda_inner(v, local, free);
+                }
+            }
+            Expr::Keyword(_) => {}
         }
     }
 
@@ -569,6 +639,8 @@ pub struct ThreadSafetyChecker<'a> {
     errors: Errors,
     /// Whether we're currently in a plet context
     in_plet: bool,
+    /// Bindings that are atoms (set! is allowed on these in plet)
+    atom_bindings: HashSet<String>,
 }
 
 impl<'a> ThreadSafetyChecker<'a> {
@@ -577,6 +649,7 @@ impl<'a> ThreadSafetyChecker<'a> {
             closure_info,
             errors: Errors::new(),
             in_plet: false,
+            atom_bindings: HashSet::new(),
         }
     }
 
@@ -586,6 +659,16 @@ impl<'a> ThreadSafetyChecker<'a> {
             self.check_item(item);
         }
         self.errors.into_result(())
+    }
+
+    /// Check if an expression creates an atom
+    fn is_atom_expr(expr: &Expr) -> bool {
+        matches!(expr, Expr::Atom(_))
+    }
+
+    /// Check if a function name is a parallel operation that requires Sync closures
+    fn is_parallel_op(name: &str) -> bool {
+        matches!(name, "pmap" | "pfilter" | "preduce" | "pfor" | "spawn")
     }
 
     fn check_item(&mut self, item: &Spanned<Item>) {
@@ -618,14 +701,20 @@ impl<'a> ThreadSafetyChecker<'a> {
 
             Expr::Plet(bindings, body) => {
                 let was_in_plet = self.in_plet;
+                let saved_atom_bindings = self.atom_bindings.clone();
                 self.in_plet = true;
 
+                // Track which bindings are atoms
                 for binding in bindings {
+                    if Self::is_atom_expr(&binding.value.node) {
+                        self.atom_bindings.insert(binding.name.node.clone());
+                    }
                     self.check_expr(&binding.value);
                 }
                 self.check_expr(body);
 
                 self.in_plet = was_in_plet;
+                self.atom_bindings = saved_atom_bindings;
             }
 
             Expr::Let(bindings, body) => {
@@ -636,6 +725,28 @@ impl<'a> ThreadSafetyChecker<'a> {
             }
 
             Expr::Call(func, args) => {
+                // Check if this is a parallel operation (pmap, pfilter, etc.)
+                if let Expr::Var(name) = &func.node {
+                    if Self::is_parallel_op(name) {
+                        // First argument should be a Sync/Pure closure
+                        if let Some(fn_arg) = args.first() {
+                            if let Expr::Lambda(_, _) = &fn_arg.node {
+                                if let Some(info) = self.closure_info.get(&fn_arg.span) {
+                                    if !info.color.is_thread_safe() {
+                                        self.errors.push(CompileError::thread_safety(
+                                            fn_arg.span,
+                                            format!(
+                                                "{} requires a thread-safe closure, but this closure {}",
+                                                name,
+                                                info.color.thread_safety_reason()
+                                            ),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 self.check_expr(func);
                 for arg in args {
                     self.check_expr(arg);
@@ -654,7 +765,17 @@ impl<'a> ThreadSafetyChecker<'a> {
                 }
             }
 
-            Expr::Set(_, value) => {
+            Expr::Set(name, value) => {
+                // In plet context, only atom bindings can be mutated
+                if self.in_plet && !self.atom_bindings.contains(&name.node) {
+                    self.errors.push(CompileError::thread_safety(
+                        name.span,
+                        format!(
+                            "cannot mutate non-atom binding '{}' in plet; use (atom value) for mutable state",
+                            name.node
+                        ),
+                    ));
+                }
                 self.check_expr(value);
             }
 
@@ -679,6 +800,40 @@ impl<'a> ThreadSafetyChecker<'a> {
                 }
             }
 
+            // Atom expressions
+            Expr::Atom(value) => {
+                self.check_expr(value);
+            }
+            Expr::Swap(atom, func) => {
+                self.check_expr(atom);
+                self.check_expr(func);
+            }
+            Expr::Reset(atom, value) => {
+                self.check_expr(atom);
+                self.check_expr(value);
+            }
+            Expr::AtomDeref(atom) => {
+                self.check_expr(atom);
+            }
+            Expr::CompareAndSet { atom, old, new } => {
+                self.check_expr(atom);
+                self.check_expr(old);
+                self.check_expr(new);
+            }
+
+            // Persistent collections
+            Expr::Vector(elements) => {
+                for elem in elements {
+                    self.check_expr(elem);
+                }
+            }
+            Expr::Map(pairs) => {
+                for (k, v) in pairs {
+                    self.check_expr(k);
+                    self.check_expr(v);
+                }
+            }
+
             // Literals and simple expressions
             Expr::Int(_)
             | Expr::Float(_)
@@ -686,7 +841,8 @@ impl<'a> ThreadSafetyChecker<'a> {
             | Expr::String(_)
             | Expr::Nil
             | Expr::Var(_)
-            | Expr::Quote(_) => {}
+            | Expr::Quote(_)
+            | Expr::Keyword(_) => {}
         }
     }
 }
@@ -903,5 +1059,119 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("plet"));
         assert!(errors[0].message.contains("borrowed"));
+    }
+
+    #[test]
+    fn test_plet_non_atom_mutation_error() {
+        // set! on non-atom binding in plet is an error
+        let result = check_thread_safety(
+            r#"
+            (defun foo ()
+              (plet ((counter 0))
+                (set! counter (+ counter 1))))
+            "#,
+        );
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("cannot mutate non-atom binding"));
+        assert!(errors[0].message.contains("counter"));
+    }
+
+    #[test]
+    fn test_plet_atom_mutation_ok() {
+        // set! via atom operations (swap!, reset!) is OK in plet
+        let result = check_thread_safety(
+            r#"
+            (defun foo ()
+              (plet ((counter (atom 0)))
+                (reset! counter 1)))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_plet_with_atom_swap_ok() {
+        // Using swap! with atoms in plet is OK
+        let result = check_thread_safety(
+            r#"
+            (defun foo ()
+              (plet ((counter (atom 0)))
+                (swap! counter inc)))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_nested_plet_respects_scopes() {
+        // Atom bindings from outer plet should be visible in inner code
+        let result = check_thread_safety(
+            r#"
+            (defun foo ()
+              (plet ((counter (atom 0)))
+                (do
+                  (reset! counter 1)
+                  @counter)))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_pmap_pure_closure_ok() {
+        // Pure closures (no captures) are OK with pmap
+        let result = check_thread_safety(
+            r#"
+            (defun foo (data)
+              (pmap (fn (x) (* x x)) data))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_pmap_sync_closure_ok() {
+        // Sync closures (move captures) are OK with pmap
+        let result = check_thread_safety(
+            r#"
+            (defun foo (data)
+              (let ((factor 2))
+                (pmap (fn (x) (* x factor)) data)))
+            "#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_pmap_local_closure_error() {
+        // Local closures (borrow captures) are NOT OK with pmap
+        let result = check_thread_safety(
+            r#"
+            (defun foo (data)
+              (let ((factor 2))
+                (pmap (fn (x) (* (deref (ref factor)) x)) data)))
+            "#,
+        );
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("pmap"));
+        assert!(errors[0].message.contains("thread-safe"));
+    }
+
+    #[test]
+    fn test_pfilter_requires_sync() {
+        // pfilter also requires Sync closures
+        let result = check_thread_safety(
+            r#"
+            (defun foo (data)
+              (let ((x 1))
+                (pfilter (fn (y) (= (deref (ref x)) y)) data)))
+            "#,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err()[0].message.contains("pfilter"));
     }
 }

@@ -343,6 +343,76 @@ impl Inferencer {
             Expr::Quote(_) => Ty::Named("Symbol".to_string()),
 
             Expr::Unsafe(inner) => self.infer_expr(inner, env),
+
+            // Atom expressions (ADR-011)
+            Expr::Atom(value) => {
+                // (atom value) creates Atom<T> where T is the type of value
+                let inner_ty = self.infer_expr(value, env);
+                Ty::Named(format!("Atom<{}>", inner_ty))
+            }
+
+            Expr::AtomDeref(atom) => {
+                // @atom returns the inner type of the atom
+                let atom_ty = self.infer_expr(atom, env);
+                // For now, atoms contain i64
+                // TODO: Extract inner type from Atom<T>
+                let _ = atom_ty; // Use to avoid warning
+                Ty::I64
+            }
+
+            Expr::Reset(atom, value) => {
+                // (reset! atom value) returns the new value
+                let _ = self.infer_expr(atom, env);
+                self.infer_expr(value, env)
+            }
+
+            Expr::Swap(atom, func) => {
+                // (swap! atom fn) returns the new value
+                let _ = self.infer_expr(atom, env);
+                let func_ty = self.infer_expr(func, env);
+                // fn should be T -> T, return T
+                match func_ty {
+                    Ty::Fn(_, ret) => *ret,
+                    _ => Ty::I64, // Default to i64 for atoms
+                }
+            }
+
+            Expr::CompareAndSet { atom, old, new } => {
+                // (compare-and-set! atom old new) returns bool (success/failure)
+                let _ = self.infer_expr(atom, env);
+                let old_ty = self.infer_expr(old, env);
+                let new_ty = self.infer_expr(new, env);
+                let _ = self.unify(&old_ty, &new_ty, expr.span);
+                Ty::Bool
+            }
+
+            // Persistent collections (ADR-018)
+            Expr::Vector(elements) => {
+                let elem_ty = self.fresh_var();
+                for elem in elements {
+                    let ty = self.infer_expr(elem, env);
+                    let _ = self.unify(&ty, &elem_ty, elem.span);
+                }
+                Ty::Named(format!("Vector<{}>", self.apply(&elem_ty)))
+            }
+
+            Expr::Map(pairs) => {
+                let key_ty = self.fresh_var();
+                let val_ty = self.fresh_var();
+                for (k, v) in pairs {
+                    let kt = self.infer_expr(k, env);
+                    let vt = self.infer_expr(v, env);
+                    let _ = self.unify(&kt, &key_ty, k.span);
+                    let _ = self.unify(&vt, &val_ty, v.span);
+                }
+                Ty::Named(format!(
+                    "Map<{}, {}>",
+                    self.apply(&key_ty),
+                    self.apply(&val_ty)
+                ))
+            }
+
+            Expr::Keyword(_) => Ty::Named("Keyword".to_string()),
         }
     }
 

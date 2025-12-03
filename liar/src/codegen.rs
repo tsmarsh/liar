@@ -275,6 +275,89 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<String> {
             // Unsafe just compiles the inner expression
             generate_expr(inner)
         }
+
+        // Atom expressions (ADR-011)
+        Expr::Atom(value) => {
+            // (atom value) - create atomic cell
+            // Allocates RC-managed atomic cell, initializes with value
+            let value = generate_expr(value)?;
+            // Use rc-alloc for reference counting, atomic-store for initial value
+            Ok(format!(
+                "(let ((_atom (rc-alloc i64))) (atomic-store seq_cst {} (rc-ptr _atom)) _atom)",
+                value
+            ))
+        }
+
+        Expr::AtomDeref(atom) => {
+            // @atom - atomic read
+            let atom = generate_expr(atom)?;
+            Ok(format!("(atomic-load seq_cst i64 (rc-ptr {}))", atom))
+        }
+
+        Expr::Reset(atom, value) => {
+            // (reset! atom value) - atomic set
+            let atom = generate_expr(atom)?;
+            let value = generate_expr(value)?;
+            // Store and return new value
+            Ok(format!(
+                "(let ((_new {})) (atomic-store seq_cst _new (rc-ptr {})) _new)",
+                value, atom
+            ))
+        }
+
+        Expr::Swap(atom, func) => {
+            // (swap! atom fn) - atomic update
+            // Generates a CAS loop: load current, apply fn, try CAS, retry on failure
+            let atom = generate_expr(atom)?;
+            let func = generate_expr(func)?;
+            // For now, generate a simplified version that assumes single-threaded
+            // Full implementation needs CAS loop with retry
+            Ok(format!(
+                "(let ((_ptr (rc-ptr {}))) \
+                   (let ((_old (atomic-load seq_cst i64 _ptr))) \
+                     (let ((_new (call @{} _old))) \
+                       (atomic-store seq_cst _new _ptr) \
+                       _new)))",
+                atom, func
+            ))
+        }
+
+        Expr::CompareAndSet { atom, old, new } => {
+            // (compare-and-set! atom old new) - CAS operation
+            // Returns true if successful, false otherwise
+            let atom = generate_expr(atom)?;
+            let old = generate_expr(old)?;
+            let new = generate_expr(new)?;
+            Ok(format!(
+                "(let ((_result (cmpxchg seq_cst (rc-ptr {}) {} {}))) (extractvalue _result 1))",
+                atom, old, new
+            ))
+        }
+
+        // Persistent collections (ADR-018)
+        Expr::Vector(elements) => {
+            // Generate a persistent vector
+            // For now, create a simple representation
+            let elems: Result<Vec<String>> = elements.iter().map(generate_expr).collect();
+            let elems = elems?;
+            Ok(format!("(vec {})", elems.join(" ")))
+        }
+
+        Expr::Map(pairs) => {
+            // Generate a persistent map
+            let mut pair_strs = Vec::new();
+            for (k, v) in pairs {
+                let key = generate_expr(k)?;
+                let val = generate_expr(v)?;
+                pair_strs.push(format!("{} {}", key, val));
+            }
+            Ok(format!("(map {})", pair_strs.join(" ")))
+        }
+
+        Expr::Keyword(name) => {
+            // Keywords are interned strings
+            Ok(format!("(keyword {})", name))
+        }
     }
 }
 
@@ -587,5 +670,85 @@ mod tests {
         // clone creates a copy (for RC, increments refcount)
         let lir = compile("(defun clone-it (x) (clone x))");
         assert!(lir.contains("rc-clone"), "clone should use rc-clone");
+    }
+
+    #[test]
+    fn test_atom_create() {
+        let lir = compile("(defun make-counter () (atom 0))");
+        assert!(lir.contains("rc-alloc"), "atom should use rc-alloc");
+        assert!(
+            lir.contains("atomic-store"),
+            "atom should use atomic-store for initialization"
+        );
+    }
+
+    #[test]
+    fn test_atom_deref() {
+        // @atom reads the current value
+        let lir = compile("(defun read-atom (a) @a)");
+        assert!(
+            lir.contains("atomic-load"),
+            "atom deref should use atomic-load"
+        );
+        assert!(lir.contains("seq_cst"), "should use seq_cst ordering");
+    }
+
+    #[test]
+    fn test_atom_reset() {
+        let lir = compile("(defun set-atom (a v) (reset! a v))");
+        assert!(
+            lir.contains("atomic-store"),
+            "reset! should use atomic-store"
+        );
+    }
+
+    #[test]
+    fn test_atom_swap() {
+        let lir = compile("(defun inc-atom (a) (swap! a inc))");
+        assert!(
+            lir.contains("atomic-load"),
+            "swap! should load current value"
+        );
+        assert!(
+            lir.contains("call @inc"),
+            "swap! should call update function"
+        );
+        assert!(lir.contains("atomic-store"), "swap! should store new value");
+    }
+
+    #[test]
+    fn test_atom_compare_and_set() {
+        let lir = compile("(defun cas-atom (a old new) (compare-and-set! a old new))");
+        assert!(
+            lir.contains("cmpxchg"),
+            "compare-and-set! should use cmpxchg"
+        );
+        assert!(
+            lir.contains("extractvalue"),
+            "should extract success flag from cmpxchg result"
+        );
+    }
+
+    #[test]
+    fn test_vector_literal() {
+        let lir = compile("(defun make-vec () [1 2 3])");
+        assert!(lir.contains("(vec"));
+        assert!(lir.contains("(i64 1)"));
+        assert!(lir.contains("(i64 2)"));
+        assert!(lir.contains("(i64 3)"));
+    }
+
+    #[test]
+    fn test_map_literal() {
+        let lir = compile("(defun make-map () {:a 1 :b 2})");
+        assert!(lir.contains("(map"));
+        assert!(lir.contains("(keyword a)"));
+        assert!(lir.contains("(i64 1)"));
+    }
+
+    #[test]
+    fn test_keyword_literal() {
+        let lir = compile("(defun get-key () :foo)");
+        assert!(lir.contains("(keyword foo)"));
     }
 }

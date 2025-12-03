@@ -303,6 +303,41 @@ impl Resolver {
             Expr::Quote(_) => {
                 // Quoted symbols don't need resolution
             }
+
+            // Atom expressions (ADR-011)
+            Expr::Atom(value) => {
+                self.resolve_expr(value);
+            }
+            Expr::AtomDeref(atom) => {
+                self.resolve_expr(atom);
+            }
+            Expr::Reset(atom, value) => {
+                self.resolve_expr(atom);
+                self.resolve_expr(value);
+            }
+            Expr::Swap(atom, func) => {
+                self.resolve_expr(atom);
+                self.resolve_expr(func);
+            }
+            Expr::CompareAndSet { atom, old, new } => {
+                self.resolve_expr(atom);
+                self.resolve_expr(old);
+                self.resolve_expr(new);
+            }
+
+            // Persistent collections (ADR-018)
+            Expr::Vector(elements) => {
+                for elem in elements {
+                    self.resolve_expr(elem);
+                }
+            }
+            Expr::Map(pairs) => {
+                for (k, v) in pairs {
+                    self.resolve_expr(k);
+                    self.resolve_expr(v);
+                }
+            }
+            Expr::Keyword(_) => {}
         }
     }
 

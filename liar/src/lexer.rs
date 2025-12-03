@@ -19,6 +19,7 @@ pub enum TokenKind {
     Float(f64),
     String(String),
     Symbol(String),
+    Keyword(String), // :foo
 
     // Keywords
     Defun,
@@ -45,6 +46,13 @@ pub enum TokenKind {
     Amp,   // &
     Dot,   // .
     Arrow, // ->
+    At,    // @ (atom deref)
+
+    // Atom keywords
+    Atom,          // atom
+    Swap,          // swap!
+    Reset,         // reset!
+    CompareAndSet, // compare-and-set!
 
     // Special
     Eof,
@@ -100,7 +108,19 @@ impl<'a> Lexer<'a> {
             '{' => TokenKind::LBrace,
             '}' => TokenKind::RBrace,
             '\'' => TokenKind::Quote,
-            ':' => TokenKind::Colon,
+            ':' => {
+                // Check if this is a keyword (:foo) or just a colon
+                if let Some(c) = self.peek_char() {
+                    if is_symbol_start(c) || c.is_alphabetic() {
+                        // It's a keyword like :foo
+                        return Ok(Token::new(
+                            self.lex_keyword(start),
+                            Span::new(start, self.pos),
+                        ));
+                    }
+                }
+                TokenKind::Colon
+            }
             '&' => TokenKind::Amp,
             '.' => TokenKind::Dot,
 
@@ -108,6 +128,8 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 TokenKind::Arrow
             }
+
+            '@' => TokenKind::At,
 
             '"' => self.lex_string(start)?,
 
@@ -239,6 +261,21 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn lex_keyword(&mut self, _start: usize) -> TokenKind {
+        // We've already consumed the ':', now read the symbol part
+        let mut s = String::new();
+
+        while let Some(c) = self.peek_char() {
+            if is_symbol_continue(c) || c.is_alphabetic() {
+                s.push(self.advance().unwrap());
+            } else {
+                break;
+            }
+        }
+
+        TokenKind::Keyword(s)
+    }
+
     fn lex_symbol(&mut self, first: char, _start: usize) -> TokenKind {
         let mut s = String::new();
         s.push(first);
@@ -270,6 +307,11 @@ impl<'a> Lexer<'a> {
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "nil" => TokenKind::Nil,
+            // Atom keywords
+            "atom" => TokenKind::Atom,
+            "swap!" => TokenKind::Swap,
+            "reset!" => TokenKind::Reset,
+            "compare-and-set!" => TokenKind::CompareAndSet,
             _ => TokenKind::Symbol(s),
         }
     }
