@@ -1,6 +1,6 @@
 //! Code generation - emit lIR from liar AST
 
-use crate::ast::{Defun, Expr, Item, Program};
+use crate::ast::{Def, Defstruct, Defun, Expr, Item, Program};
 use crate::error::{CompileError, Result};
 use crate::span::Spanned;
 
@@ -10,8 +10,10 @@ pub fn generate(program: &Program) -> Result<String> {
 
     for item in &program.items {
         let lir = generate_item(item)?;
-        output.push_str(&lir);
-        output.push('\n');
+        if !lir.is_empty() {
+            output.push_str(&lir);
+            output.push('\n');
+        }
     }
 
     Ok(output)
@@ -26,14 +28,51 @@ pub fn generate_expr_standalone(expr: &Spanned<Expr>) -> Result<String> {
 fn generate_item(item: &Spanned<Item>) -> Result<String> {
     match &item.node {
         Item::Defun(defun) => generate_defun(defun),
-        Item::Def(_def) => {
-            // TODO: Generate global constant
-            Ok(String::new())
-        }
-        Item::Defstruct(_s) => {
-            // TODO: Generate struct definition
-            Ok(String::new())
-        }
+        Item::Def(def) => generate_def(def),
+        Item::Defstruct(s) => generate_defstruct(s),
+    }
+}
+
+/// Generate lIR for a constant definition
+fn generate_def(def: &Def) -> Result<String> {
+    let name = &def.name.node;
+    let value = generate_expr(&def.value)?;
+    // Global constants become let bindings at top level
+    // For now, we'll skip these as they need special handling
+    Ok(format!("; def {} = {}", name, value))
+}
+
+/// Generate lIR for a struct definition
+fn generate_defstruct(defstruct: &Defstruct) -> Result<String> {
+    let name = &defstruct.name.node;
+    let fields: Vec<String> = defstruct
+        .fields
+        .iter()
+        .map(|f| {
+            // Convert liar type to lIR type
+            liar_type_to_lir(&f.ty.node)
+        })
+        .collect();
+    Ok(format!("(defstruct {} ({}))", name, fields.join(" ")))
+}
+
+/// Convert a liar type to lIR type string
+fn liar_type_to_lir(ty: &crate::ast::Type) -> String {
+    use crate::ast::Type;
+    match ty {
+        Type::Named(name) => match name.as_str() {
+            "i8" | "i16" | "i32" | "i64" => name.clone(),
+            "int" => "i64".to_string(),
+            "float" | "f32" => "float".to_string(),
+            "double" | "f64" => "double".to_string(),
+            "bool" => "i1".to_string(),
+            "ptr" => "ptr".to_string(),
+            _ => format!("%struct.{}", name), // Assume user-defined struct
+        },
+        Type::Ref(_) | Type::RefMut(_) => "ptr".to_string(),
+        Type::Unit => "void".to_string(),
+        Type::Fn(_, _) => "ptr".to_string(), // Function pointers
+        Type::Tuple(_) => "ptr".to_string(), // Tuples as pointers for now
     }
 }
 
@@ -41,18 +80,32 @@ fn generate_item(item: &Spanned<Item>) -> Result<String> {
 fn generate_defun(defun: &Defun) -> Result<String> {
     let name = &defun.name.node;
 
-    // For now, assume all functions return i64 and take i64 params
+    // Determine return type
+    let ret_type = defun
+        .return_type
+        .as_ref()
+        .map(|t| liar_type_to_lir(&t.node))
+        .unwrap_or_else(|| "i64".to_string());
+
+    // Generate parameters
     let params: Vec<String> = defun
         .params
         .iter()
-        .map(|p| format!("(i64 {})", p.name.node))
+        .map(|p| {
+            let ty =
+                p.ty.as_ref()
+                    .map(|t| liar_type_to_lir(&t.node))
+                    .unwrap_or_else(|| "i64".to_string());
+            format!("({} {})", ty, p.name.node)
+        })
         .collect();
 
     let body = generate_expr(&defun.body)?;
 
     Ok(format!(
-        "(define ({} i64) ({}) (block entry (ret {})))",
+        "(define ({} {}) ({}) (block entry (ret {})))",
         name,
+        ret_type,
         params.join(" "),
         body
     ))
@@ -64,109 +117,14 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<String> {
         Expr::Int(n) => Ok(format!("(i64 {})", n)),
         Expr::Float(f) => Ok(format!("(double {})", f)),
         Expr::Bool(b) => Ok(format!("(i1 {})", if *b { 1 } else { 0 })),
+        Expr::String(s) => {
+            // Strings become global constants - for now just escape them
+            Ok(format!("(string {:?})", s))
+        }
+        Expr::Nil => Ok("(ptr null)".to_string()),
         Expr::Var(name) => Ok(name.clone()),
 
-        Expr::Call(func, args) => {
-            // Check for builtin operators
-            if let Expr::Var(op) = &func.node {
-                match op.as_str() {
-                    "+" => {
-                        if args.len() != 2 {
-                            return Err(CompileError::codegen(
-                                expr.span,
-                                "+ requires exactly 2 arguments",
-                            ));
-                        }
-                        let a = generate_expr(&args[0])?;
-                        let b = generate_expr(&args[1])?;
-                        return Ok(format!("(add {} {})", a, b));
-                    }
-                    "-" => {
-                        if args.len() != 2 {
-                            return Err(CompileError::codegen(
-                                expr.span,
-                                "- requires exactly 2 arguments",
-                            ));
-                        }
-                        let a = generate_expr(&args[0])?;
-                        let b = generate_expr(&args[1])?;
-                        return Ok(format!("(sub {} {})", a, b));
-                    }
-                    "*" => {
-                        if args.len() != 2 {
-                            return Err(CompileError::codegen(
-                                expr.span,
-                                "* requires exactly 2 arguments",
-                            ));
-                        }
-                        let a = generate_expr(&args[0])?;
-                        let b = generate_expr(&args[1])?;
-                        return Ok(format!("(mul {} {})", a, b));
-                    }
-                    "/" => {
-                        if args.len() != 2 {
-                            return Err(CompileError::codegen(
-                                expr.span,
-                                "/ requires exactly 2 arguments",
-                            ));
-                        }
-                        let a = generate_expr(&args[0])?;
-                        let b = generate_expr(&args[1])?;
-                        return Ok(format!("(sdiv {} {})", a, b));
-                    }
-                    "<" => {
-                        if args.len() != 2 {
-                            return Err(CompileError::codegen(
-                                expr.span,
-                                "< requires exactly 2 arguments",
-                            ));
-                        }
-                        let a = generate_expr(&args[0])?;
-                        let b = generate_expr(&args[1])?;
-                        return Ok(format!("(icmp slt {} {})", a, b));
-                    }
-                    ">" => {
-                        if args.len() != 2 {
-                            return Err(CompileError::codegen(
-                                expr.span,
-                                "> requires exactly 2 arguments",
-                            ));
-                        }
-                        let a = generate_expr(&args[0])?;
-                        let b = generate_expr(&args[1])?;
-                        return Ok(format!("(icmp sgt {} {})", a, b));
-                    }
-                    "=" | "==" => {
-                        if args.len() != 2 {
-                            return Err(CompileError::codegen(
-                                expr.span,
-                                "= requires exactly 2 arguments",
-                            ));
-                        }
-                        let a = generate_expr(&args[0])?;
-                        let b = generate_expr(&args[1])?;
-                        return Ok(format!("(icmp eq {} {})", a, b));
-                    }
-                    _ => {}
-                }
-            }
-
-            // Regular function call
-            let func_name = match &func.node {
-                Expr::Var(name) => name.clone(),
-                _ => {
-                    return Err(CompileError::codegen(
-                        func.span,
-                        "indirect function calls not yet supported",
-                    ))
-                }
-            };
-
-            let args_str: Result<Vec<String>> = args.iter().map(generate_expr).collect();
-            let args_str = args_str?;
-
-            Ok(format!("(call @{} {})", func_name, args_str.join(" ")))
-        }
+        Expr::Call(func, args) => generate_call(expr, func, args),
 
         Expr::If(cond, then, else_) => {
             let cond = generate_expr(cond)?;
@@ -177,7 +135,7 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<String> {
         }
 
         Expr::Let(bindings, body) => {
-            // For now, generate nested let bindings
+            // Generate nested let bindings
             let mut result = generate_expr(body)?;
             for binding in bindings.iter().rev() {
                 let value = generate_expr(&binding.value)?;
@@ -186,11 +144,199 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<String> {
             Ok(result)
         }
 
-        _ => Err(CompileError::codegen(
-            expr.span,
-            format!("unsupported expression: {:?}", expr.node),
-        )),
+        Expr::Plet(bindings, body) => {
+            // Plet is the same as let for codegen (threading handled elsewhere)
+            let mut result = generate_expr(body)?;
+            for binding in bindings.iter().rev() {
+                let value = generate_expr(&binding.value)?;
+                result = format!("(let (({} {})) {})", binding.name.node, value, result);
+            }
+            Ok(result)
+        }
+
+        Expr::Do(exprs) => {
+            // Do block - evaluate expressions in sequence, return last
+            if exprs.is_empty() {
+                return Ok("(i64 0)".to_string()); // Unit value
+            }
+            if exprs.len() == 1 {
+                return generate_expr(&exprs[0]);
+            }
+            // Generate as nested lets with dummy bindings for discarded values
+            let mut result = generate_expr(exprs.last().unwrap())?;
+            for (i, e) in exprs.iter().rev().skip(1).enumerate() {
+                let value = generate_expr(e)?;
+                result = format!("(let ((_discard{} {})) {})", i, value, result);
+            }
+            Ok(result)
+        }
+
+        Expr::Lambda(_params, _body) => {
+            // Lambdas need closure conversion - placeholder for now
+            Err(CompileError::codegen(
+                expr.span,
+                "lambdas require closure analysis (not yet implemented)",
+            ))
+        }
+
+        Expr::Set(name, value) => {
+            let value = generate_expr(value)?;
+            // Set generates a store instruction
+            Ok(format!("(store {} {})", value, name.node))
+        }
+
+        Expr::Ref(inner) => {
+            // Reference - for now just pass through
+            generate_expr(inner)
+        }
+
+        Expr::RefMut(inner) => {
+            // Mutable reference - for now just pass through
+            generate_expr(inner)
+        }
+
+        Expr::Deref(inner) => {
+            let inner = generate_expr(inner)?;
+            // Dereference - generate a load
+            Ok(format!("(load i64 {})", inner))
+        }
+
+        Expr::Struct(name, fields) => {
+            // Struct construction
+            // This needs alloca + stores
+            let field_values: Result<Vec<String>> =
+                fields.iter().map(|(_, v)| generate_expr(v)).collect();
+            let field_values = field_values?;
+
+            // Generate inline struct literal
+            let fields_str = field_values.join(" ");
+            Ok(format!("(struct %struct.{} {})", name, fields_str))
+        }
+
+        Expr::Field(obj, field) => {
+            let obj = generate_expr(obj)?;
+            // Field access - needs GEP
+            Ok(format!("(field {} {})", obj, field.node))
+        }
+
+        Expr::Match(_scrutinee, _arms) => {
+            // Match needs branch codegen
+            Err(CompileError::codegen(
+                expr.span,
+                "match requires control flow codegen (not yet implemented)",
+            ))
+        }
+
+        Expr::Quote(sym) => {
+            // Quoted symbol becomes a symbol literal
+            Ok(format!("(symbol {})", sym))
+        }
+
+        Expr::Unsafe(inner) => {
+            // Unsafe just compiles the inner expression
+            generate_expr(inner)
+        }
     }
+}
+
+/// Generate code for a function call (handles builtins)
+fn generate_call(
+    expr: &Spanned<Expr>,
+    func: &Spanned<Expr>,
+    args: &[Spanned<Expr>],
+) -> Result<String> {
+    // Check for builtin operators
+    if let Expr::Var(op) = &func.node {
+        if let Some(result) = generate_builtin(expr, op, args)? {
+            return Ok(result);
+        }
+    }
+
+    // Regular function call
+    let func_name = match &func.node {
+        Expr::Var(name) => name.clone(),
+        _ => {
+            return Err(CompileError::codegen(
+                func.span,
+                "indirect function calls not yet supported",
+            ))
+        }
+    };
+
+    let args_str: Result<Vec<String>> = args.iter().map(generate_expr).collect();
+    let args_str = args_str?;
+
+    if args_str.is_empty() {
+        Ok(format!("(call @{})", func_name))
+    } else {
+        Ok(format!("(call @{} {})", func_name, args_str.join(" ")))
+    }
+}
+
+/// Generate code for builtin operations
+fn generate_builtin(
+    expr: &Spanned<Expr>,
+    op: &str,
+    args: &[Spanned<Expr>],
+) -> Result<Option<String>> {
+    fn binary_op(
+        expr: &Spanned<Expr>,
+        op_name: &str,
+        lir_op: &str,
+        args: &[Spanned<Expr>],
+    ) -> Result<String> {
+        if args.len() != 2 {
+            return Err(CompileError::codegen(
+                expr.span,
+                format!("{} requires exactly 2 arguments", op_name),
+            ));
+        }
+        let a = generate_expr(&args[0])?;
+        let b = generate_expr(&args[1])?;
+        Ok(format!("({} {} {})", lir_op, a, b))
+    }
+
+    fn unary_op(
+        expr: &Spanned<Expr>,
+        op_name: &str,
+        lir_op: &str,
+        args: &[Spanned<Expr>],
+    ) -> Result<String> {
+        if args.len() != 1 {
+            return Err(CompileError::codegen(
+                expr.span,
+                format!("{} requires exactly 1 argument", op_name),
+            ));
+        }
+        let a = generate_expr(&args[0])?;
+        Ok(format!("({} {})", lir_op, a))
+    }
+
+    let result = match op {
+        // Arithmetic
+        "+" => Some(binary_op(expr, "+", "add", args)?),
+        "-" => Some(binary_op(expr, "-", "sub", args)?),
+        "*" => Some(binary_op(expr, "*", "mul", args)?),
+        "/" => Some(binary_op(expr, "/", "sdiv", args)?),
+        "rem" => Some(binary_op(expr, "rem", "srem", args)?),
+
+        // Comparison
+        "=" | "==" => Some(binary_op(expr, "=", "icmp eq", args)?),
+        "!=" => Some(binary_op(expr, "!=", "icmp ne", args)?),
+        "<" => Some(binary_op(expr, "<", "icmp slt", args)?),
+        ">" => Some(binary_op(expr, ">", "icmp sgt", args)?),
+        "<=" => Some(binary_op(expr, "<=", "icmp sle", args)?),
+        ">=" => Some(binary_op(expr, ">=", "icmp sge", args)?),
+
+        // Boolean
+        "not" => Some(unary_op(expr, "not", "xor (i1 1)", args)?),
+        "and" => Some(binary_op(expr, "and", "and", args)?),
+        "or" => Some(binary_op(expr, "or", "or", args)?),
+
+        _ => None,
+    };
+
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -198,13 +344,61 @@ mod tests {
     use super::*;
     use crate::parser::Parser;
 
-    #[test]
-    fn test_generate_simple() {
-        let source = "(defun add (a b) (+ a b))";
+    fn compile(source: &str) -> String {
         let mut parser = Parser::new(source).unwrap();
         let program = parser.parse_program().unwrap();
-        let lir = generate(&program).unwrap();
+        generate(&program).unwrap()
+    }
+
+    #[test]
+    fn test_generate_simple() {
+        let lir = compile("(defun add (a b) (+ a b))");
         assert!(lir.contains("define"));
         assert!(lir.contains("add"));
+    }
+
+    #[test]
+    fn test_comparison_ops() {
+        let lir = compile("(defun cmp (a b) (< a b))");
+        assert!(lir.contains("icmp slt"));
+
+        let lir = compile("(defun cmp (a b) (<= a b))");
+        assert!(lir.contains("icmp sle"));
+
+        let lir = compile("(defun cmp (a b) (!= a b))");
+        assert!(lir.contains("icmp ne"));
+    }
+
+    #[test]
+    fn test_let_binding() {
+        let lir = compile("(defun foo () (let ((x 1) (y 2)) (+ x y)))");
+        assert!(lir.contains("let"));
+        assert!(lir.contains("(i64 1)"));
+        assert!(lir.contains("(i64 2)"));
+    }
+
+    #[test]
+    fn test_if_expr() {
+        let lir = compile("(defun max (a b) (if (> a b) a b))");
+        assert!(lir.contains("select"));
+        assert!(lir.contains("icmp sgt"));
+    }
+
+    #[test]
+    fn test_do_block() {
+        let lir = compile("(defun foo () (do 1 2 3))");
+        // Should return last value
+        assert!(lir.contains("(i64 3)"));
+    }
+
+    #[test]
+    fn test_function_call() {
+        let lir = compile(
+            r#"
+            (defun double (x) (* x 2))
+            (defun quad (x) (double (double x)))
+            "#,
+        );
+        assert!(lir.contains("call @double"));
     }
 }
