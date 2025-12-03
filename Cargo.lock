@@ -117,6 +117,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cfg_aliases"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
+
+[[package]]
 name = "clap"
 version = "4.5.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -626,6 +632,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "liar-cert"
+version = "0.1.0"
+dependencies = [
+ "cucumber",
+ "inkwell",
+ "liar",
+ "lir-codegen",
+ "lir-core",
+ "tokio",
+]
+
+[[package]]
+name = "liar-repl"
+version = "0.1.0"
+dependencies = [
+ "inkwell",
+ "liar",
+ "lir-codegen",
+ "lir-core",
+ "rustyline 15.0.0",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.177"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -699,7 +728,7 @@ dependencies = [
  "inkwell",
  "lir-codegen",
  "lir-core",
- "rustyline",
+ "rustyline 13.0.0",
 ]
 
 [[package]]
@@ -751,6 +780,18 @@ checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
 dependencies = [
  "bitflags",
  "cfg-if",
+ "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
  "libc",
 ]
 
@@ -954,12 +995,34 @@ dependencies = [
  "libc",
  "log",
  "memchr",
- "nix",
+ "nix 0.27.1",
  "radix_trie",
  "unicode-segmentation",
  "unicode-width 0.1.14",
  "utf8parse",
  "winapi",
+]
+
+[[package]]
+name = "rustyline"
+version = "15.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee1e066dc922e513bda599c6ccb5f3bb2b0ea5870a579448f2622993f0a9a2f"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "clipboard-win",
+ "fd-lock",
+ "home",
+ "libc",
+ "log",
+ "memchr",
+ "nix 0.29.0",
+ "radix_trie",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
+ "utf8parse",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

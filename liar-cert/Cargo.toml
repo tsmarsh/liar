@@ -1,0 +1,21 @@
+[package]
+name = "liar-cert"
+version.workspace = true
+edition.workspace = true
+description = "Cucumber test harness for liar feature specifications"
+
+[lib]
+path = "src/lib.rs"
+
+[[test]]
+name = "cert"
+harness = false
+path = "tests/cert.rs"
+
+[dependencies]
+liar = { path = "../liar" }
+lir-core = { path = "../lir-core" }
+lir-codegen = { path = "../lir-codegen" }
+inkwell = { version = "0.7.0", features = ["llvm21-1"] }
+cucumber = "0.21"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

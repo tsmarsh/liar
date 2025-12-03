@@ -1,0 +1,40 @@
+;; liar Standard Library
+;;
+;; Core functions and utilities
+
+;; Arithmetic
+
+(defun inc (x)
+  (+ x 1))
+
+(defun dec (x)
+  (- x 1))
+
+(defun abs (x)
+  (if (< x 0) (- 0 x) x))
+
+(defun square (x)
+  (* x x))
+
+(defun max (a b)
+  (if (> a b) a b))
+
+(defun min (a b)
+  (if (< a b) a b))
+
+;; Predicates
+
+(defun even? (n)
+  (= (rem n 2) 0))
+
+(defun odd? (n)
+  (= (rem n 2) 1))
+
+(defun zero? (n)
+  (= n 0))
+
+(defun pos? (n)
+  (> n 0))
+
+(defun neg? (n)
+  (< n 0))

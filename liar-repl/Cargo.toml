@@ -1,0 +1,16 @@
+[package]
+name = "liar-repl"
+version.workspace = true
+edition.workspace = true
+description = "Interactive REPL for liar language"
+
+[[bin]]
+name = "liar-repl"
+path = "src/main.rs"
+
+[dependencies]
+liar = { path = "../liar" }
+lir-core = { path = "../lir-core" }
+lir-codegen = { path = "../lir-codegen" }
+inkwell = { version = "0.7.0", features = ["llvm21-1"] }
+rustyline = "15"
