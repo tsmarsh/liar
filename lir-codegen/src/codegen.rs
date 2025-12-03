@@ -157,6 +157,10 @@ impl<'ctx> CodeGen<'ctx> {
             GepType::Scalar(s) => self
                 .scalar_to_basic_type(s)
                 .ok_or_else(|| CodeGenError::CodeGen("cannot GEP void type".to_string())),
+            GepType::Ptr => Ok(self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into()),
             GepType::Struct(name) => self
                 .struct_types
                 .get(name)

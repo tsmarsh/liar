@@ -1,0 +1,27 @@
+; fib.lir - Fibonacci with main
+
+; External declarations
+(declare atoi i32 (ptr))
+(declare printf i32 (ptr i64))
+
+; Recursive fibonacci
+(define (fib i64) ((i64 n))
+  (block entry
+    (br (icmp sle n (i64 1)) base recurse))
+  (block base
+    (ret n))
+  (block recurse
+    (let ((n1 (call @fib (sub n (i64 1))))
+          (n2 (call @fib (sub n (i64 2)))))
+      (ret (add n1 n2)))))
+
+; int main(int argc, char** argv)
+(define (main i32) ((i32 argc) (ptr argv))
+  (block entry
+    (let ((argv1-ptr (getelementptr ptr argv (i64 1)))
+          (argv1 (load ptr argv1-ptr))
+          (n32 (call @atoi argv1))
+          (n (sext i64 n32))
+          (result (call @fib n)))
+      (call @printf (string "%lld\n") result)
+      (ret (i32 0)))))

@@ -456,10 +456,11 @@ impl std::fmt::Display for ParamType {
     }
 }
 
-/// Type for getelementptr - can be scalar or named struct
+/// Type for getelementptr - can be scalar, ptr, or named struct
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GepType {
     Scalar(ScalarType),
+    Ptr,
     Struct(String), // Named struct (e.g., "point" for %struct.point)
 }
 
@@ -467,6 +468,7 @@ impl std::fmt::Display for GepType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Scalar(s) => write!(f, "{}", s),
+            Self::Ptr => write!(f, "ptr"),
             Self::Struct(name) => write!(f, "%struct.{}", name),
         }
     }

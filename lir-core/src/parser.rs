@@ -375,11 +375,12 @@ impl<'a> Parser<'a> {
             _ => false,
         };
 
-        // Parse the element type - could be scalar or %struct.name
+        // Parse the element type - could be scalar, ptr, or %struct.name
         let ty = match self.lexer.next_token_peeked()? {
             Some(Token::Ident(ref s)) if s.starts_with("%struct.") => {
                 GepType::Struct(s[8..].to_string()) // strip %struct. prefix
             }
+            Some(Token::Ident(ref s)) if s == "ptr" => GepType::Ptr,
             Some(Token::Ident(ref s)) => GepType::Scalar(self.type_from_name(s)?),
             Some(tok) => {
                 return Err(ParseError::Expected {
