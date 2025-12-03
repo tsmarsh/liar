@@ -45,7 +45,7 @@ pub fn compile(source: &str) -> std::result::Result<String, Vec<CompileError>> {
 
     // Type inference
     let mut type_env = TypeEnv::new();
-    infer::infer(&mut program, &mut type_env).map_err(|e| vec![e])?;
+    infer::infer(&program, &mut type_env).map_err(|e| vec![e])?;
 
     // Ownership checking
     ownership::check(&program).map_err(|e| vec![e])?;
