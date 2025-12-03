@@ -69,7 +69,9 @@ fn liar_type_to_lir(ty: &crate::ast::Type) -> String {
             "ptr" => "ptr".to_string(),
             _ => format!("%struct.{}", name), // Assume user-defined struct
         },
-        Type::Ref(_) | Type::RefMut(_) => "ptr".to_string(),
+        // Use lIR ownership types for references
+        Type::Ref(inner) => format!("ref {}", liar_type_to_lir(inner)),
+        Type::RefMut(inner) => format!("refmut {}", liar_type_to_lir(inner)),
         Type::Unit => "void".to_string(),
         Type::Fn(_, _) => "ptr".to_string(), // Function pointers
         Type::Tuple(_) => "ptr".to_string(), // Tuples as pointers for now
@@ -135,13 +137,48 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<String> {
         }
 
         Expr::Let(bindings, body) => {
-            // Generate nested let bindings
-            let mut result = generate_expr(body)?;
-            for binding in bindings.iter().rev() {
+            // Generate let bindings with ownership tracking
+            // We need to: 1) set up bindings, 2) evaluate body, 3) drop owned values
+
+            // First pass: collect binding info
+            let mut binding_info: Vec<(String, String, bool)> = Vec::new();
+            for binding in bindings.iter() {
                 let value = generate_expr(&binding.value)?;
-                result = format!("(let (({} {})) {})", binding.name.node, value, result);
+                let name = binding.name.node.clone();
+                // Check if this binding creates an owned value
+                let is_owned = value.contains("(alloc own") || value.contains("(rc-alloc");
+                binding_info.push((name, value, is_owned));
             }
-            Ok(result)
+
+            // Generate body
+            let body_code = generate_expr(body)?;
+
+            // Build the let chain with drops at the end
+            // Structure: (let ((a val_a)) (let ((b val_b)) ... (let ((_r body)) (drop a) (drop b) _r)))
+            let owned_names: Vec<&str> = binding_info
+                .iter()
+                .filter(|(_, _, is_owned)| *is_owned)
+                .map(|(name, _, _)| name.as_str())
+                .collect();
+
+            // Inner result with drops
+            let mut inner = if owned_names.is_empty() {
+                body_code
+            } else {
+                // Capture result, drop owned values, return result
+                let mut drop_seq = "_let_result".to_string();
+                for name in owned_names.iter().rev() {
+                    drop_seq = format!("(let ((__drop_tmp (drop {}))) {})", name, drop_seq);
+                }
+                format!("(let ((_let_result {})) {})", body_code, drop_seq)
+            };
+
+            // Wrap with let bindings (outermost first)
+            for (name, value, _) in binding_info.iter().rev() {
+                inner = format!("(let (({} {})) {})", name, value, inner);
+            }
+
+            Ok(inner)
         }
 
         Expr::Plet(bindings, body) => {
@@ -186,19 +223,21 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<String> {
         }
 
         Expr::Ref(inner) => {
-            // Reference - for now just pass through
-            generate_expr(inner)
+            // Create a shared borrow
+            let inner_val = generate_expr(inner)?;
+            Ok(format!("(borrow ref {})", inner_val))
         }
 
         Expr::RefMut(inner) => {
-            // Mutable reference - for now just pass through
-            generate_expr(inner)
+            // Create a mutable borrow
+            let inner_val = generate_expr(inner)?;
+            Ok(format!("(borrow refmut {})", inner_val))
         }
 
         Expr::Deref(inner) => {
-            let inner = generate_expr(inner)?;
+            let inner_val = generate_expr(inner)?;
             // Dereference - generate a load
-            Ok(format!("(load i64 {})", inner))
+            Ok(format!("(load i64 {})", inner_val))
         }
 
         Expr::Struct(name, fields) => {
@@ -333,6 +372,79 @@ fn generate_builtin(
         "and" => Some(binary_op(expr, "and", "and", args)?),
         "or" => Some(binary_op(expr, "or", "or", args)?),
 
+        // Ownership operations
+        "alloc" => {
+            // (alloc type) - allocate owned value
+            // For now, default to i64 if no type info available
+            Some("(alloc own i64)".to_string())
+        }
+        "drop" => Some(unary_op(expr, "drop", "drop", args)?),
+        "move" => Some(unary_op(expr, "move", "move", args)?),
+
+        // Reference counting
+        "rc-new" => {
+            // (rc-new value) - create new RC pointer
+            if args.len() != 1 {
+                return Err(CompileError::codegen(
+                    expr.span,
+                    "rc-new requires exactly 1 argument",
+                ));
+            }
+            let value = generate_expr(&args[0])?;
+            // Allocate RC, store value, return pointer
+            Some(format!(
+                "(let ((_rc (rc-alloc i64))) (store {} (rc-ptr _rc)) _rc)",
+                value
+            ))
+        }
+        "rc-clone" => Some(unary_op(expr, "rc-clone", "rc-clone", args)?),
+        "rc-drop" => Some(unary_op(expr, "rc-drop", "rc-drop", args)?),
+
+        // Array operations
+        "array" | "make-array" => {
+            // (array size) or (make-array size)
+            if args.len() != 1 {
+                return Err(CompileError::codegen(
+                    expr.span,
+                    "array requires exactly 1 argument (size)",
+                ));
+            }
+            let size = generate_expr(&args[0])?;
+            // For now, assume i64 elements and extract literal size
+            // Real impl would need type info
+            Some(format!("(array-alloc i64 {})", size))
+        }
+        "array-get" | "aget" => {
+            // (array-get arr idx)
+            if args.len() != 2 {
+                return Err(CompileError::codegen(
+                    expr.span,
+                    "array-get requires 2 arguments (array, index)",
+                ));
+            }
+            let arr = generate_expr(&args[0])?;
+            let idx = generate_expr(&args[1])?;
+            // Need size info - for now use placeholder
+            Some(format!("(array-get i64 _SIZE {} {})", arr, idx))
+        }
+        "array-set" | "aset" => {
+            // (array-set arr idx value)
+            if args.len() != 3 {
+                return Err(CompileError::codegen(
+                    expr.span,
+                    "array-set requires 3 arguments (array, index, value)",
+                ));
+            }
+            let arr = generate_expr(&args[0])?;
+            let idx = generate_expr(&args[1])?;
+            let val = generate_expr(&args[2])?;
+            Some(format!("(array-set i64 _SIZE {} {} {})", arr, idx, val))
+        }
+        "array-len" | "alen" => {
+            // (array-len arr) - for sized arrays, returns compile-time size
+            Some("(array-len _SIZE)".to_string())
+        }
+
         _ => None,
     };
 
@@ -400,5 +512,33 @@ mod tests {
             "#,
         );
         assert!(lir.contains("call @double"));
+    }
+
+    #[test]
+    fn test_borrow_ref() {
+        let lir = compile("(defun get-ref (x) (ref x))");
+        assert!(lir.contains("borrow ref"));
+    }
+
+    #[test]
+    fn test_borrow_refmut() {
+        let lir = compile("(defun get-mut (x) (ref-mut x))");
+        assert!(lir.contains("borrow refmut"));
+    }
+
+    #[test]
+    fn test_ownership_ops() {
+        let lir = compile("(defun test-drop (x) (drop x))");
+        assert!(lir.contains("(drop x)"));
+
+        let lir = compile("(defun test-move (x) (move x))");
+        assert!(lir.contains("(move x)"));
+    }
+
+    #[test]
+    fn test_rc_new() {
+        let lir = compile("(defun make-rc () (rc-new 42))");
+        assert!(lir.contains("rc-alloc"));
+        assert!(lir.contains("rc-ptr"));
     }
 }
