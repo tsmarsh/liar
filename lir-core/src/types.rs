@@ -751,6 +751,28 @@ impl TypeChecker {
                 let val_ty = self.check(value)?;
                 Ok(val_ty)
             }
+            Expr::CmpXchg {
+                ptr,
+                expected,
+                new_value,
+                ..
+            } => {
+                // Pointer must be a pointer type
+                let ptr_ty = self.check(ptr)?;
+                if !ptr_ty.is_pointer() {
+                    return Err(TypeError::LoadRequiresPointer);
+                }
+                // Check expected and new value types match
+                let exp_ty = self.check(expected)?;
+                let new_ty = self.check(new_value)?;
+                if exp_ty != new_ty {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // CmpXchg returns { T, i1 } struct
+                // For type checking purposes, return i32 as placeholder
+                // (actual struct type handled in codegen)
+                Ok(Type::Scalar(ScalarType::I32))
+            }
         }
     }
 }

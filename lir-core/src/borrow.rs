@@ -372,6 +372,16 @@ impl BorrowChecker {
                 self.check_expr(ptr);
                 self.check_expr(value);
             }
+            Expr::CmpXchg {
+                ptr,
+                expected,
+                new_value,
+                ..
+            } => {
+                self.check_expr(ptr);
+                self.check_expr(expected);
+                self.check_expr(new_value);
+            }
         }
     }
 

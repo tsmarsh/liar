@@ -306,6 +306,7 @@ impl<'a> Parser<'a> {
             "atomic-load" => self.parse_atomic_load(),
             "atomic-store" => self.parse_atomic_store(),
             "atomicrmw" => self.parse_atomicrmw(),
+            "cmpxchg" => self.parse_cmpxchg(),
 
             // Let bindings
             "let" => self.parse_let(),
@@ -1073,6 +1074,29 @@ impl<'a> Parser<'a> {
             }),
             None => Err(ParseError::UnexpectedEof),
         }
+    }
+
+    /// Parse cmpxchg: (cmpxchg ordering ptr expected new)
+    /// Returns { old_value, success_flag } struct
+    fn parse_cmpxchg(&mut self) -> Result<Expr, ParseError> {
+        // Parse the ordering
+        let ordering = self.parse_ordering()?;
+
+        // Parse the pointer
+        let ptr = self.parse_expr()?;
+
+        // Parse the expected value
+        let expected = self.parse_expr()?;
+
+        // Parse the new value
+        let new_value = self.parse_expr()?;
+
+        Ok(Expr::CmpXchg {
+            ordering,
+            ptr: Box::new(ptr),
+            expected: Box::new(expected),
+            new_value: Box::new(new_value),
+        })
     }
 
     /// Parse let: (let ((name1 expr1) (name2 expr2) ...) body...)

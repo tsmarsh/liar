@@ -960,6 +960,55 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(Some(result.into()))
             }
 
+            // Compare-and-exchange
+            Expr::CmpXchg {
+                ordering,
+                ptr,
+                expected,
+                new_value,
+            } => {
+                let ptr_val = self
+                    .compile_expr_with_deferred_phis(ptr, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| {
+                        CodeGenError::CodeGen("cmpxchg pointer must produce a value".into())
+                    })?
+                    .into_pointer_value();
+                let exp_val = self
+                    .compile_expr_with_deferred_phis(expected, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| {
+                        CodeGenError::CodeGen("cmpxchg expected must produce a value".into())
+                    })?
+                    .into_int_value();
+                let new_val = self
+                    .compile_expr_with_deferred_phis(new_value, locals, blocks, deferred_phis)?
+                    .ok_or_else(|| {
+                        CodeGenError::CodeGen("cmpxchg new value must produce a value".into())
+                    })?
+                    .into_int_value();
+
+                let success_ordering = Self::atomic_ordering(ordering);
+                // For failure ordering, use same or weaker ordering
+                // (monotonic is safe choice for failure)
+                let failure_ordering = match ordering {
+                    MemoryOrdering::SeqCst => AtomicOrdering::SequentiallyConsistent,
+                    MemoryOrdering::AcqRel | MemoryOrdering::Acquire => AtomicOrdering::Acquire,
+                    _ => AtomicOrdering::Monotonic,
+                };
+
+                let result = self
+                    .builder
+                    .build_cmpxchg(
+                        ptr_val,
+                        exp_val,
+                        new_val,
+                        success_ordering,
+                        failure_ordering,
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(Some(result.as_basic_value_enum()))
+            }
+
             // Ownership operations
             Expr::AllocOwn { elem_type } => {
                 // Allocate space for the owned value on the stack
@@ -1771,6 +1820,57 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
                 Ok(result.into())
+            }
+            Expr::CmpXchg {
+                ordering,
+                ptr,
+                expected,
+                new_value,
+            } => {
+                let ptr_val = self
+                    .compile_expr_recursive(ptr, locals)?
+                    .into_pointer_value();
+                let exp_val = self
+                    .compile_expr_recursive(expected, locals)?
+                    .into_int_value();
+                let new_val = self
+                    .compile_expr_recursive(new_value, locals)?
+                    .into_int_value();
+
+                let success_ordering = Self::atomic_ordering(ordering);
+                let failure_ordering = match ordering {
+                    MemoryOrdering::SeqCst => AtomicOrdering::SequentiallyConsistent,
+                    MemoryOrdering::AcqRel | MemoryOrdering::Acquire => AtomicOrdering::Acquire,
+                    _ => AtomicOrdering::Monotonic,
+                };
+
+                let result = self
+                    .builder
+                    .build_cmpxchg(
+                        ptr_val,
+                        exp_val,
+                        new_val,
+                        success_ordering,
+                        failure_ordering,
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(result.as_basic_value_enum())
+            }
+
+            // ExtractValue with locals support
+            Expr::ExtractValue { aggregate, indices } => {
+                let agg_val = self
+                    .compile_expr_recursive(aggregate, locals)?
+                    .into_struct_value();
+                let idx = indices.first().ok_or_else(|| {
+                    CodeGenError::CodeGen("extractvalue requires at least one index".to_string())
+                })?;
+                let result = self
+                    .builder
+                    .build_extract_value(agg_val, *idx, "extractvalue")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                Ok(result)
             }
 
             // For any other expressions, fall back to compile_expr
@@ -2621,6 +2721,36 @@ impl<'ctx> CodeGen<'ctx> {
 
                 Ok(result.into())
             }
+            Expr::CmpXchg {
+                ordering,
+                ptr,
+                expected,
+                new_value,
+            } => {
+                let ptr_val = self.compile_expr(ptr)?.into_pointer_value();
+                let exp_val = self.compile_expr(expected)?.into_int_value();
+                let new_val = self.compile_expr(new_value)?.into_int_value();
+
+                let success_ordering = Self::atomic_ordering(ordering);
+                let failure_ordering = match ordering {
+                    MemoryOrdering::SeqCst => AtomicOrdering::SequentiallyConsistent,
+                    MemoryOrdering::AcqRel | MemoryOrdering::Acquire => AtomicOrdering::Acquire,
+                    _ => AtomicOrdering::Monotonic,
+                };
+
+                let result = self
+                    .builder
+                    .build_cmpxchg(
+                        ptr_val,
+                        exp_val,
+                        new_val,
+                        success_ordering,
+                        failure_ordering,
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(result.as_basic_value_enum())
+            }
 
             // Let bindings - use the recursive helper with empty initial locals
             Expr::Let { bindings, body } => {
@@ -3147,6 +3277,53 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
                 Ok(result.into())
+            }
+            Expr::CmpXchg {
+                ordering,
+                ptr,
+                expected,
+                new_value,
+            } => {
+                let ptr_val = self.compile_with_locals(ptr, locals)?.into_pointer_value();
+                let exp_val = self.compile_with_locals(expected, locals)?.into_int_value();
+                let new_val = self
+                    .compile_with_locals(new_value, locals)?
+                    .into_int_value();
+
+                let success_ordering = Self::atomic_ordering(ordering);
+                let failure_ordering = match ordering {
+                    MemoryOrdering::SeqCst => AtomicOrdering::SequentiallyConsistent,
+                    MemoryOrdering::AcqRel | MemoryOrdering::Acquire => AtomicOrdering::Acquire,
+                    _ => AtomicOrdering::Monotonic,
+                };
+
+                let result = self
+                    .builder
+                    .build_cmpxchg(
+                        ptr_val,
+                        exp_val,
+                        new_val,
+                        success_ordering,
+                        failure_ordering,
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(result.as_basic_value_enum())
+            }
+
+            // ExtractValue with locals support
+            Expr::ExtractValue { aggregate, indices } => {
+                let agg_val = self
+                    .compile_with_locals(aggregate, locals)?
+                    .into_struct_value();
+                let idx = indices.first().ok_or_else(|| {
+                    CodeGenError::CodeGen("extractvalue requires at least one index".to_string())
+                })?;
+                let result = self
+                    .builder
+                    .build_extract_value(agg_val, *idx, "extractvalue")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                Ok(result)
             }
 
             // For simple literals and non-nested expressions, delegate to compile_expr

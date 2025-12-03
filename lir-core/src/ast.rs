@@ -553,6 +553,14 @@ pub enum Expr {
         ptr: Box<Expr>,
         value: Box<Expr>,
     },
+    // (cmpxchg ordering ptr expected new) - compare-and-exchange
+    // Returns { old_value, success_flag } struct
+    CmpXchg {
+        ordering: MemoryOrdering,
+        ptr: Box<Expr>,
+        expected: Box<Expr>,
+        new_value: Box<Expr>,
+    },
 
     // Let binding for SSA values
     Let {
