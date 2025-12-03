@@ -142,9 +142,9 @@ Feature: Integration Milestone (lIR readiness for liar)
   Scenario: Closure simulation - adder (self-contained)
     # Simulates: (defun make-adder (x) (fn (y) (+ x y)))
     # Then: ((make-adder 10) 32) => 42
+    # Note: Environment allocated in caller's frame to avoid use-after-free
     Given the expression (defstruct adder_env (i64))
     And the expression (define (adder_fn i64) ((ptr env) (i64 y)) (block entry (let ((x (load i64 (getelementptr %struct.adder_env env (i64 0) (i32 0))))) (ret (add x y)))))
-    And the expression (define (make_adder ptr) ((i64 x)) (block entry (let ((env (alloca i64))) (store x env) (ret env))))
-    And the expression (define (test-closure i64) () (block entry (let ((env (call @make_adder (i64 10)))) (ret (call @adder_fn env (i64 32))))))
+    And the expression (define (test-closure i64) () (block entry (let ((env (alloca i64))) (store (i64 10) env) (ret (call @adder_fn env (i64 32))))))
     When I call test-closure
     Then the result is (i64 42)
