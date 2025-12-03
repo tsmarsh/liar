@@ -54,7 +54,7 @@ pub fn compile(source: &str) -> std::result::Result<String, Vec<CompileError>> {
     closures::analyze(&mut program).map_err(|e| vec![e])?;
 
     // Code generation
-    codegen::generate(&program).map_err(|e| vec![e])
+    codegen::generate_string(&program).map_err(|e| vec![e])
 }
 
 /// Parse and compile a single expression (for REPL)
