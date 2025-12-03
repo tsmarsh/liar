@@ -1,0 +1,245 @@
+# ADR 022: Core Protocols
+
+## Status
+
+Proposed
+
+## Context
+
+liar needs abstractions for collections, iteration, comparison, and display. Rather than hardcoded special cases, we want a small set of protocols that define how types interact with core functions.
+
+Clojure uses Java interfaces for most of this (predating protocols). We'll use `defprotocol` for everything, giving us a clean, uniform system.
+
+## Decision
+
+### Protocol Syntax
+
+```lisp
+(defprotocol Name
+  "Optional docstring"
+  (method-name [self arg1 arg2] "method doc"))
+```
+
+### Implementation Syntax
+
+```lisp
+;; Implement for a specific type
+(extend-protocol Seq
+  PersistentVector
+  (first [self] (nth self 0))
+  (rest [self] (subvec self 1)))
+
+;; Implement inline with type definition
+(defstruct Cons (head tail)
+  :impl [(Seq
+           (first [self] (.head self))
+           (rest [self] (.tail self)))
+         (Counted
+           (count [self] (+ 1 (count (.tail self)))))])
+```
+
+## Core Protocols
+
+### Sequence Access
+
+```lisp
+(defprotocol Seqable
+  "Can be converted to a sequence."
+  (seq [self] "Returns a Seq, or nil if empty."))
+
+(defprotocol Seq
+  "Sequential access to elements."
+  (first [self] "Returns the first element.")
+  (rest [self] "Returns a Seq of remaining elements."))
+
+(defprotocol Counted
+  "O(1) count."
+  (count [self] "Returns the number of elements."))
+
+(defprotocol Indexed
+  "O(1) index access."
+  (nth [self n] "Returns element at index n."))
+```
+
+### Collection Operations
+
+```lisp
+(defprotocol Collection
+  "A collection of elements."
+  (conj [self x] "Returns collection with x added.")
+  (empty [self] "Returns an empty collection of the same type."))
+
+(defprotocol Associative
+  "Key-value access."
+  (get [self k] "Returns value for key, or nil.")
+  (assoc [self k v] "Returns collection with k mapped to v.")
+  (dissoc [self k] "Returns collection without key k.")
+  (has-key? [self k] "Returns true if key exists."))
+
+(defprotocol Set
+  "Set operations."
+  (contains? [self x] "Returns true if x is a member.")
+  (disj [self x] "Returns set without x."))
+```
+
+### Reduction & Iteration
+
+```lisp
+(defprotocol Reducible
+  "Can be reduced."
+  (reduce [self f init] "Reduces collection with f, starting with init."))
+
+(defprotocol KVReducible
+  "Can be reduced with key-value pairs."
+  (reduce-kv [self f init] "Reduces with (f acc key val)."))
+
+(defprotocol Iter
+  "Iterator protocol (Rust-style, not lazy-seq)."
+  (next [self] "Returns {:some [value next-iter]} or :none."))
+```
+
+### Reference Types
+
+```lisp
+(defprotocol Deref
+  "Dereferenceable values."
+  (deref [self] "Returns the current value."))
+```
+
+### Comparison & Hashing
+
+```lisp
+(defprotocol Eq
+  "Equality."
+  (eq [self other] "Returns true if equal."))
+
+(defprotocol Ord
+  "Ordering. Assumes Eq."
+  (cmp [self other] "Returns :lt, :eq, or :gt."))
+
+(defprotocol Hash
+  "Hashable. Assumes Eq."
+  (hash [self] "Returns hash code as i64."))
+```
+
+### Display
+
+```lisp
+(defprotocol Show
+  "String conversion."
+  (str [self] "Returns string representation."))
+```
+
+## Protocol Relationships
+
+```
+Seqable ──► Seq
+              │
+              ├── Counted (optional, for O(1) count)
+              └── Indexed (optional, for O(1) nth)
+
+Collection
+    │
+    ├── Associative (maps, vectors)
+    └── Set
+
+Reducible
+    │
+    └── KVReducible (maps)
+
+Eq ◄── Ord
+   ◄── Hash
+
+Iter (independent, for explicit iteration)
+```
+
+## Default Implementations
+
+Some protocols provide defaults based on others:
+
+```lisp
+;; count via reduce (O(n) fallback)
+(extend-protocol Counted
+  Seqable
+  (count [self] (reduce (fn [n _] (+ n 1)) 0 self)))
+
+;; contains? via reduce for Seqable (O(n) fallback)
+(extend-protocol Set
+  Seqable
+  (contains? [self x] 
+    (reduce (fn [_ elem] (if (eq elem x) (reduced true) false)) 
+            false self)))
+
+;; Iter from Seq
+(extend-protocol Iter
+  Seq
+  (next [self]
+    (if (seq self)
+        {:some [(first self) (rest self)]}
+        :none)))
+```
+
+## contains? Fixed
+
+Unlike Clojure, `contains?` always checks **membership**, not index existence:
+
+```lisp
+(contains? [1 2 3] 2)      ; => true (2 is in the vector)
+(contains? [1 2 3] 99)     ; => false (99 is not in the vector)
+(contains? #{:a :b} :a)    ; => true
+(contains? {:a 1} :a)      ; => true (key exists)
+
+;; For index/key existence, use has-key?
+(has-key? [1 2 3] 0)       ; => true (index 0 exists)
+(has-key? [1 2 3] 5)       ; => false (index 5 doesn't exist)
+(has-key? {:a 1} :a)       ; => true
+(has-key? {:a 1} :b)       ; => false
+```
+
+## Ownership & Protocols
+
+Protocol methods receive `self` by reference:
+
+```lisp
+;; first borrows self, doesn't consume
+(first [self])  ; self: &Self
+
+;; conj borrows self, returns new collection
+(conj [self x]) ; self: &Self, returns Self
+
+;; For mutation, use &mut in conventional collections
+(push! [&self x]) ; self: &mut Self
+```
+
+## Built-in Implementations
+
+| Type | Protocols |
+|------|-----------|
+| `[...]` PersistentVector | Seqable, Seq, Counted, Indexed, Collection, Associative, Reducible, Eq, Hash, Show |
+| `{...}` PersistentMap | Seqable, Counted, Collection, Associative, KVReducible, Eq, Hash, Show |
+| `#{...}` PersistentSet | Seqable, Counted, Collection, Set, Reducible, Eq, Hash, Show |
+| `'(...)` List | Seqable, Seq, Collection, Reducible, Eq, Hash, Show |
+| `<[...]>` ConvVector | Seqable, Seq, Counted, Indexed, Collection, Reducible, Eq, Hash, Show |
+| `<{...}>` ConvMap | Seqable, Counted, Collection, Associative, KVReducible, Eq, Hash, Show |
+| `"string"` | Seqable, Seq, Counted, Indexed, Eq, Ord, Hash, Show |
+| `i64`, `f64`, etc. | Eq, Ord, Hash, Show |
+| `atom` | Deref, Eq, Show |
+
+## Consequences
+
+### Positive
+
+- **Uniform abstraction**: All collections work with `map`, `reduce`, etc.
+- **Extensible**: User types can implement protocols
+- **Fixed contains?**: Does what you expect
+- **Clear iteration**: Iter protocol for explicit, non-lazy iteration
+
+### Negative
+
+- **Protocol dispatch cost**: Runtime lookup (can optimize hot paths)
+- **Learning curve**: Must understand which protocols to implement
+
+### Neutral
+
+- Similar to Clojure's model, but protocols for everything (not Java interfaces)
+- Iter is Rust-style (explicit) not Clojure-style (lazy seqs)

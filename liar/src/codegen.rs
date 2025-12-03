@@ -400,6 +400,38 @@ fn generate_builtin(
         "rc-clone" => Some(unary_op(expr, "rc-clone", "rc-clone", args)?),
         "rc-drop" => Some(unary_op(expr, "rc-drop", "rc-drop", args)?),
 
+        // Share and clone (high-level RC operations)
+        "share" => {
+            // (share value) - create reference-counted shared value
+            // Same as rc-new: allocates RC, stores value, returns RC pointer
+            if args.len() != 1 {
+                return Err(CompileError::codegen(
+                    expr.span,
+                    "share requires exactly 1 argument",
+                ));
+            }
+            let value = generate_expr(&args[0])?;
+            Some(format!(
+                "(let ((_rc (rc-alloc i64))) (store {} (rc-ptr _rc)) _rc)",
+                value
+            ))
+        }
+        "clone" => {
+            // (clone value) - create a copy of the value
+            // For RC values: increments refcount and returns alias
+            // For primitives: just returns the value (copy semantics)
+            if args.len() != 1 {
+                return Err(CompileError::codegen(
+                    expr.span,
+                    "clone requires exactly 1 argument",
+                ));
+            }
+            let value = generate_expr(&args[0])?;
+            // For now, use rc-clone which handles both RC and primitive values
+            // rc-clone on primitives is a no-op that returns the value
+            Some(format!("(rc-clone {})", value))
+        }
+
         // Array operations
         "array" | "make-array" => {
             // (array size) or (make-array size)
@@ -540,5 +572,20 @@ mod tests {
         let lir = compile("(defun make-rc () (rc-new 42))");
         assert!(lir.contains("rc-alloc"));
         assert!(lir.contains("rc-ptr"));
+    }
+
+    #[test]
+    fn test_share() {
+        // share creates a reference-counted shared value
+        let lir = compile("(defun make-shared () (share 42))");
+        assert!(lir.contains("rc-alloc"), "share should use rc-alloc");
+        assert!(lir.contains("rc-ptr"), "share should use rc-ptr");
+    }
+
+    #[test]
+    fn test_clone() {
+        // clone creates a copy (for RC, increments refcount)
+        let lir = compile("(defun clone-it (x) (clone x))");
+        assert!(lir.contains("rc-clone"), "clone should use rc-clone");
     }
 }
