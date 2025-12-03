@@ -1,0 +1,110 @@
+; Sample liar file for syntax highlighting demo
+
+; Constants
+(def PI 3.14159)
+(def APP_NAME "liar-demo")
+
+; Struct definition
+(defstruct Point (x y))
+
+; Protocol definition
+(defprotocol Shape
+  (area [self] "Calculate area")
+  (perimeter [self] "Calculate perimeter"))
+
+; Function definition
+(defun square (x)
+  (* x x))
+
+; With type annotation
+(defun distance (-> (Point Point) f64) (p1 p2)
+  (let ((dx (- (.x p2) (.x p1)))
+        (dy (- (.y p2) (.y p1))))
+    (sqrt (+ (square dx) (square dy)))))
+
+; Pattern matching
+(defun describe (shape)
+  (match shape
+    ({:type :circle :radius r} (str "Circle with radius " r))
+    ({:type :rect :w w :h h} (str "Rectangle " w "x" h))
+    (_ "Unknown shape")))
+
+; Higher-order functions
+(defun process-data (data)
+  (-> data
+      (filter even?)
+      (map square)
+      (reduce + 0)))
+
+; Iterators
+(defun first-10-squares ()
+  (-> (iter/range)
+      (iter/map square)
+      (iter/take 10)
+      (collect)))
+
+; Thread-safe with plet and atoms
+(defun counter ()
+  (plet ((count (atom 0)))
+    (fn ()
+      (swap! count inc)
+      @count)))
+
+; Async example
+(defun fetch-all (urls)
+  (plet ((results (atom [])))
+    (async
+      (iter/for-each
+        (fn (url)
+          (let ((data (await (fetch url))))
+            (swap! results #(conj % data))))
+        urls)
+      @results)))
+
+; Collections
+(def my-vector [1 2 3 4 5])
+(def my-map {:name "Alice" :age 30})
+(def my-set #{:a :b :c})
+
+; Conventional (mutable) collections
+(def my-mut-vec <[1 2 3]>)
+(def my-mut-map <{:x 10 :y 20}>)
+
+; SIMD vectors
+(def simd-vec <<1.0 2.0 3.0 4.0>>)
+
+; Unsafe block for FFI
+(defun call-c-function (ptr)
+  (unsafe
+    (c-call "some_function" ptr)))
+
+; Keywords and symbols
+(def status :pending)
+(def sym 'my-symbol)
+
+; Numbers
+(def int-val 42)
+(def float-val 3.14)
+(def hex-val 0xFF)
+(def neg-val -123)
+
+; Boolean and nil
+(def flag true)
+(def nothing nil)
+
+; String with escape
+(def greeting "Hello, \"world\"!\n")
+
+; Predicates
+(defun valid? (x)
+  (and (not (nil? x))
+       (> x 0)
+       (< x 100)))
+
+; Main entry point
+(defun main ()
+  (println "Starting...")
+  (let ((c (counter)))
+    (println (c))   ; 1
+    (println (c))   ; 2
+    (println (c)))) ; 3

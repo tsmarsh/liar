@@ -1,0 +1,277 @@
+{
+  "name": "liar",
+  "scopeName": "source.liar",
+  "fileTypes": ["liar"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#keyword-literal" },
+    { "include": "#constant" },
+    { "include": "#number" },
+    { "include": "#definition" },
+    { "include": "#special-form" },
+    { "include": "#builtin" },
+    { "include": "#function-call" },
+    { "include": "#brackets" },
+    { "include": "#symbol" }
+  ],
+  "repository": {
+    "comment": {
+      "match": ";.*$",
+      "name": "comment.line.semicolon.liar"
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.liar",
+      "patterns": [
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.liar"
+        }
+      ]
+    },
+    "keyword-literal": {
+      "match": ":[a-zA-Z][a-zA-Z0-9_-]*",
+      "name": "constant.other.keyword.liar"
+    },
+    "constant": {
+      "match": "\\b(true|false|nil)\\b",
+      "name": "constant.language.liar"
+    },
+    "number": {
+      "patterns": [
+        {
+          "match": "-?[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?",
+          "name": "constant.numeric.float.liar"
+        },
+        {
+          "match": "-?0x[0-9a-fA-F]+",
+          "name": "constant.numeric.hex.liar"
+        },
+        {
+          "match": "-?[0-9]+",
+          "name": "constant.numeric.integer.liar"
+        }
+      ]
+    },
+    "definition": {
+      "patterns": [
+        {
+          "match": "(\\()(defun|defmacro)\\s+([a-zA-Z_][a-zA-Z0-9_!?*-]*)",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "keyword.control.definition.liar" },
+            "3": { "name": "entity.name.function.liar" }
+          }
+        },
+        {
+          "match": "(\\()(def)\\s+([a-zA-Z_][a-zA-Z0-9_!?*-]*)",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "keyword.control.definition.liar" },
+            "3": { "name": "variable.other.constant.liar" }
+          }
+        },
+        {
+          "match": "(\\()(defstruct|defprotocol)\\s+([a-zA-Z_][a-zA-Z0-9_!?*-]*)",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "keyword.control.definition.liar" },
+            "3": { "name": "entity.name.type.liar" }
+          }
+        },
+        {
+          "match": "(\\()(extend-protocol)\\s+([a-zA-Z_][a-zA-Z0-9_!?*-]*)",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "keyword.control.definition.liar" },
+            "3": { "name": "entity.name.type.liar" }
+          }
+        }
+      ]
+    },
+    "special-form": {
+      "match": "(\\()(let|plet|fn|if|do|match|set!|ref|ref-mut|deref|unsafe|quote|quasiquote|unquote|unquote-splicing)(?=\\s|\\))",
+      "captures": {
+        "1": { "name": "punctuation.paren.open.liar" },
+        "2": { "name": "keyword.control.liar" }
+      }
+    },
+    "builtin": {
+      "patterns": [
+        {
+          "comment": "Threading/atom operations",
+          "match": "(\\()(atom|swap!|reset!|deref|compare-and-set!|dosync|alter|commute|ref-set)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.atom.liar" }
+          }
+        },
+        {
+          "comment": "Sequence operations",
+          "match": "(\\()(first|rest|cons|seq|count|nth|conj|empty|empty\\?|seq\\?)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.seq.liar" }
+          }
+        },
+        {
+          "comment": "Collection operations",
+          "match": "(\\()(get|assoc|dissoc|has-key\\?|contains\\?|disj|keys|vals|merge|into|update|update-in)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.collection.liar" }
+          }
+        },
+        {
+          "comment": "Higher-order functions",
+          "match": "(\\()(map|filter|reduce|reduce-kv|fold|take|drop|take-while|drop-while|partition|partition-by|group-by|sort|sort-by|flatten|mapcat|some|every\\?|any\\?|all\\?|not-any\\?|not-every\\?)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.higher-order.liar" }
+          }
+        },
+        {
+          "comment": "Iterator operations",
+          "match": "(\\()(iter|iter/map|iter/filter|iter/take|iter/drop|iter/enumerate|iter/zip|iter/chain|iter/flatten|iter/range|iter/repeat|iter/iterate|collect)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.iterator.liar" }
+          }
+        },
+        {
+          "comment": "Comparison",
+          "match": "(\\()(=|not=|<|>|<=|>=|eq|cmp|hash|identical\\?)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.comparison.liar" }
+          }
+        },
+        {
+          "comment": "Arithmetic",
+          "match": "(\\()(\\+|-|\\*|/|mod|rem|inc|dec|abs|min|max|quot)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.arithmetic.liar" }
+          }
+        },
+        {
+          "comment": "Logic",
+          "match": "(\\()(and|or|not|if-not|when|when-not|cond|case)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "keyword.control.conditional.liar" }
+          }
+        },
+        {
+          "comment": "Type predicates",
+          "match": "(\\()(nil\\?|some\\?|string\\?|number\\?|int\\?|float\\?|fn\\?|coll\\?|map\\?|vector\\?|set\\?|list\\?)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.predicate.liar" }
+          }
+        },
+        {
+          "comment": "I/O and misc",
+          "match": "(\\()(print|println|pr|prn|str|format|read|read-string|slurp|spit)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.io.liar" }
+          }
+        },
+        {
+          "comment": "Function composition",
+          "match": "(\\()(comp|partial|juxt|complement|constantly|identity|apply)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.composition.liar" }
+          }
+        },
+        {
+          "comment": "Memory/ownership",
+          "match": "(\\()(share|clone|drop|move)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "support.function.memory.liar" }
+          }
+        },
+        {
+          "comment": "Threading macros",
+          "match": "(\\()(->|->>|as->|some->|some->>|cond->|cond->>)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "keyword.control.threading.liar" }
+          }
+        },
+        {
+          "comment": "Async",
+          "match": "(\\()(async|await|pmap|pfilter)(?=\\s|\\))",
+          "captures": {
+            "1": { "name": "punctuation.paren.open.liar" },
+            "2": { "name": "keyword.control.async.liar" }
+          }
+        }
+      ]
+    },
+    "function-call": {
+      "match": "(\\()([a-zA-Z_][a-zA-Z0-9_!?*/-]*)(?=\\s|\\))",
+      "captures": {
+        "1": { "name": "punctuation.paren.open.liar" },
+        "2": { "name": "entity.name.function.call.liar" }
+      }
+    },
+    "brackets": {
+      "patterns": [
+        {
+          "match": "<<|>>",
+          "name": "punctuation.definition.simd.liar"
+        },
+        {
+          "match": "<\\[|\\]>",
+          "name": "punctuation.definition.conv-vector.liar"
+        },
+        {
+          "match": "<\\{|\\}>",
+          "name": "punctuation.definition.conv-map.liar"
+        },
+        {
+          "match": "\\[|\\]",
+          "name": "punctuation.definition.vector.liar"
+        },
+        {
+          "match": "\\{|\\}",
+          "name": "punctuation.definition.map.liar"
+        },
+        {
+          "match": "\\(|\\)",
+          "name": "punctuation.paren.liar"
+        },
+        {
+          "match": "#\\{",
+          "name": "punctuation.definition.set.liar"
+        }
+      ]
+    },
+    "symbol": {
+      "patterns": [
+        {
+          "match": "'[a-zA-Z_][a-zA-Z0-9_!?*-]*",
+          "name": "constant.other.symbol.liar"
+        },
+        {
+          "match": "@[a-zA-Z_][a-zA-Z0-9_!?*-]*",
+          "name": "variable.other.deref.liar"
+        },
+        {
+          "match": "&[a-zA-Z_][a-zA-Z0-9_!?*-]*",
+          "name": "variable.parameter.reference.liar"
+        },
+        {
+          "match": "[a-zA-Z_][a-zA-Z0-9_!?*-]*",
+          "name": "variable.other.liar"
+        }
+      ]
+    }
+  }
+}
