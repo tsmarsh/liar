@@ -1,4 +1,6 @@
 statuses:
+  - name: backlog
+    dir: backlog
   - name: ready
     dir: ready
     prioritized: true
