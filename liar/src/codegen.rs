@@ -358,6 +358,134 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<String> {
             // Keywords are interned strings
             Ok(format!("(keyword {})", name))
         }
+
+        // Conventional mutable collections (ADR-018)
+        Expr::ConvVector(elements) => {
+            // Generate a conventional (mutable) vector
+            let elems: Result<Vec<String>> = elements.iter().map(generate_expr).collect();
+            let elems = elems?;
+            Ok(format!("(conv-vec {})", elems.join(" ")))
+        }
+
+        Expr::ConvMap(pairs) => {
+            // Generate a conventional (mutable) map
+            let mut pair_strs = Vec::new();
+            for (k, v) in pairs {
+                let key = generate_expr(k)?;
+                let val = generate_expr(v)?;
+                pair_strs.push(format!("{} {}", key, val));
+            }
+            Ok(format!("(conv-map {})", pair_strs.join(" ")))
+        }
+
+        // Async/await (ADR-014)
+        Expr::Async(body) => {
+            // Async creates a future
+            let body = generate_expr(body)?;
+            Ok(format!("(future {})", body))
+        }
+
+        Expr::Await(future) => {
+            // Await blocks until future completes
+            let future = generate_expr(future)?;
+            Ok(format!("(await {})", future))
+        }
+
+        // SIMD vectors (ADR-016)
+        Expr::SimdVector(elements) => {
+            // Generate SIMD vector literal
+            // Infer type from elements
+            let elems: Result<Vec<String>> = elements.iter().map(generate_expr).collect();
+            let elems = elems?;
+            let n = elements.len();
+            // Infer element type from first element (simplified)
+            let elem_type = if let Some(first) = elements.first() {
+                match &first.node {
+                    Expr::Float(_) => "double",
+                    _ => "i64",
+                }
+            } else {
+                "i64"
+            };
+            Ok(format!(
+                "(vector <{} x {}> {})",
+                n,
+                elem_type,
+                elems.join(" ")
+            ))
+        }
+
+        // STM (ADR-012)
+        Expr::Dosync(exprs) => {
+            // Transaction block
+            // Start transaction, execute body, commit or retry
+            if exprs.is_empty() {
+                return Ok("(stm-nil)".to_string());
+            }
+            let body: Result<Vec<String>> = exprs.iter().map(generate_expr).collect();
+            let body = body?;
+            if body.len() == 1 {
+                Ok(format!("(stm-dosync {})", body[0]))
+            } else {
+                // Chain expressions
+                let mut result = body.last().unwrap().clone();
+                for (i, e) in body.iter().rev().skip(1).enumerate() {
+                    result = format!("(let ((_stm{} {})) {})", i, e, result);
+                }
+                Ok(format!("(stm-dosync {})", result))
+            }
+        }
+
+        Expr::RefSetStm(ref_expr, value) => {
+            // Set ref value in transaction
+            let ref_code = generate_expr(ref_expr)?;
+            let val_code = generate_expr(value)?;
+            Ok(format!("(stm-ref-set {} {})", ref_code, val_code))
+        }
+
+        Expr::Alter {
+            ref_expr,
+            fn_expr,
+            args,
+        } => {
+            // Apply function to ref value in transaction
+            let ref_code = generate_expr(ref_expr)?;
+            let fn_code = generate_expr(fn_expr)?;
+            let args_code: Result<Vec<String>> = args.iter().map(generate_expr).collect();
+            let args_code = args_code?;
+            if args_code.is_empty() {
+                Ok(format!("(stm-alter {} {})", ref_code, fn_code))
+            } else {
+                Ok(format!(
+                    "(stm-alter {} {} {})",
+                    ref_code,
+                    fn_code,
+                    args_code.join(" ")
+                ))
+            }
+        }
+
+        Expr::Commute {
+            ref_expr,
+            fn_expr,
+            args,
+        } => {
+            // Commutative update in transaction (can reorder)
+            let ref_code = generate_expr(ref_expr)?;
+            let fn_code = generate_expr(fn_expr)?;
+            let args_code: Result<Vec<String>> = args.iter().map(generate_expr).collect();
+            let args_code = args_code?;
+            if args_code.is_empty() {
+                Ok(format!("(stm-commute {} {})", ref_code, fn_code))
+            } else {
+                Ok(format!(
+                    "(stm-commute {} {} {})",
+                    ref_code,
+                    fn_code,
+                    args_code.join(" ")
+                ))
+            }
+        }
     }
 }
 
@@ -750,5 +878,73 @@ mod tests {
     fn test_keyword_literal() {
         let lir = compile("(defun get-key () :foo)");
         assert!(lir.contains("(keyword foo)"));
+    }
+
+    #[test]
+    fn test_async() {
+        let lir = compile("(defun fetch-data () (async (compute)))");
+        assert!(lir.contains("(future"));
+    }
+
+    #[test]
+    fn test_await() {
+        let lir = compile("(defun wait-data (f) (await f))");
+        assert!(lir.contains("(await"));
+    }
+
+    #[test]
+    fn test_conv_vector_literal() {
+        let lir = compile("(defun make-conv-vec () <[1 2 3]>)");
+        assert!(lir.contains("(conv-vec"));
+        assert!(lir.contains("(i64 1)"));
+        assert!(lir.contains("(i64 2)"));
+        assert!(lir.contains("(i64 3)"));
+    }
+
+    #[test]
+    fn test_conv_map_literal() {
+        let lir = compile("(defun make-conv-map () <{:a 1 :b 2}>)");
+        assert!(lir.contains("(conv-map"));
+        assert!(lir.contains("(keyword a)"));
+        assert!(lir.contains("(i64 1)"));
+    }
+
+    #[test]
+    fn test_dosync() {
+        let lir = compile("(defun transfer () (dosync (alter a - 50)))");
+        assert!(lir.contains("(stm-dosync"));
+    }
+
+    #[test]
+    fn test_ref_set() {
+        let lir = compile("(defun set-val (r) (ref-set r 10))");
+        assert!(lir.contains("(stm-ref-set"));
+    }
+
+    #[test]
+    fn test_alter() {
+        let lir = compile("(defun update (r) (alter r + 1))");
+        assert!(lir.contains("(stm-alter"));
+    }
+
+    #[test]
+    fn test_commute() {
+        let lir = compile("(defun inc (r) (commute r + 1))");
+        assert!(lir.contains("(stm-commute"));
+    }
+
+    #[test]
+    fn test_simd_vector_int() {
+        let lir = compile("(defun make-vec () <<1 2 3 4>>)");
+        assert!(lir.contains("(vector <4 x i64>"));
+        assert!(lir.contains("(i64 1)"));
+        assert!(lir.contains("(i64 4)"));
+    }
+
+    #[test]
+    fn test_simd_vector_float() {
+        let lir = compile("(defun make-vec () <<1.0 2.0 3.0 4.0>>)");
+        assert!(lir.contains("(vector <4 x double>"));
+        assert!(lir.contains("(double 1")); // May be 1 or 1.0
     }
 }

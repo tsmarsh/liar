@@ -273,6 +273,67 @@ impl ClosureAnalyzer {
                 }
             }
             Expr::Keyword(_) => {}
+
+            // Conventional mutable collections
+            Expr::ConvVector(elements) => {
+                for elem in elements {
+                    self.analyze_expr(elem);
+                }
+            }
+            Expr::ConvMap(pairs) => {
+                for (k, v) in pairs {
+                    self.analyze_expr(k);
+                    self.analyze_expr(v);
+                }
+            }
+
+            // Async/await
+            Expr::Async(body) => {
+                self.analyze_expr(body);
+            }
+            Expr::Await(future) => {
+                self.analyze_expr(future);
+            }
+
+            // SIMD vectors (ADR-016)
+            Expr::SimdVector(elements) => {
+                for elem in elements {
+                    self.analyze_expr(elem);
+                }
+            }
+
+            // STM (ADR-012)
+            Expr::Dosync(exprs) => {
+                for expr in exprs {
+                    self.analyze_expr(expr);
+                }
+            }
+            Expr::RefSetStm(ref_expr, value) => {
+                self.analyze_expr(ref_expr);
+                self.analyze_expr(value);
+            }
+            Expr::Alter {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.analyze_expr(ref_expr);
+                self.analyze_expr(fn_expr);
+                for arg in args {
+                    self.analyze_expr(arg);
+                }
+            }
+            Expr::Commute {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.analyze_expr(ref_expr);
+                self.analyze_expr(fn_expr);
+                for arg in args {
+                    self.analyze_expr(arg);
+                }
+            }
         }
     }
 
@@ -497,6 +558,67 @@ impl ClosureAnalyzer {
                 }
             }
             Expr::Keyword(_) => {}
+
+            // Conventional mutable collections
+            Expr::ConvVector(elements) => {
+                for elem in elements {
+                    self.find_free_vars_lambda_inner(elem, local, free);
+                }
+            }
+            Expr::ConvMap(pairs) => {
+                for (k, v) in pairs {
+                    self.find_free_vars_lambda_inner(k, local, free);
+                    self.find_free_vars_lambda_inner(v, local, free);
+                }
+            }
+
+            // Async/await
+            Expr::Async(body) => {
+                self.find_free_vars_lambda_inner(body, local, free);
+            }
+            Expr::Await(future) => {
+                self.find_free_vars_lambda_inner(future, local, free);
+            }
+
+            // SIMD vectors (ADR-016)
+            Expr::SimdVector(elements) => {
+                for elem in elements {
+                    self.find_free_vars_lambda_inner(elem, local, free);
+                }
+            }
+
+            // STM (ADR-012)
+            Expr::Dosync(exprs) => {
+                for expr in exprs {
+                    self.find_free_vars_lambda_inner(expr, local, free);
+                }
+            }
+            Expr::RefSetStm(ref_expr, value) => {
+                self.find_free_vars_lambda_inner(ref_expr, local, free);
+                self.find_free_vars_lambda_inner(value, local, free);
+            }
+            Expr::Alter {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.find_free_vars_lambda_inner(ref_expr, local, free);
+                self.find_free_vars_lambda_inner(fn_expr, local, free);
+                for arg in args {
+                    self.find_free_vars_lambda_inner(arg, local, free);
+                }
+            }
+            Expr::Commute {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.find_free_vars_lambda_inner(ref_expr, local, free);
+                self.find_free_vars_lambda_inner(fn_expr, local, free);
+                for arg in args {
+                    self.find_free_vars_lambda_inner(arg, local, free);
+                }
+            }
         }
     }
 
@@ -831,6 +953,72 @@ impl<'a> ThreadSafetyChecker<'a> {
                 for (k, v) in pairs {
                     self.check_expr(k);
                     self.check_expr(v);
+                }
+            }
+
+            // Conventional mutable collections
+            Expr::ConvVector(elements) => {
+                for elem in elements {
+                    self.check_expr(elem);
+                }
+            }
+            Expr::ConvMap(pairs) => {
+                for (k, v) in pairs {
+                    self.check_expr(k);
+                    self.check_expr(v);
+                }
+            }
+
+            // Async/await - async blocks require thread-safe closures
+            Expr::Async(body) => {
+                // Check if body contains closures that aren't thread-safe
+                // Async blocks have similar requirements to plet
+                let was_in_plet = self.in_plet;
+                self.in_plet = true; // Async has same thread-safety requirements
+                self.check_expr(body);
+                self.in_plet = was_in_plet;
+            }
+            Expr::Await(future) => {
+                self.check_expr(future);
+            }
+
+            // SIMD vectors (ADR-016)
+            Expr::SimdVector(elements) => {
+                for elem in elements {
+                    self.check_expr(elem);
+                }
+            }
+
+            // STM (ADR-012)
+            Expr::Dosync(exprs) => {
+                for expr in exprs {
+                    self.check_expr(expr);
+                }
+            }
+            Expr::RefSetStm(ref_expr, value) => {
+                self.check_expr(ref_expr);
+                self.check_expr(value);
+            }
+            Expr::Alter {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.check_expr(ref_expr);
+                self.check_expr(fn_expr);
+                for arg in args {
+                    self.check_expr(arg);
+                }
+            }
+            Expr::Commute {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.check_expr(ref_expr);
+                self.check_expr(fn_expr);
+                for arg in args {
+                    self.check_expr(arg);
                 }
             }
 

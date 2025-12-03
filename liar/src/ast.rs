@@ -143,6 +143,40 @@ pub enum Expr {
     Map(Vec<(Spanned<Expr>, Spanned<Expr>)>),
     /// Keyword literal: :foo
     Keyword(String),
+
+    // Conventional mutable collections (ADR-018)
+    /// Mutable vector: <[1 2 3]>
+    ConvVector(Vec<Spanned<Expr>>),
+    /// Mutable map: <{:a 1 :b 2}>
+    ConvMap(Vec<(Spanned<Expr>, Spanned<Expr>)>),
+
+    // Async/await (ADR-014)
+    /// Async block: (async body)
+    Async(Box<Spanned<Expr>>),
+    /// Await expression: (await future)
+    Await(Box<Spanned<Expr>>),
+
+    // SIMD vectors (ADR-016)
+    /// SIMD vector literal: <<1 2 3 4>>
+    SimdVector(Vec<Spanned<Expr>>),
+
+    // STM (ADR-012)
+    /// Dosync block: (dosync exprs...)
+    Dosync(Vec<Spanned<Expr>>),
+    /// Ref set in transaction: (ref-set ref value)
+    RefSetStm(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+    /// Alter in transaction: (alter ref fn args...)
+    Alter {
+        ref_expr: Box<Spanned<Expr>>,
+        fn_expr: Box<Spanned<Expr>>,
+        args: Vec<Spanned<Expr>>,
+    },
+    /// Commute in transaction: (commute ref fn args...)
+    Commute {
+        ref_expr: Box<Spanned<Expr>>,
+        fn_expr: Box<Spanned<Expr>>,
+        args: Vec<Spanned<Expr>>,
+    },
 }
 
 /// Let binding

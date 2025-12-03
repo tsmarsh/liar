@@ -413,6 +413,115 @@ impl Inferencer {
             }
 
             Expr::Keyword(_) => Ty::Named("Keyword".to_string()),
+
+            // Conventional mutable collections (ADR-018)
+            Expr::ConvVector(elements) => {
+                let elem_ty = self.fresh_var();
+                for elem in elements {
+                    let ty = self.infer_expr(elem, env);
+                    let _ = self.unify(&ty, &elem_ty, elem.span);
+                }
+                Ty::Named(format!("ConvVector<{}>", self.apply(&elem_ty)))
+            }
+
+            Expr::ConvMap(pairs) => {
+                let key_ty = self.fresh_var();
+                let val_ty = self.fresh_var();
+                for (k, v) in pairs {
+                    let kt = self.infer_expr(k, env);
+                    let vt = self.infer_expr(v, env);
+                    let _ = self.unify(&kt, &key_ty, k.span);
+                    let _ = self.unify(&vt, &val_ty, v.span);
+                }
+                Ty::Named(format!(
+                    "ConvMap<{}, {}>",
+                    self.apply(&key_ty),
+                    self.apply(&val_ty)
+                ))
+            }
+
+            // Async/await (ADR-014)
+            Expr::Async(body) => {
+                // async returns Future<T> where T is the body's return type
+                let body_ty = self.infer_expr(body, env);
+                Ty::Named(format!("Future<{}>", body_ty))
+            }
+
+            Expr::Await(future) => {
+                // await takes Future<T> and returns T
+                let future_ty = self.infer_expr(future, env);
+                // For now, return a fresh type variable
+                // TODO: Extract T from Future<T>
+                let _ = future_ty;
+                self.fresh_var()
+            }
+
+            // SIMD vectors (ADR-016)
+            Expr::SimdVector(elements) => {
+                let elem_ty = self.fresh_var();
+                for elem in elements {
+                    let ty = self.infer_expr(elem, env);
+                    let _ = self.unify(&ty, &elem_ty, elem.span);
+                }
+                let n = elements.len();
+                Ty::Named(format!("<{} x {}>", n, self.apply(&elem_ty)))
+            }
+
+            // STM (ADR-012)
+            Expr::Dosync(exprs) => {
+                // Dosync returns the value of the last expression
+                if exprs.is_empty() {
+                    Ty::Unit
+                } else {
+                    let mut last_ty = Ty::Unit;
+                    for expr in exprs {
+                        last_ty = self.infer_expr(expr, env);
+                    }
+                    last_ty
+                }
+            }
+
+            Expr::RefSetStm(ref_expr, value) => {
+                // ref-set returns the new value
+                let _ = self.infer_expr(ref_expr, env);
+                self.infer_expr(value, env)
+            }
+
+            Expr::Alter {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                // alter returns the new value (result of applying fn)
+                let _ = self.infer_expr(ref_expr, env);
+                let func_ty = self.infer_expr(fn_expr, env);
+                for arg in args {
+                    let _ = self.infer_expr(arg, env);
+                }
+                // Return type is the return type of the function
+                match func_ty {
+                    Ty::Fn(_, ret) => *ret,
+                    _ => self.fresh_var(),
+                }
+            }
+
+            Expr::Commute {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                // commute returns the new value (result of applying fn)
+                let _ = self.infer_expr(ref_expr, env);
+                let func_ty = self.infer_expr(fn_expr, env);
+                for arg in args {
+                    let _ = self.infer_expr(arg, env);
+                }
+                // Return type is the return type of the function
+                match func_ty {
+                    Ty::Fn(_, ret) => *ret,
+                    _ => self.fresh_var(),
+                }
+            }
         }
     }
 

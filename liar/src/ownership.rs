@@ -638,6 +638,67 @@ impl BorrowChecker {
                 }
             }
             Expr::Keyword(_) => {}
+
+            // Conventional mutable collections (ADR-018)
+            Expr::ConvVector(elements) => {
+                for elem in elements {
+                    self.check_expr(elem);
+                }
+            }
+            Expr::ConvMap(pairs) => {
+                for (k, v) in pairs {
+                    self.check_expr(k);
+                    self.check_expr(v);
+                }
+            }
+
+            // Async/await (ADR-014)
+            Expr::Async(body) => {
+                self.check_expr(body);
+            }
+            Expr::Await(future) => {
+                self.check_expr(future);
+            }
+
+            // SIMD vectors (ADR-016)
+            Expr::SimdVector(elements) => {
+                for elem in elements {
+                    self.check_expr(elem);
+                }
+            }
+
+            // STM (ADR-012)
+            Expr::Dosync(exprs) => {
+                for expr in exprs {
+                    self.check_expr(expr);
+                }
+            }
+            Expr::RefSetStm(ref_expr, value) => {
+                self.check_expr(ref_expr);
+                self.check_expr(value);
+            }
+            Expr::Alter {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.check_expr(ref_expr);
+                self.check_expr(fn_expr);
+                for arg in args {
+                    self.check_expr(arg);
+                }
+            }
+            Expr::Commute {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.check_expr(ref_expr);
+                self.check_expr(fn_expr);
+                for arg in args {
+                    self.check_expr(arg);
+                }
+            }
         }
     }
 

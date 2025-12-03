@@ -54,6 +54,26 @@ pub enum TokenKind {
     Reset,         // reset!
     CompareAndSet, // compare-and-set!
 
+    // Async keywords
+    Async, // async
+    Await, // await
+
+    // STM keywords (ADR-012)
+    Dosync,  // dosync
+    RefSet,  // ref-set
+    Alter,   // alter
+    Commute, // commute
+
+    // Conventional collections
+    LAngleBracket, // <[ (start conventional vector)
+    LAngleBrace,   // <{ (start conventional map)
+    RBracketAngle, // ]> (end conventional vector)
+    RBraceAngle,   // }> (end conventional map)
+
+    // SIMD vectors (ADR-016)
+    DoubleLAngle, // << (start SIMD vector)
+    DoubleRAngle, // >> (end SIMD vector)
+
     // Special
     Eof,
 }
@@ -104,10 +124,63 @@ impl<'a> Lexer<'a> {
             '(' => TokenKind::LParen,
             ')' => TokenKind::RParen,
             '[' => TokenKind::LBracket,
-            ']' => TokenKind::RBracket,
+            ']' => {
+                // Check for ]> (end conventional vector)
+                if self.peek_char() == Some('>') {
+                    self.advance();
+                    TokenKind::RBracketAngle
+                } else {
+                    TokenKind::RBracket
+                }
+            }
             '{' => TokenKind::LBrace,
-            '}' => TokenKind::RBrace,
+            '}' => {
+                // Check for }> (end conventional map)
+                if self.peek_char() == Some('>') {
+                    self.advance();
+                    TokenKind::RBraceAngle
+                } else {
+                    TokenKind::RBrace
+                }
+            }
             '\'' => TokenKind::Quote,
+
+            // Conventional mutable collections (ADR-018) and SIMD vectors (ADR-016)
+            '<' => match self.peek_char() {
+                Some('<') => {
+                    // SIMD vector: <<...>>
+                    self.advance();
+                    TokenKind::DoubleLAngle
+                }
+                Some('[') => {
+                    self.advance();
+                    TokenKind::LAngleBracket
+                }
+                Some('{') => {
+                    self.advance();
+                    TokenKind::LAngleBrace
+                }
+                _ => {
+                    // Bare '<' is a symbol character, treat as symbol start
+                    return Ok(Token::new(
+                        self.lex_symbol(ch, start),
+                        Span::new(start, self.pos),
+                    ));
+                }
+            },
+            '>' => {
+                // Check for >> (end SIMD vector)
+                if self.peek_char() == Some('>') {
+                    self.advance();
+                    TokenKind::DoubleRAngle
+                } else {
+                    // Bare '>' is a symbol character, treat as symbol start
+                    return Ok(Token::new(
+                        self.lex_symbol(ch, start),
+                        Span::new(start, self.pos),
+                    ));
+                }
+            }
             ':' => {
                 // Check if this is a keyword (:foo) or just a colon
                 if let Some(c) = self.peek_char() {
@@ -312,6 +385,14 @@ impl<'a> Lexer<'a> {
             "swap!" => TokenKind::Swap,
             "reset!" => TokenKind::Reset,
             "compare-and-set!" => TokenKind::CompareAndSet,
+            // Async keywords
+            "async" => TokenKind::Async,
+            "await" => TokenKind::Await,
+            // STM keywords
+            "dosync" => TokenKind::Dosync,
+            "ref-set" => TokenKind::RefSet,
+            "alter" => TokenKind::Alter,
+            "commute" => TokenKind::Commute,
             _ => TokenKind::Symbol(s),
         }
     }

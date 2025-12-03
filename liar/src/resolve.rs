@@ -338,6 +338,67 @@ impl Resolver {
                 }
             }
             Expr::Keyword(_) => {}
+
+            // Conventional mutable collections (ADR-018)
+            Expr::ConvVector(elements) => {
+                for elem in elements {
+                    self.resolve_expr(elem);
+                }
+            }
+            Expr::ConvMap(pairs) => {
+                for (k, v) in pairs {
+                    self.resolve_expr(k);
+                    self.resolve_expr(v);
+                }
+            }
+
+            // Async/await (ADR-014)
+            Expr::Async(body) => {
+                self.resolve_expr(body);
+            }
+            Expr::Await(future) => {
+                self.resolve_expr(future);
+            }
+
+            // SIMD vectors (ADR-016)
+            Expr::SimdVector(elements) => {
+                for elem in elements {
+                    self.resolve_expr(elem);
+                }
+            }
+
+            // STM (ADR-012)
+            Expr::Dosync(exprs) => {
+                for expr in exprs {
+                    self.resolve_expr(expr);
+                }
+            }
+            Expr::RefSetStm(ref_expr, value) => {
+                self.resolve_expr(ref_expr);
+                self.resolve_expr(value);
+            }
+            Expr::Alter {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.resolve_expr(ref_expr);
+                self.resolve_expr(fn_expr);
+                for arg in args {
+                    self.resolve_expr(arg);
+                }
+            }
+            Expr::Commute {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                self.resolve_expr(ref_expr);
+                self.resolve_expr(fn_expr);
+                for arg in args {
+                    self.resolve_expr(arg);
+                }
+            }
         }
     }
 

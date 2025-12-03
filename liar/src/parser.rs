@@ -259,6 +259,26 @@ impl<'a> Parser<'a> {
                 self.expect(TokenKind::RBrace)?;
                 Expr::Map(pairs)
             }
+            // Conventional mutable collections
+            TokenKind::LAngleBracket => {
+                self.advance();
+                let elements = self.parse_conv_vector_elements()?;
+                self.expect(TokenKind::RBracketAngle)?;
+                Expr::ConvVector(elements)
+            }
+            TokenKind::LAngleBrace => {
+                self.advance();
+                let pairs = self.parse_conv_map_pairs()?;
+                self.expect(TokenKind::RBraceAngle)?;
+                Expr::ConvMap(pairs)
+            }
+            // SIMD vectors
+            TokenKind::DoubleLAngle => {
+                self.advance();
+                let elements = self.parse_simd_elements()?;
+                self.expect(TokenKind::DoubleRAngle)?;
+                Expr::SimdVector(elements)
+            }
             TokenKind::Symbol(s) => {
                 let s = s.clone();
                 self.advance();
@@ -364,6 +384,60 @@ impl<'a> Parser<'a> {
                     atom: Box::new(atom),
                     old: Box::new(old),
                     new: Box::new(new),
+                })
+            }
+            // Async/await
+            TokenKind::Async => {
+                self.advance();
+                let body = self.parse_expr()?;
+                Ok(Expr::Async(Box::new(body)))
+            }
+            TokenKind::Await => {
+                self.advance();
+                let future = self.parse_expr()?;
+                Ok(Expr::Await(Box::new(future)))
+            }
+            // STM operations
+            TokenKind::Dosync => {
+                self.advance();
+                let mut exprs = Vec::new();
+                while !self.check(TokenKind::RParen) {
+                    exprs.push(self.parse_expr()?);
+                }
+                Ok(Expr::Dosync(exprs))
+            }
+            TokenKind::RefSet => {
+                self.advance();
+                let ref_expr = self.parse_expr()?;
+                let value = self.parse_expr()?;
+                Ok(Expr::RefSetStm(Box::new(ref_expr), Box::new(value)))
+            }
+            TokenKind::Alter => {
+                self.advance();
+                let ref_expr = self.parse_expr()?;
+                let fn_expr = self.parse_expr()?;
+                let mut args = Vec::new();
+                while !self.check(TokenKind::RParen) {
+                    args.push(self.parse_expr()?);
+                }
+                Ok(Expr::Alter {
+                    ref_expr: Box::new(ref_expr),
+                    fn_expr: Box::new(fn_expr),
+                    args,
+                })
+            }
+            TokenKind::Commute => {
+                self.advance();
+                let ref_expr = self.parse_expr()?;
+                let fn_expr = self.parse_expr()?;
+                let mut args = Vec::new();
+                while !self.check(TokenKind::RParen) {
+                    args.push(self.parse_expr()?);
+                }
+                Ok(Expr::Commute {
+                    ref_expr: Box::new(ref_expr),
+                    fn_expr: Box::new(fn_expr),
+                    args,
                 })
             }
             _ => self.parse_call(),
@@ -539,6 +613,35 @@ impl<'a> Parser<'a> {
         Ok(pairs)
     }
 
+    /// Parse conventional vector elements: 1 2 3 (terminated by ]>)
+    fn parse_conv_vector_elements(&mut self) -> Result<Vec<Spanned<Expr>>> {
+        let mut elements = Vec::new();
+        while !self.check(TokenKind::RBracketAngle) {
+            elements.push(self.parse_expr()?);
+        }
+        Ok(elements)
+    }
+
+    /// Parse conventional map pairs: :a 1 :b 2 (terminated by }>)
+    fn parse_conv_map_pairs(&mut self) -> Result<Vec<(Spanned<Expr>, Spanned<Expr>)>> {
+        let mut pairs = Vec::new();
+        while !self.check(TokenKind::RBraceAngle) {
+            let key = self.parse_expr()?;
+            let value = self.parse_expr()?;
+            pairs.push((key, value));
+        }
+        Ok(pairs)
+    }
+
+    /// Parse SIMD vector elements: 1 2 3 4 (terminated by >>)
+    fn parse_simd_elements(&mut self) -> Result<Vec<Spanned<Expr>>> {
+        let mut elements = Vec::new();
+        while !self.check(TokenKind::DoubleRAngle) {
+            elements.push(self.parse_expr()?);
+        }
+        Ok(elements)
+    }
+
     // Helper methods
 
     fn peek(&self) -> &Token {
@@ -702,6 +805,146 @@ mod tests {
                 assert!(matches!(elements[2].node, Expr::Map(_)));
             }
             _ => panic!("expected nested vector"),
+        }
+    }
+
+    #[test]
+    fn test_parse_async() {
+        let mut parser = Parser::new("(async (fetch url))").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        assert!(matches!(expr.node, Expr::Async(_)));
+    }
+
+    #[test]
+    fn test_parse_await() {
+        let mut parser = Parser::new("(await future)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        assert!(matches!(expr.node, Expr::Await(_)));
+    }
+
+    #[test]
+    fn test_parse_conv_vector() {
+        let mut parser = Parser::new("<[1 2 3]>").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::ConvVector(elements) => {
+                assert_eq!(elements.len(), 3);
+            }
+            _ => panic!("expected conv vector"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_conv_vector() {
+        let mut parser = Parser::new("<[]>").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::ConvVector(elements) => {
+                assert!(elements.is_empty());
+            }
+            _ => panic!("expected empty conv vector"),
+        }
+    }
+
+    #[test]
+    fn test_parse_conv_map() {
+        let mut parser = Parser::new("<{:a 1 :b 2}>").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::ConvMap(pairs) => {
+                assert_eq!(pairs.len(), 2);
+            }
+            _ => panic!("expected conv map"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_conv_collections() {
+        let mut parser = Parser::new("<[1 <[2 3]> <{:a 4}>]>").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::ConvVector(elements) => {
+                assert_eq!(elements.len(), 3);
+                assert!(matches!(elements[1].node, Expr::ConvVector(_)));
+                assert!(matches!(elements[2].node, Expr::ConvMap(_)));
+            }
+            _ => panic!("expected nested conv vector"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dosync() {
+        let mut parser = Parser::new("(dosync (alter a + 1))").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        assert!(matches!(expr.node, Expr::Dosync(_)));
+    }
+
+    #[test]
+    fn test_parse_ref_set() {
+        let mut parser = Parser::new("(ref-set a 10)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        assert!(matches!(expr.node, Expr::RefSetStm(_, _)));
+    }
+
+    #[test]
+    fn test_parse_alter() {
+        let mut parser = Parser::new("(alter account - amount)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Alter {
+                ref_expr,
+                fn_expr,
+                args,
+            } => {
+                assert!(matches!(ref_expr.node, Expr::Var(ref s) if s == "account"));
+                assert!(matches!(fn_expr.node, Expr::Var(ref s) if s == "-"));
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("expected alter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_commute() {
+        let mut parser = Parser::new("(commute counter + 1)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        assert!(matches!(expr.node, Expr::Commute { .. }));
+    }
+
+    #[test]
+    fn test_parse_simd_vector() {
+        let mut parser = Parser::new("<<1 2 3 4>>").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::SimdVector(elements) => {
+                assert_eq!(elements.len(), 4);
+            }
+            _ => panic!("expected simd vector"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_simd_vector() {
+        let mut parser = Parser::new("<<>>").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::SimdVector(elements) => {
+                assert!(elements.is_empty());
+            }
+            _ => panic!("expected empty simd vector"),
+        }
+    }
+
+    #[test]
+    fn test_parse_simd_float_vector() {
+        let mut parser = Parser::new("<<1.0 2.0 3.0 4.0>>").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::SimdVector(elements) => {
+                assert_eq!(elements.len(), 4);
+                assert!(matches!(elements[0].node, Expr::Float(_)));
+            }
+            _ => panic!("expected simd vector"),
         }
     }
 }
