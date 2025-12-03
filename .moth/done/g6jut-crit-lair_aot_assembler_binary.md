@@ -1,10 +1,3 @@
-#!/bin/bash
-
-# =============================================================================
-# Moth: lair AOT assembler
-# =============================================================================
-
-moth new "lair: AOT assembler binary" -s crit --no-edit --stdin << 'EOF'
 ## Summary
 Create `lair` binary that compiles lIR source to native executables.
 Codegen library stays pure (no I/O), lair handles files and linking.
@@ -384,17 +377,3 @@ Feature: lair AOT assembler
 - [ ] `--strip` strips symbols
 - [ ] Multiple input files work
 - [ ] Exit codes: 0 success, non-zero failure
-EOF
-
-echo ""
-echo "Created lair moth. This is a significant feature."
-echo ""
-echo "Implementation order:"
-echo "  1. Create lir-lair crate structure"
-echo "  2. Add emit methods to lir-codegen"
-echo "  3. Implement basic compile + link"
-echo "  4. Add optimization levels"
-echo "  5. Add debug info"
-echo "  6. Add emit variants (--emit-llvm, -S)"
-echo "  7. Add cross-compilation"
-echo "  8. Add library linking options"

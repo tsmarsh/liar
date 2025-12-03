@@ -5,6 +5,7 @@ members = [
     "lir-codegen",
     "lir-repl",
     "lir-cli",
+    "lir-lair",
     "cert",
 ]
 
