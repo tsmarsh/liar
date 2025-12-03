@@ -378,6 +378,28 @@ pub enum Expr {
         ptr: Box<Expr>,
     },
 
+    // Ownership operations (verified by separate pass, compile to no-ops or simple ops)
+    // (alloc own T) - allocate owned value
+    AllocOwn {
+        elem_type: ScalarType,
+    },
+    // (borrow ref x) - create shared borrow
+    BorrowRef {
+        value: Box<Expr>,
+    },
+    // (borrow refmut x) - create mutable borrow
+    BorrowRefMut {
+        value: Box<Expr>,
+    },
+    // (drop x) - explicit drop
+    Drop {
+        value: Box<Expr>,
+    },
+    // (move x) - explicit move
+    Move {
+        value: Box<Expr>,
+    },
+
     // Pointer arithmetic
     GetElementPtr {
         ty: GepType,        // The element type we're indexing through (scalar or struct)
@@ -481,6 +503,10 @@ pub struct FunctionDef {
 pub enum ParamType {
     Scalar(ScalarType),
     Ptr,
+    // Ownership types (compile to ptr at LLVM level, verified statically)
+    Own(Box<ScalarType>),    // Owned pointer - dropped when out of scope
+    Ref(Box<ScalarType>),    // Shared borrow - read-only, lifetime-bound
+    RefMut(Box<ScalarType>), // Mutable borrow - exclusive, lifetime-bound
 }
 
 impl std::fmt::Display for ParamType {
@@ -488,6 +514,9 @@ impl std::fmt::Display for ParamType {
         match self {
             Self::Scalar(s) => write!(f, "{}", s),
             Self::Ptr => write!(f, "ptr"),
+            Self::Own(t) => write!(f, "own {}", t),
+            Self::Ref(t) => write!(f, "ref {}", t),
+            Self::RefMut(t) => write!(f, "refmut {}", t),
         }
     }
 }

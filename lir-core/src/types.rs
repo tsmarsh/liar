@@ -26,6 +26,8 @@ impl TypeChecker {
             let ty = match &param.ty {
                 ParamType::Scalar(s) => Type::Scalar(s.clone()),
                 ParamType::Ptr => Type::Ptr,
+                // Ownership types compile to pointers at LLVM level
+                ParamType::Own(_) | ParamType::Ref(_) | ParamType::RefMut(_) => Type::Ptr,
             };
             locals.insert(param.name.clone(), ty);
         }
@@ -404,6 +406,8 @@ impl TypeChecker {
                 match ty {
                     ParamType::Scalar(s) => Ok(Type::Scalar(s.clone())),
                     ParamType::Ptr => Ok(Type::Ptr),
+                    // Ownership types compile to pointers at LLVM level
+                    ParamType::Own(_) | ParamType::Ref(_) | ParamType::RefMut(_) => Ok(Type::Ptr),
                 }
             }
 
@@ -625,6 +629,48 @@ impl TypeChecker {
                 self.locals = saved_locals;
 
                 last_type.ok_or(TypeError::TypeMismatch) // empty body shouldn't happen
+            }
+
+            // Ownership operations - all compile to pointer operations
+            Expr::AllocOwn { .. } => {
+                // AllocOwn returns an owned pointer
+                Ok(Type::Ptr)
+            }
+            Expr::BorrowRef { value } => {
+                // Check value is a pointer
+                let val_ty = self.check(value)?;
+                if !val_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Returns a reference (pointer at runtime)
+                Ok(Type::Ptr)
+            }
+            Expr::BorrowRefMut { value } => {
+                // Check value is a pointer
+                let val_ty = self.check(value)?;
+                if !val_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Returns a mutable reference (pointer at runtime)
+                Ok(Type::Ptr)
+            }
+            Expr::Drop { value } => {
+                // Check value is a pointer
+                let val_ty = self.check(value)?;
+                if !val_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Drop returns void
+                Ok(Type::Scalar(ScalarType::Void))
+            }
+            Expr::Move { value } => {
+                // Check value is a pointer
+                let val_ty = self.check(value)?;
+                if !val_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Move returns the pointer (ownership transferred)
+                Ok(Type::Ptr)
             }
         }
     }

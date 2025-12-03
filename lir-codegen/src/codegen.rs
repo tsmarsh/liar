@@ -135,6 +135,12 @@ impl<'ctx> CodeGen<'ctx> {
                     .ptr_type(inkwell::AddressSpace::default())
                     .into(),
             ),
+            // Ownership types compile to pointers at LLVM level
+            ParamType::Own(_) | ParamType::Ref(_) | ParamType::RefMut(_) => Some(
+                self.context
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .into(),
+            ),
         }
     }
 
@@ -355,6 +361,12 @@ impl<'ctx> CodeGen<'ctx> {
             .filter_map(|p| match p {
                 ParamType::Scalar(s) => self.scalar_to_basic_type(s),
                 ParamType::Ptr => Some(
+                    self.context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .into(),
+                ),
+                // Ownership types compile to pointers at LLVM level
+                ParamType::Own(_) | ParamType::Ref(_) | ParamType::RefMut(_) => Some(
                     self.context
                         .ptr_type(inkwell::AddressSpace::default())
                         .into(),
@@ -790,6 +802,44 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
                 Ok(None)
+            }
+
+            // Ownership operations
+            Expr::AllocOwn { elem_type } => {
+                // Allocate space for the owned value on the stack
+                let llvm_ty = self.scalar_to_basic_type(elem_type).ok_or_else(|| {
+                    CodeGenError::CodeGen("cannot allocate void type".to_string())
+                })?;
+                let ptr = self
+                    .builder
+                    .build_alloca(llvm_ty, "own")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                Ok(Some(ptr.into()))
+            }
+
+            Expr::BorrowRef { value } => {
+                // Borrow creates a reference - at runtime this is just the pointer
+                self.compile_expr_with_deferred_phis(value, locals, blocks, deferred_phis)
+            }
+
+            Expr::BorrowRefMut { value } => {
+                // Mutable borrow - at runtime this is just the pointer
+                self.compile_expr_with_deferred_phis(value, locals, blocks, deferred_phis)
+            }
+
+            Expr::Drop { value } => {
+                // Drop - for now this is a no-op. In the future with RC, it would decrement
+                // the reference count and potentially deallocate
+                let _ =
+                    self.compile_expr_with_deferred_phis(value, locals, blocks, deferred_phis)?;
+                // Drop returns None (void)
+                Ok(None)
+            }
+
+            Expr::Move { value } => {
+                // Move - at runtime this is just returning the pointer
+                // The borrow checker ensures the source is invalidated
+                self.compile_expr_with_deferred_phis(value, locals, blocks, deferred_phis)
             }
 
             // Ret
@@ -1436,6 +1486,30 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                     .into())
             }
+
+            // Ownership operations with locals context
+            Expr::AllocOwn { elem_type } => {
+                let llvm_ty = self.scalar_to_basic_type(elem_type).ok_or_else(|| {
+                    CodeGenError::CodeGen("cannot allocate void type".to_string())
+                })?;
+                let ptr = self
+                    .builder
+                    .build_alloca(llvm_ty, "own")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                Ok(ptr.into())
+            }
+
+            Expr::BorrowRef { value } => self.compile_expr_recursive(value, locals),
+
+            Expr::BorrowRefMut { value } => self.compile_expr_recursive(value, locals),
+
+            Expr::Drop { value } => {
+                let _ = self.compile_expr_recursive(value, locals)?;
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().into())
+            }
+
+            Expr::Move { value } => self.compile_expr_recursive(value, locals),
 
             // For any other expressions, fall back to compile_expr
             _ => self.compile_expr(expr),
@@ -2157,6 +2231,45 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
                 // Convert AggregateValueEnum to BasicValueEnum
                 Ok(result.into_struct_value().into())
+            }
+
+            // Ownership operations - these compile to simple pointer operations
+            // The ownership semantics are verified by a separate borrow-check pass
+            Expr::AllocOwn { elem_type } => {
+                // Allocate space for the owned value on the stack
+                let llvm_ty = self.scalar_to_basic_type(elem_type).ok_or_else(|| {
+                    CodeGenError::CodeGen("cannot allocate void type".to_string())
+                })?;
+                let ptr = self
+                    .builder
+                    .build_alloca(llvm_ty, "own")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                Ok(ptr.into())
+            }
+
+            Expr::BorrowRef { value } => {
+                // Borrow creates a reference - at runtime this is just the pointer
+                self.compile_expr(value)
+            }
+
+            Expr::BorrowRefMut { value } => {
+                // Mutable borrow - at runtime this is just the pointer
+                self.compile_expr(value)
+            }
+
+            Expr::Drop { value } => {
+                // Drop - for now this is a no-op. In the future with RC, it would decrement
+                // the reference count and potentially deallocate
+                let _ = self.compile_expr(value)?;
+                // Return void-equivalent (null pointer as placeholder)
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().into())
+            }
+
+            Expr::Move { value } => {
+                // Move - at runtime this is just returning the pointer
+                // The borrow checker ensures the source is invalidated
+                self.compile_expr(value)
             }
 
             // Let bindings - use the recursive helper with empty initial locals

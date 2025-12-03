@@ -289,6 +289,12 @@ impl<'a> Parser<'a> {
             "array-len" => self.parse_array_len(),
             "array-ptr" => self.parse_array_ptr(),
 
+            // Ownership operations
+            "alloc" => self.parse_alloc_own(),
+            "borrow" => self.parse_borrow(),
+            "drop" => self.parse_drop(),
+            "move" => self.parse_move(),
+
             // Let bindings
             "let" => self.parse_let(),
 
@@ -820,6 +826,80 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse alloc: (alloc own T)
+    fn parse_alloc_own(&mut self) -> Result<Expr, ParseError> {
+        // Expect "own" keyword
+        match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) if s == "own" => {}
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "own".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        }
+
+        // Parse element type
+        let elem_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "element type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        Ok(Expr::AllocOwn { elem_type })
+    }
+
+    /// Parse borrow: (borrow ref x) or (borrow refmut x)
+    fn parse_borrow(&mut self) -> Result<Expr, ParseError> {
+        // Expect "ref" or "refmut" keyword
+        let is_mut = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) if s == "ref" => false,
+            Some(Token::Ident(ref s)) if s == "refmut" => true,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "ref or refmut".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse value expression
+        let value = self.parse_expr()?;
+
+        if is_mut {
+            Ok(Expr::BorrowRefMut {
+                value: Box::new(value),
+            })
+        } else {
+            Ok(Expr::BorrowRef {
+                value: Box::new(value),
+            })
+        }
+    }
+
+    /// Parse drop: (drop x)
+    fn parse_drop(&mut self) -> Result<Expr, ParseError> {
+        let value = self.parse_expr()?;
+        Ok(Expr::Drop {
+            value: Box::new(value),
+        })
+    }
+
+    /// Parse move: (move x)
+    fn parse_move(&mut self) -> Result<Expr, ParseError> {
+        let value = self.parse_expr()?;
+        Ok(Expr::Move {
+            value: Box::new(value),
+        })
+    }
+
     /// Parse let: (let ((name1 expr1) (name2 expr2) ...) body...)
     fn parse_let(&mut self) -> Result<Expr, ParseError> {
         // Expect opening paren for bindings list
@@ -905,28 +985,9 @@ impl<'a> Parser<'a> {
             if *tok == Token::RParen {
                 break;
             }
-            // Parse (type name)
+            // Parse (type name) or (own/ref/refmut type name)
             self.expect(Token::LParen)?;
-            let param_type = match self.lexer.next_token_peeked()? {
-                Some(Token::Ident(ref s)) => self.param_type_from_name(s)?,
-                Some(tok) => {
-                    return Err(ParseError::Expected {
-                        expected: "parameter type".to_string(),
-                        found: format!("{}", tok),
-                    })
-                }
-                None => return Err(ParseError::UnexpectedEof),
-            };
-            let param_name = match self.lexer.next_token_peeked()? {
-                Some(Token::Ident(s)) => s,
-                Some(tok) => {
-                    return Err(ParseError::Expected {
-                        expected: "parameter name".to_string(),
-                        found: format!("{}", tok),
-                    })
-                }
-                None => return Err(ParseError::UnexpectedEof),
-            };
+            let (param_type, param_name) = self.parse_param()?;
             self.expect(Token::RParen)?;
             params.push(Param {
                 ty: param_type,
@@ -1502,6 +1563,84 @@ impl<'a> Parser<'a> {
             "void" => Ok(ParamType::Scalar(ScalarType::Void)),
             _ => Err(ParseError::UnknownType(name.to_string())),
         }
+    }
+
+    /// Parse a function parameter: (type name) or (own/ref/refmut type name)
+    fn parse_param(&mut self) -> Result<(ParamType, String), ParseError> {
+        let first = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => s,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "type or ownership modifier".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Check for ownership modifiers
+        let param_type = match first.as_str() {
+            "own" => {
+                // Parse: own type name
+                let inner_type = match self.lexer.next_token_peeked()? {
+                    Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+                    Some(tok) => {
+                        return Err(ParseError::Expected {
+                            expected: "type".to_string(),
+                            found: format!("{}", tok),
+                        })
+                    }
+                    None => return Err(ParseError::UnexpectedEof),
+                };
+                ParamType::Own(Box::new(inner_type))
+            }
+            "ref" => {
+                // Parse: ref type name
+                let inner_type = match self.lexer.next_token_peeked()? {
+                    Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+                    Some(tok) => {
+                        return Err(ParseError::Expected {
+                            expected: "type".to_string(),
+                            found: format!("{}", tok),
+                        })
+                    }
+                    None => return Err(ParseError::UnexpectedEof),
+                };
+                ParamType::Ref(Box::new(inner_type))
+            }
+            "refmut" => {
+                // Parse: refmut type name
+                let inner_type = match self.lexer.next_token_peeked()? {
+                    Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+                    Some(tok) => {
+                        return Err(ParseError::Expected {
+                            expected: "type".to_string(),
+                            found: format!("{}", tok),
+                        })
+                    }
+                    None => return Err(ParseError::UnexpectedEof),
+                };
+                ParamType::RefMut(Box::new(inner_type))
+            }
+            _ => {
+                // Regular type
+                self.param_type_from_name(&first)?
+            }
+        };
+
+        // Parse parameter name
+        let param_name = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => s,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "parameter name".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        Ok((param_type, param_name))
     }
 
     fn return_type_from_name(&self, name: &str) -> Result<ReturnType, ParseError> {
