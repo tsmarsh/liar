@@ -1007,6 +1007,15 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(Some(result.as_basic_value_enum()))
             }
 
+            // Memory barrier
+            Expr::Fence { ordering } => {
+                // sync_scope = 1 for cross-thread sync (the common case)
+                self.builder
+                    .build_fence(Self::atomic_ordering(ordering), 1, "")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                Ok(None)
+            }
+
             // Ownership operations
             Expr::AllocOwn { elem_type } => {
                 // Allocate space for the owned value on the stack
@@ -1850,6 +1859,16 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
                 Ok(result.as_basic_value_enum())
+            }
+
+            // Memory barrier
+            Expr::Fence { ordering } => {
+                self.builder
+                    .build_fence(Self::atomic_ordering(ordering), 1, "")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                // Return a dummy value since fence doesn't produce a result
+                // In practice, fence should only appear in void-returning contexts
+                Ok(self.context.i64_type().const_int(0, false).into())
             }
 
             // ExtractValue with locals support
@@ -2746,6 +2765,15 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(result.as_basic_value_enum())
             }
 
+            // Memory barrier
+            Expr::Fence { ordering } => {
+                self.builder
+                    .build_fence(Self::atomic_ordering(ordering), 1, "")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                // Return a dummy value since fence doesn't produce a result
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+
             // Let bindings - use the recursive helper with empty initial locals
             Expr::Let { bindings, body } => {
                 let locals: HashMap<String, BasicValueEnum<'ctx>> = HashMap::new();
@@ -3301,6 +3329,15 @@ impl<'ctx> CodeGen<'ctx> {
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
                 Ok(result.as_basic_value_enum())
+            }
+
+            // Memory barrier
+            Expr::Fence { ordering } => {
+                self.builder
+                    .build_fence(Self::atomic_ordering(ordering), 1, "")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                // Return a dummy value since fence doesn't produce a result
+                Ok(self.context.i64_type().const_int(0, false).into())
             }
 
             // ExtractValue with locals support

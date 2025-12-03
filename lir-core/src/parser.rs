@@ -307,6 +307,7 @@ impl<'a> Parser<'a> {
             "atomic-store" => self.parse_atomic_store(),
             "atomicrmw" => self.parse_atomicrmw(),
             "cmpxchg" => self.parse_cmpxchg(),
+            "fence" => self.parse_fence(),
 
             // Let bindings
             "let" => self.parse_let(),
@@ -1097,6 +1098,13 @@ impl<'a> Parser<'a> {
             expected: Box::new(expected),
             new_value: Box::new(new_value),
         })
+    }
+
+    /// Parse fence: (fence ordering)
+    fn parse_fence(&mut self) -> Result<Expr, ParseError> {
+        // Parse the ordering
+        let ordering = self.parse_ordering()?;
+        Ok(Expr::Fence { ordering })
     }
 
     /// Parse let: (let ((name1 expr1) (name2 expr2) ...) body...)

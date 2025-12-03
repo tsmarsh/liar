@@ -773,6 +773,10 @@ impl TypeChecker {
                 // (actual struct type handled in codegen)
                 Ok(Type::Scalar(ScalarType::I32))
             }
+            Expr::Fence { .. } => {
+                // Fence is a void operation, return void type
+                Ok(Type::Scalar(ScalarType::Void))
+            }
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Code generation - emit lIR from liar AST
 
-use crate::ast::{Def, Defstruct, Defun, Expr, Item, Program};
+use crate::ast::{Def, Defprotocol, Defstruct, Defun, Expr, ExtendProtocol, Item, Program};
 use crate::error::{CompileError, Result};
 use crate::span::Spanned;
 
@@ -30,6 +30,8 @@ fn generate_item(item: &Spanned<Item>) -> Result<String> {
         Item::Defun(defun) => generate_defun(defun),
         Item::Def(def) => generate_def(def),
         Item::Defstruct(s) => generate_defstruct(s),
+        Item::Defprotocol(p) => generate_defprotocol(p),
+        Item::ExtendProtocol(e) => generate_extend_protocol(e),
     }
 }
 
@@ -54,6 +56,48 @@ fn generate_defstruct(defstruct: &Defstruct) -> Result<String> {
         })
         .collect();
     Ok(format!("(defstruct {} ({}))", name, fields.join(" ")))
+}
+
+/// Generate lIR for a protocol definition
+fn generate_defprotocol(defprotocol: &Defprotocol) -> Result<String> {
+    let name = &defprotocol.name.node;
+    let methods: Vec<String> = defprotocol
+        .methods
+        .iter()
+        .map(|m| {
+            let params = m.params.iter().map(|p| p.node.as_str()).collect::<Vec<_>>();
+            format!("({} [{}])", m.name.node, params.join(" "))
+        })
+        .collect();
+    // Generate protocol declaration - this is metadata for the runtime
+    Ok(format!("(defprotocol {} ({}))", name, methods.join(" ")))
+}
+
+/// Generate lIR for a protocol extension
+fn generate_extend_protocol(extend: &ExtendProtocol) -> Result<String> {
+    let protocol = &extend.protocol.node;
+    let type_name = &extend.type_name.node;
+    let mut impls = Vec::new();
+    for method in &extend.implementations {
+        let params = method
+            .params
+            .iter()
+            .map(|p| p.node.as_str())
+            .collect::<Vec<_>>();
+        let body = generate_expr(&method.body)?;
+        impls.push(format!(
+            "({} [{}] {})",
+            method.name.node,
+            params.join(" "),
+            body
+        ));
+    }
+    Ok(format!(
+        "(extend-protocol {} {} ({}))",
+        protocol,
+        type_name,
+        impls.join(" ")
+    ))
 }
 
 /// Convert a liar type to lIR type string
@@ -486,7 +530,55 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<String> {
                 ))
             }
         }
+
+        // Iterators
+        Expr::Iter(coll) => {
+            let coll_code = generate_expr(coll)?;
+            Ok(format!("(iter {})", coll_code))
+        }
+        Expr::Collect(iter) => {
+            let iter_code = generate_expr(iter)?;
+            Ok(format!("(collect {})", iter_code))
+        }
+
+        // Byte arrays
+        Expr::ByteArray(bytes) => {
+            // Generate as a byte array literal
+            let bytes_str: Vec<String> = bytes.iter().map(|b| b.to_string()).collect();
+            Ok(format!("(byte-array {})", bytes_str.join(" ")))
+        }
+
+        // Regex literals
+        Expr::Regex { pattern, flags } => {
+            // Generate regex with pattern and flags
+            if flags.is_empty() {
+                Ok(format!("(regex \"{}\")", escape_string(pattern)))
+            } else {
+                Ok(format!(
+                    "(regex \"{}\" \"{}\")",
+                    escape_string(pattern),
+                    flags
+                ))
+            }
+        }
+
+        // Overflow handling (ADR-017)
+        Expr::Boxed(inner) => {
+            // Boxed arithmetic: auto-promotes to bigint on overflow
+            let inner_code = generate_expr(inner)?;
+            Ok(format!("(boxed {})", inner_code))
+        }
+        Expr::Wrapping(inner) => {
+            // Wrapping arithmetic: C-style silent wrap
+            let inner_code = generate_expr(inner)?;
+            Ok(format!("(wrapping {})", inner_code))
+        }
     }
+}
+
+/// Escape a string for output
+fn escape_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Generate code for a function call (handles builtins)
@@ -946,5 +1038,91 @@ mod tests {
         let lir = compile("(defun make-vec () <<1.0 2.0 3.0 4.0>>)");
         assert!(lir.contains("(vector <4 x double>"));
         assert!(lir.contains("(double 1")); // May be 1 or 1.0
+    }
+
+    #[test]
+    fn test_defprotocol() {
+        let lir = compile(
+            r#"
+            (defprotocol Seq
+              (first [self])
+              (rest [self]))
+            "#,
+        );
+        assert!(lir.contains("(defprotocol Seq"));
+        assert!(lir.contains("(first [self])"));
+        assert!(lir.contains("(rest [self])"));
+    }
+
+    #[test]
+    fn test_extend_protocol() {
+        let lir = compile(
+            r#"
+            (defprotocol Counted
+              (count [self]))
+            (extend-protocol Counted PersistentVector
+              (count [self] (len self)))
+            "#,
+        );
+        assert!(lir.contains("(extend-protocol Counted PersistentVector"));
+        assert!(lir.contains("(count [self]"));
+        assert!(lir.contains("(call @len self)"));
+    }
+
+    #[test]
+    fn test_iter() {
+        let lir = compile("(defun make-iter (v) (iter v))");
+        assert!(lir.contains("(iter v)"));
+    }
+
+    #[test]
+    fn test_collect() {
+        let lir = compile("(defun materialize (it) (collect it))");
+        assert!(lir.contains("(collect it)"));
+    }
+
+    #[test]
+    fn test_iter_pipeline() {
+        let lir = compile("(defun squares () (collect (iter [1 2 3])))");
+        assert!(lir.contains("(iter"));
+        assert!(lir.contains("(collect"));
+    }
+
+    #[test]
+    fn test_byte_array() {
+        let lir = compile("(defun get-bytes () #[1 2 3])");
+        assert!(lir.contains("(byte-array 1 2 3)"));
+    }
+
+    #[test]
+    fn test_byte_array_empty() {
+        let lir = compile("(defun get-empty () #[])");
+        assert!(lir.contains("(byte-array )"));
+    }
+
+    #[test]
+    fn test_regex() {
+        let lir = compile(r#"(defun get-pattern () #r"hello")"#);
+        assert!(lir.contains(r#"(regex "hello")"#));
+    }
+
+    #[test]
+    fn test_regex_with_flags() {
+        let lir = compile(r#"(defun get-pattern () #r"pattern"im)"#);
+        assert!(lir.contains(r#"(regex "pattern" "im")"#));
+    }
+
+    #[test]
+    fn test_boxed_arithmetic() {
+        let lir = compile("(defun big-mult (x y) (boxed (* x y)))");
+        assert!(lir.contains("(boxed"));
+        assert!(lir.contains("(mul x y)"));
+    }
+
+    #[test]
+    fn test_wrapping_arithmetic() {
+        let lir = compile("(defun wrap-add (a b) (wrapping (+ a b)))");
+        assert!(lir.contains("(wrapping"));
+        assert!(lir.contains("(add a b)"));
     }
 }

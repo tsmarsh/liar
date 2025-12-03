@@ -522,6 +522,40 @@ impl Inferencer {
                     _ => self.fresh_var(),
                 }
             }
+
+            // Iterators
+            Expr::Iter(coll) => {
+                // iter returns an iterator type
+                let _coll_ty = self.infer_expr(coll, env);
+                // For now, return a fresh variable (Iter<T>)
+                self.fresh_var()
+            }
+            Expr::Collect(iter) => {
+                // collect returns a vector
+                let _iter_ty = self.infer_expr(iter, env);
+                // Returns Vec<T>
+                self.fresh_var()
+            }
+
+            // Byte arrays and regex
+            Expr::ByteArray(_) => {
+                // Byte arrays have type ByteArray
+                Ty::Named("ByteArray".to_string())
+            }
+            Expr::Regex { .. } => {
+                // Regex literals have a Regex type
+                Ty::Named("Regex".to_string())
+            }
+
+            // Overflow handling - inner expression type flows through
+            Expr::Boxed(inner) => {
+                // Boxed may promote to BigInt, but starts with inner type
+                self.infer_expr(inner, env)
+            }
+            Expr::Wrapping(inner) => {
+                // Wrapping preserves inner type
+                self.infer_expr(inner, env)
+            }
         }
     }
 

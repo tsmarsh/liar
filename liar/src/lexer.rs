@@ -40,6 +40,10 @@ pub enum TokenKind {
     False,
     Nil,
 
+    // Overflow handling (ADR-017)
+    Boxed,    // boxed
+    Wrapping, // wrapping
+
     // Operators/Punctuation
     Quote, // '
     Colon, // :
@@ -64,6 +68,14 @@ pub enum TokenKind {
     Alter,   // alter
     Commute, // commute
 
+    // Protocol keywords (ADR-022)
+    Defprotocol,    // defprotocol
+    ExtendProtocol, // extend-protocol
+
+    // Iterator keywords
+    Iter,    // iter (create iterator)
+    Collect, // collect (materialize iterator)
+
     // Conventional collections
     LAngleBracket, // <[ (start conventional vector)
     LAngleBrace,   // <{ (start conventional map)
@@ -73,6 +85,10 @@ pub enum TokenKind {
     // SIMD vectors (ADR-016)
     DoubleLAngle, // << (start SIMD vector)
     DoubleRAngle, // >> (end SIMD vector)
+
+    // Byte arrays and regex
+    HashLBracket,          // #[ (start byte array)
+    Regex(String, String), // #r"pattern"flags (regex literal)
 
     // Special
     Eof,
@@ -203,6 +219,24 @@ impl<'a> Lexer<'a> {
             }
 
             '@' => TokenKind::At,
+
+            // Hash-prefixed literals (byte arrays and regex)
+            '#' => match self.peek_char() {
+                Some('[') => {
+                    self.advance();
+                    TokenKind::HashLBracket
+                }
+                Some('r') => {
+                    self.advance();
+                    self.lex_regex(start)?
+                }
+                _ => {
+                    return Err(CompileError::lex(
+                        Span::new(start, self.pos),
+                        "expected '[' or 'r' after '#'",
+                    ))
+                }
+            },
 
             '"' => self.lex_string(start)?,
 
@@ -380,6 +414,9 @@ impl<'a> Lexer<'a> {
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "nil" => TokenKind::Nil,
+            // Overflow handling keywords
+            "boxed" => TokenKind::Boxed,
+            "wrapping" => TokenKind::Wrapping,
             // Atom keywords
             "atom" => TokenKind::Atom,
             "swap!" => TokenKind::Swap,
@@ -393,8 +430,70 @@ impl<'a> Lexer<'a> {
             "ref-set" => TokenKind::RefSet,
             "alter" => TokenKind::Alter,
             "commute" => TokenKind::Commute,
+            // Protocol keywords
+            "defprotocol" => TokenKind::Defprotocol,
+            "extend-protocol" => TokenKind::ExtendProtocol,
+            // Iterator keywords
+            "iter" => TokenKind::Iter,
+            "collect" => TokenKind::Collect,
             _ => TokenKind::Symbol(s),
         }
+    }
+
+    /// Lex a regex literal: #r"pattern"flags
+    fn lex_regex(&mut self, start: usize) -> Result<TokenKind> {
+        // Expect opening quote
+        match self.advance() {
+            Some('"') => {}
+            _ => {
+                return Err(CompileError::lex(
+                    Span::new(start, self.pos),
+                    "expected '\"' after #r",
+                ))
+            }
+        }
+
+        // Read pattern until closing quote
+        let mut pattern = String::new();
+        loop {
+            match self.advance() {
+                Some('"') => break,
+                Some('\\') => {
+                    // Escape sequences in regex - pass through literally
+                    match self.advance() {
+                        Some(c) => {
+                            pattern.push('\\');
+                            pattern.push(c);
+                        }
+                        None => {
+                            return Err(CompileError::lex(
+                                Span::new(start, self.pos),
+                                "unterminated regex pattern",
+                            ))
+                        }
+                    }
+                }
+                Some(c) => pattern.push(c),
+                None => {
+                    return Err(CompileError::lex(
+                        Span::new(start, self.pos),
+                        "unterminated regex pattern",
+                    ))
+                }
+            }
+        }
+
+        // Read optional flags (i, m, s, x, etc.)
+        let mut flags = String::new();
+        while let Some(c) = self.peek_char() {
+            if c.is_ascii_alphabetic() {
+                flags.push(self.advance().unwrap());
+            } else {
+                break;
+            }
+        }
+
+        Ok(TokenKind::Regex(pattern, flags))
     }
 }
 
@@ -421,5 +520,51 @@ mod tests {
         assert_eq!(tokens[3].kind, TokenKind::Int(2));
         assert_eq!(tokens[4].kind, TokenKind::RParen);
         assert_eq!(tokens[5].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_byte_array_tokens() {
+        let mut lexer = Lexer::new("#[1 2 3]");
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens.len(), 6); // #[ 1 2 3 ] Eof
+        assert_eq!(tokens[0].kind, TokenKind::HashLBracket);
+        assert_eq!(tokens[1].kind, TokenKind::Int(1));
+        assert_eq!(tokens[2].kind, TokenKind::Int(2));
+        assert_eq!(tokens[3].kind, TokenKind::Int(3));
+        assert_eq!(tokens[4].kind, TokenKind::RBracket);
+        assert_eq!(tokens[5].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn test_regex_token() {
+        let mut lexer = Lexer::new(r#"#r"hello""#);
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens.len(), 2); // regex Eof
+        assert_eq!(
+            tokens[0].kind,
+            TokenKind::Regex("hello".to_string(), "".to_string())
+        );
+    }
+
+    #[test]
+    fn test_regex_token_with_flags() {
+        let mut lexer = Lexer::new(r#"#r"pattern"im"#);
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(
+            tokens[0].kind,
+            TokenKind::Regex("pattern".to_string(), "im".to_string())
+        );
+    }
+
+    #[test]
+    fn test_regex_token_with_escapes() {
+        let mut lexer = Lexer::new(r#"#r"\d+\s*""#);
+        let tokens = lexer.tokenize().unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(
+            tokens[0].kind,
+            TokenKind::Regex(r"\d+\s*".to_string(), "".to_string())
+        );
     }
 }

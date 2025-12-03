@@ -55,12 +55,18 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Item::Defstruct(self.parse_defstruct()?)
             }
-            _ => {
-                return Err(CompileError::parse(
-                    self.current_span(),
-                    "expected top-level form: defun, def, or defstruct",
-                ))
+            TokenKind::Defprotocol => {
+                self.advance();
+                Item::Defprotocol(self.parse_defprotocol()?)
             }
+            TokenKind::ExtendProtocol => {
+                self.advance();
+                Item::ExtendProtocol(self.parse_extend_protocol()?)
+            }
+            _ => return Err(CompileError::parse(
+                self.current_span(),
+                "expected top-level form: defun, def, defstruct, defprotocol, or extend-protocol",
+            )),
         };
 
         self.expect(TokenKind::RParen)?;
@@ -153,6 +159,90 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::RParen)?;
         Ok(Defstruct { name, fields })
+    }
+
+    /// Parse protocol definition: (defprotocol Name "docstring"? (method [self args...] "doc"?)...)
+    fn parse_defprotocol(&mut self) -> Result<Defprotocol> {
+        let name = self.parse_symbol()?;
+
+        // Optional docstring
+        let doc = if let TokenKind::String(s) = &self.peek().kind {
+            let s = s.clone();
+            self.advance();
+            Some(s)
+        } else {
+            None
+        };
+
+        // Parse method signatures
+        let mut methods = Vec::new();
+        while !self.check(TokenKind::RParen) {
+            self.expect(TokenKind::LParen)?;
+            let method_name = self.parse_symbol()?;
+
+            // Parse parameter list [self arg1 arg2]
+            self.expect(TokenKind::LBracket)?;
+            let mut params = Vec::new();
+            while !self.check(TokenKind::RBracket) {
+                params.push(self.parse_symbol()?);
+            }
+            self.expect(TokenKind::RBracket)?;
+
+            // Optional method docstring
+            let method_doc = if let TokenKind::String(s) = &self.peek().kind {
+                let s = s.clone();
+                self.advance();
+                Some(s)
+            } else {
+                None
+            };
+
+            self.expect(TokenKind::RParen)?;
+            methods.push(ProtocolMethod {
+                name: method_name,
+                params,
+                doc: method_doc,
+            });
+        }
+
+        Ok(Defprotocol { name, doc, methods })
+    }
+
+    /// Parse protocol extension: (extend-protocol ProtocolName TypeName (method [self args...] body)...)
+    fn parse_extend_protocol(&mut self) -> Result<ExtendProtocol> {
+        let protocol = self.parse_symbol()?;
+        let type_name = self.parse_symbol()?;
+
+        // Parse method implementations
+        let mut implementations = Vec::new();
+        while !self.check(TokenKind::RParen) {
+            self.expect(TokenKind::LParen)?;
+            let method_name = self.parse_symbol()?;
+
+            // Parse parameter list [self arg1 arg2]
+            self.expect(TokenKind::LBracket)?;
+            let mut params = Vec::new();
+            while !self.check(TokenKind::RBracket) {
+                params.push(self.parse_symbol()?);
+            }
+            self.expect(TokenKind::RBracket)?;
+
+            // Parse body
+            let body = self.parse_expr()?;
+            self.expect(TokenKind::RParen)?;
+
+            implementations.push(MethodImpl {
+                name: method_name,
+                params,
+                body,
+            });
+        }
+
+        Ok(ExtendProtocol {
+            protocol,
+            type_name,
+            implementations,
+        })
     }
 
     /// Parse a type annotation
@@ -278,6 +368,20 @@ impl<'a> Parser<'a> {
                 let elements = self.parse_simd_elements()?;
                 self.expect(TokenKind::DoubleRAngle)?;
                 Expr::SimdVector(elements)
+            }
+            // Byte arrays: #[1 2 3]
+            TokenKind::HashLBracket => {
+                self.advance();
+                let bytes = self.parse_byte_array_elements()?;
+                self.expect(TokenKind::RBracket)?;
+                Expr::ByteArray(bytes)
+            }
+            // Regex literals: #r"pattern"flags
+            TokenKind::Regex(pattern, flags) => {
+                let pattern = pattern.clone();
+                let flags = flags.clone();
+                self.advance();
+                Expr::Regex { pattern, flags }
             }
             TokenKind::Symbol(s) => {
                 let s = s.clone();
@@ -439,6 +543,28 @@ impl<'a> Parser<'a> {
                     fn_expr: Box::new(fn_expr),
                     args,
                 })
+            }
+            // Iterator operations
+            TokenKind::Iter => {
+                self.advance();
+                let coll = self.parse_expr()?;
+                Ok(Expr::Iter(Box::new(coll)))
+            }
+            TokenKind::Collect => {
+                self.advance();
+                let iter = self.parse_expr()?;
+                Ok(Expr::Collect(Box::new(iter)))
+            }
+            // Overflow handling (ADR-017)
+            TokenKind::Boxed => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Ok(Expr::Boxed(Box::new(expr)))
+            }
+            TokenKind::Wrapping => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Ok(Expr::Wrapping(Box::new(expr)))
             }
             _ => self.parse_call(),
         }
@@ -640,6 +766,34 @@ impl<'a> Parser<'a> {
             elements.push(self.parse_expr()?);
         }
         Ok(elements)
+    }
+
+    /// Parse byte array elements: 1 2 3 or 0x61 0x62 (terminated by ])
+    fn parse_byte_array_elements(&mut self) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        while !self.check(TokenKind::RBracket) {
+            let span = self.current_span();
+            match &self.peek().kind {
+                TokenKind::Int(n) => {
+                    let n = *n;
+                    self.advance();
+                    if !(0..=255).contains(&n) {
+                        return Err(CompileError::parse(
+                            span,
+                            format!("byte value {} out of range (0-255)", n),
+                        ));
+                    }
+                    bytes.push(n as u8);
+                }
+                _ => {
+                    return Err(CompileError::parse(
+                        span,
+                        "expected integer (0-255) in byte array",
+                    ))
+                }
+            }
+        }
+        Ok(bytes)
     }
 
     // Helper methods
@@ -945,6 +1099,206 @@ mod tests {
                 assert!(matches!(elements[0].node, Expr::Float(_)));
             }
             _ => panic!("expected simd vector"),
+        }
+    }
+
+    #[test]
+    fn test_parse_defprotocol() {
+        let source = r#"
+            (defprotocol Seq
+              "Sequence protocol"
+              (first [self] "Returns the first element")
+              (rest [self] "Returns remaining elements"))
+        "#;
+        let mut parser = Parser::new(source).unwrap();
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.items.len(), 1);
+        match &program.items[0].node {
+            Item::Defprotocol(p) => {
+                assert_eq!(p.name.node, "Seq");
+                assert_eq!(p.doc, Some("Sequence protocol".to_string()));
+                assert_eq!(p.methods.len(), 2);
+                assert_eq!(p.methods[0].name.node, "first");
+                assert_eq!(p.methods[0].params.len(), 1);
+                assert_eq!(p.methods[0].params[0].node, "self");
+            }
+            _ => panic!("expected defprotocol"),
+        }
+    }
+
+    #[test]
+    fn test_parse_defprotocol_no_doc() {
+        let source = r#"
+            (defprotocol Counted
+              (count [self]))
+        "#;
+        let mut parser = Parser::new(source).unwrap();
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.items.len(), 1);
+        match &program.items[0].node {
+            Item::Defprotocol(p) => {
+                assert_eq!(p.name.node, "Counted");
+                assert!(p.doc.is_none());
+                assert_eq!(p.methods.len(), 1);
+            }
+            _ => panic!("expected defprotocol"),
+        }
+    }
+
+    #[test]
+    fn test_parse_extend_protocol() {
+        let source = r#"
+            (extend-protocol Seq PersistentVector
+              (first [self] (nth self 0))
+              (rest [self] (subvec self 1)))
+        "#;
+        let mut parser = Parser::new(source).unwrap();
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.items.len(), 1);
+        match &program.items[0].node {
+            Item::ExtendProtocol(e) => {
+                assert_eq!(e.protocol.node, "Seq");
+                assert_eq!(e.type_name.node, "PersistentVector");
+                assert_eq!(e.implementations.len(), 2);
+                assert_eq!(e.implementations[0].name.node, "first");
+                assert_eq!(e.implementations[0].params.len(), 1);
+            }
+            _ => panic!("expected extend-protocol"),
+        }
+    }
+
+    #[test]
+    fn test_parse_iter() {
+        let mut parser = Parser::new("(iter [1 2 3])").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Iter(coll) => {
+                assert!(matches!(coll.node, Expr::Vector(_)));
+            }
+            _ => panic!("expected iter"),
+        }
+    }
+
+    #[test]
+    fn test_parse_collect() {
+        let mut parser = Parser::new("(collect it)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Collect(iter) => {
+                assert!(matches!(iter.node, Expr::Var(ref s) if s == "it"));
+            }
+            _ => panic!("expected collect"),
+        }
+    }
+
+    #[test]
+    fn test_parse_byte_array() {
+        let mut parser = Parser::new("#[1 2 3]").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::ByteArray(bytes) => {
+                assert_eq!(bytes, vec![1, 2, 3]);
+            }
+            _ => panic!("expected byte array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_byte_array() {
+        let mut parser = Parser::new("#[]").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::ByteArray(bytes) => {
+                assert!(bytes.is_empty());
+            }
+            _ => panic!("expected empty byte array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_byte_array_hex() {
+        let mut parser = Parser::new("#[0 127 255]").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::ByteArray(bytes) => {
+                assert_eq!(bytes, vec![0, 127, 255]);
+            }
+            _ => panic!("expected byte array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_regex() {
+        let mut parser = Parser::new(r#"#r"hello""#).unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Regex { pattern, flags } => {
+                assert_eq!(pattern, "hello");
+                assert_eq!(flags, "");
+            }
+            _ => panic!("expected regex"),
+        }
+    }
+
+    #[test]
+    fn test_parse_regex_with_flags() {
+        let mut parser = Parser::new(r#"#r"pattern"im"#).unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Regex { pattern, flags } => {
+                assert_eq!(pattern, "pattern");
+                assert_eq!(flags, "im");
+            }
+            _ => panic!("expected regex"),
+        }
+    }
+
+    #[test]
+    fn test_parse_regex_with_escapes() {
+        let mut parser = Parser::new(r#"#r"\d+""#).unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Regex { pattern, flags } => {
+                assert_eq!(pattern, r"\d+");
+                assert_eq!(flags, "");
+            }
+            _ => panic!("expected regex"),
+        }
+    }
+
+    #[test]
+    fn test_parse_boxed() {
+        let mut parser = Parser::new("(boxed (* x y))").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Boxed(inner) => {
+                assert!(matches!(inner.node, Expr::Call(_, _)));
+            }
+            _ => panic!("expected boxed"),
+        }
+    }
+
+    #[test]
+    fn test_parse_wrapping() {
+        let mut parser = Parser::new("(wrapping (+ a b))").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Wrapping(inner) => {
+                assert!(matches!(inner.node, Expr::Call(_, _)));
+            }
+            _ => panic!("expected wrapping"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_overflow() {
+        let mut parser = Parser::new("(boxed (wrapping (* x y)))").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Boxed(inner) => {
+                assert!(matches!(inner.node, Expr::Wrapping(_)));
+            }
+            _ => panic!("expected boxed"),
         }
     }
 }

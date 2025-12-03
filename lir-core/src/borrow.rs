@@ -382,6 +382,9 @@ impl BorrowChecker {
                 self.check_expr(expected);
                 self.check_expr(new_value);
             }
+            Expr::Fence { .. } => {
+                // Fence has no operands to check
+            }
         }
     }
 

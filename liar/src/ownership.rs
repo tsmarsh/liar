@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{Def, Defun, Expr, Item, LetBinding, MatchArm, Program};
+use crate::ast::{Def, Defun, Expr, ExtendProtocol, Item, LetBinding, MatchArm, Program};
 use crate::error::{CompileError, Errors};
 use crate::resolve::BindingId;
 use crate::span::{Span, Spanned};
@@ -412,6 +412,10 @@ impl BorrowChecker {
             Item::Defstruct(_defstruct) => {
                 // Struct definitions don't have ownership semantics
             }
+            Item::Defprotocol(_defprotocol) => {
+                // Protocol definitions don't have ownership semantics
+            }
+            Item::ExtendProtocol(extend) => self.check_extend_protocol(extend),
         }
     }
 
@@ -434,6 +438,19 @@ impl BorrowChecker {
         self.check_expr(&def.value);
         // Define the constant
         self.define(&def.name.node, def.name.span);
+    }
+
+    fn check_extend_protocol(&mut self, extend: &ExtendProtocol) {
+        // Check each method implementation
+        for method in &extend.implementations {
+            self.push_scope();
+            // Define parameters including self
+            for param in &method.params {
+                self.define(&param.node, param.span);
+            }
+            self.check_expr(&method.body);
+            self.pop_scope();
+        }
     }
 
     fn check_expr(&mut self, expr: &Spanned<Expr>) {
@@ -698,6 +715,30 @@ impl BorrowChecker {
                 for arg in args {
                     self.check_expr(arg);
                 }
+            }
+
+            // Iterators - consume the collection/iterator
+            Expr::Iter(coll) => {
+                self.check_expr(coll);
+                // iter consumes the collection
+                if let Expr::Var(name) = &coll.node {
+                    self.move_value(name, coll.span);
+                }
+            }
+            Expr::Collect(iter) => {
+                self.check_expr(iter);
+                // collect consumes the iterator
+                if let Expr::Var(name) = &iter.node {
+                    self.move_value(name, iter.span);
+                }
+            }
+
+            // Byte arrays and regex are literals - no ownership concerns
+            Expr::ByteArray(_) | Expr::Regex { .. } => {}
+
+            // Overflow handling - recurse into inner expression
+            Expr::Boxed(inner) | Expr::Wrapping(inner) => {
+                self.check_expr(inner);
             }
         }
     }

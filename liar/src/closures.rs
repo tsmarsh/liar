@@ -5,7 +5,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{Def, Defun, Expr, Item, LetBinding, MatchArm, Param, Pattern, Program};
+use crate::ast::{
+    Def, Defun, Expr, ExtendProtocol, Item, LetBinding, MatchArm, Param, Pattern, Program,
+};
 use crate::error::{CompileError, Errors, Result};
 use crate::resolve::BindingId;
 use crate::span::{Span, Spanned};
@@ -136,6 +138,8 @@ impl ClosureAnalyzer {
             Item::Defun(defun) => self.analyze_defun(defun),
             Item::Def(def) => self.analyze_def(def),
             Item::Defstruct(_) => {}
+            Item::Defprotocol(_) => {}
+            Item::ExtendProtocol(extend) => self.analyze_extend_protocol(extend),
         }
     }
 
@@ -159,6 +163,19 @@ impl ClosureAnalyzer {
     fn analyze_def(&mut self, def: &Def) {
         self.define(&def.name.node);
         self.analyze_expr(&def.value);
+    }
+
+    fn analyze_extend_protocol(&mut self, extend: &ExtendProtocol) {
+        // Analyze each method implementation
+        for method in &extend.implementations {
+            self.push_scope();
+            // Define parameters including self
+            for param in &method.params {
+                self.define(&param.node);
+            }
+            self.analyze_expr(&method.body);
+            self.pop_scope();
+        }
     }
 
     fn analyze_expr(&mut self, expr: &Spanned<Expr>) {
@@ -333,6 +350,22 @@ impl ClosureAnalyzer {
                 for arg in args {
                     self.analyze_expr(arg);
                 }
+            }
+
+            // Iterators
+            Expr::Iter(coll) => {
+                self.analyze_expr(coll);
+            }
+            Expr::Collect(iter) => {
+                self.analyze_expr(iter);
+            }
+
+            // Byte arrays and regex are literals - no captures
+            Expr::ByteArray(_) | Expr::Regex { .. } => {}
+
+            // Overflow handling - recurse into inner expression
+            Expr::Boxed(inner) | Expr::Wrapping(inner) => {
+                self.analyze_expr(inner);
             }
         }
     }
@@ -619,6 +652,22 @@ impl ClosureAnalyzer {
                     self.find_free_vars_lambda_inner(arg, local, free);
                 }
             }
+
+            // Iterators
+            Expr::Iter(coll) => {
+                self.find_free_vars_lambda_inner(coll, local, free);
+            }
+            Expr::Collect(iter) => {
+                self.find_free_vars_lambda_inner(iter, local, free);
+            }
+
+            // Byte arrays and regex are literals - no free vars
+            Expr::ByteArray(_) | Expr::Regex { .. } => {}
+
+            // Overflow handling - recurse into inner expression
+            Expr::Boxed(inner) | Expr::Wrapping(inner) => {
+                self.find_free_vars_lambda_inner(inner, local, free);
+            }
         }
     }
 
@@ -798,6 +847,12 @@ impl<'a> ThreadSafetyChecker<'a> {
             Item::Defun(defun) => self.check_expr(&defun.body),
             Item::Def(def) => self.check_expr(&def.value),
             Item::Defstruct(_) => {}
+            Item::Defprotocol(_) => {}
+            Item::ExtendProtocol(extend) => {
+                for method in &extend.implementations {
+                    self.check_expr(&method.body);
+                }
+            }
         }
     }
 
@@ -1022,6 +1077,14 @@ impl<'a> ThreadSafetyChecker<'a> {
                 }
             }
 
+            // Iterators
+            Expr::Iter(coll) => {
+                self.check_expr(coll);
+            }
+            Expr::Collect(iter) => {
+                self.check_expr(iter);
+            }
+
             // Literals and simple expressions
             Expr::Int(_)
             | Expr::Float(_)
@@ -1030,7 +1093,14 @@ impl<'a> ThreadSafetyChecker<'a> {
             | Expr::Nil
             | Expr::Var(_)
             | Expr::Quote(_)
-            | Expr::Keyword(_) => {}
+            | Expr::Keyword(_)
+            | Expr::ByteArray(_)
+            | Expr::Regex { .. } => {}
+
+            // Overflow handling - recurse into inner expression
+            Expr::Boxed(inner) | Expr::Wrapping(inner) => {
+                self.check_expr(inner);
+            }
         }
     }
 }

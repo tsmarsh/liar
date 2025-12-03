@@ -17,6 +17,10 @@ pub enum Item {
     Def(Def),
     /// Struct definition: (defstruct name (fields...))
     Defstruct(Defstruct),
+    /// Protocol definition: (defprotocol Name (method [self args...])...)
+    Defprotocol(Defprotocol),
+    /// Protocol extension: (extend-protocol ProtocolName TypeName (method [self args...] body)...)
+    ExtendProtocol(ExtendProtocol),
 }
 
 /// Function definition
@@ -55,6 +59,38 @@ pub struct Defstruct {
 pub struct StructField {
     pub name: Spanned<String>,
     pub ty: Spanned<Type>,
+}
+
+/// Protocol definition (ADR-022)
+#[derive(Debug, Clone)]
+pub struct Defprotocol {
+    pub name: Spanned<String>,
+    pub doc: Option<String>,
+    pub methods: Vec<ProtocolMethod>,
+}
+
+/// Protocol method signature
+#[derive(Debug, Clone)]
+pub struct ProtocolMethod {
+    pub name: Spanned<String>,
+    pub params: Vec<Spanned<String>>, // includes self
+    pub doc: Option<String>,
+}
+
+/// Protocol extension for a specific type
+#[derive(Debug, Clone)]
+pub struct ExtendProtocol {
+    pub protocol: Spanned<String>,
+    pub type_name: Spanned<String>,
+    pub implementations: Vec<MethodImpl>,
+}
+
+/// Method implementation for a type
+#[derive(Debug, Clone)]
+pub struct MethodImpl {
+    pub name: Spanned<String>,
+    pub params: Vec<Spanned<String>>, // includes self
+    pub body: Spanned<Expr>,
 }
 
 /// Type annotation
@@ -177,6 +213,24 @@ pub enum Expr {
         fn_expr: Box<Spanned<Expr>>,
         args: Vec<Spanned<Expr>>,
     },
+
+    // Iterators
+    /// Create iterator from collection: (iter coll)
+    Iter(Box<Spanned<Expr>>),
+    /// Materialize iterator to collection: (collect iter)
+    Collect(Box<Spanned<Expr>>),
+
+    // Byte arrays and regex
+    /// Byte array literal: #[1 2 3] or #[0x61 0x62 0x63]
+    ByteArray(Vec<u8>),
+    /// Regex literal: #r"pattern"flags
+    Regex { pattern: String, flags: String },
+
+    // Overflow handling (ADR-017)
+    /// Boxed arithmetic: auto-promotes to bigint on overflow
+    Boxed(Box<Spanned<Expr>>),
+    /// Wrapping arithmetic: C-style silent wrap
+    Wrapping(Box<Spanned<Expr>>),
 }
 
 /// Let binding

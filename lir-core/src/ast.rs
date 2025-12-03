@@ -562,6 +562,11 @@ pub enum Expr {
         new_value: Box<Expr>,
     },
 
+    // (fence ordering) - memory barrier
+    Fence {
+        ordering: MemoryOrdering,
+    },
+
     // Let binding for SSA values
     Let {
         bindings: Vec<(String, Box<Expr>)>, // (name, value) pairs

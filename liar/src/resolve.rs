@@ -5,7 +5,10 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{Def, Defstruct, Defun, Expr, Item, LetBinding, MatchArm, Pattern, Program};
+use crate::ast::{
+    Def, Defprotocol, Defstruct, Defun, Expr, ExtendProtocol, Item, LetBinding, MatchArm, Pattern,
+    Program,
+};
 use crate::error::{CompileError, Errors, Result};
 use crate::span::{Span, Spanned};
 
@@ -29,6 +32,7 @@ pub enum BindingKind {
     Function,
     Constant,
     Struct,
+    Protocol,
 }
 
 /// A scope containing bindings
@@ -170,6 +174,16 @@ impl Resolver {
                         BindingKind::Struct,
                     );
                 }
+                Item::Defprotocol(defprotocol) => {
+                    self.define(
+                        &defprotocol.name.node,
+                        defprotocol.name.span,
+                        BindingKind::Protocol,
+                    );
+                }
+                Item::ExtendProtocol(_) => {
+                    // extend-protocol doesn't define a new name
+                }
             }
         }
 
@@ -188,6 +202,8 @@ impl Resolver {
             Item::Defun(defun) => self.resolve_defun(defun),
             Item::Def(def) => self.resolve_def(def),
             Item::Defstruct(defstruct) => self.resolve_defstruct(defstruct),
+            Item::Defprotocol(defprotocol) => self.resolve_defprotocol(defprotocol),
+            Item::ExtendProtocol(extend) => self.resolve_extend_protocol(extend),
         }
     }
 
@@ -212,6 +228,30 @@ impl Resolver {
     fn resolve_defstruct(&mut self, _defstruct: &Defstruct) {
         // Struct definitions don't have expressions to resolve
         // Field types are resolved during type checking
+    }
+
+    fn resolve_defprotocol(&mut self, _defprotocol: &Defprotocol) {
+        // Protocol definitions only contain method signatures
+        // Method names and parameters are not resolved as expressions
+    }
+
+    fn resolve_extend_protocol(&mut self, extend: &ExtendProtocol) {
+        // Verify the protocol exists
+        self.lookup(&extend.protocol.node, extend.protocol.span);
+
+        // Verify the type exists (optional - could be a built-in type)
+        // For now we just resolve method bodies
+
+        // Resolve method implementations
+        for method in &extend.implementations {
+            self.push_scope();
+            // Define parameters including self
+            for param in &method.params {
+                self.define(&param.node, param.span, BindingKind::Parameter);
+            }
+            self.resolve_expr(&method.body);
+            self.pop_scope();
+        }
     }
 
     fn resolve_expr(&mut self, expr: &Spanned<Expr>) {
@@ -398,6 +438,22 @@ impl Resolver {
                 for arg in args {
                     self.resolve_expr(arg);
                 }
+            }
+
+            // Iterators
+            Expr::Iter(coll) => {
+                self.resolve_expr(coll);
+            }
+            Expr::Collect(iter) => {
+                self.resolve_expr(iter);
+            }
+
+            // Byte arrays and regex are literals - no resolution needed
+            Expr::ByteArray(_) | Expr::Regex { .. } => {}
+
+            // Overflow handling - recurse into inner expression
+            Expr::Boxed(inner) | Expr::Wrapping(inner) => {
+                self.resolve_expr(inner);
             }
         }
     }
