@@ -204,6 +204,11 @@ async fn given_expression(world: &mut LirWorld, expr: String) {
         world.externs.insert(decl.name.clone(), decl);
     }
 
+    // Try to parse as struct definition and accumulate
+    if let Some(def) = try_parse_struct(&expr) {
+        world.structs.insert(def.name.clone(), def);
+    }
+
     // Also run through CLI for non-function tests
     let result = execute::<CliBackend>(&expr);
     world.exit_code = result.exit_code;

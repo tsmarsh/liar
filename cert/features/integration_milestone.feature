@@ -112,17 +112,26 @@ Feature: Integration Milestone (lIR readiness for liar)
   # PHASE 6: Structs
   # ============================================================
 
-  Scenario: Define struct and access field via GEP
+  Scenario: Struct field access via GEP - self-contained
+    # Allocate space for struct (2 i64s), set fields, read back x field
     Given the expression (defstruct point (i64 i64))
-    And the expression (define (get-x i64) ((ptr p)) (block entry (ret (load i64 (getelementptr %struct.point p (i64 0) (i32 0))))))
-    When I call get-x with a point { x: 10, y: 20 }
+    And the expression (define (test-point-x i64) () (block entry (let ((p (alloca i64 (i32 2)))) (store (i64 10) (getelementptr %struct.point p (i64 0) (i32 0))) (store (i64 20) (getelementptr %struct.point p (i64 0) (i32 1))) (ret (load i64 (getelementptr %struct.point p (i64 0) (i32 0)))))))
+    When I call test-point-x
     Then the result is (i64 10)
 
-  Scenario: Set struct field via GEP
+  Scenario: Struct field access via GEP - read y field
+    Given the expression (defstruct point (i64 i64))
+    And the expression (define (test-point-y i64) () (block entry (let ((p (alloca i64 (i32 2)))) (store (i64 10) (getelementptr %struct.point p (i64 0) (i32 0))) (store (i64 20) (getelementptr %struct.point p (i64 0) (i32 1))) (ret (load i64 (getelementptr %struct.point p (i64 0) (i32 1)))))))
+    When I call test-point-y
+    Then the result is (i64 20)
+
+  Scenario: Struct set and read via helper functions
     Given the expression (defstruct counter (i64))
     And the expression (define (set-count void) ((ptr c) (i64 n)) (block entry (store n (getelementptr %struct.counter c (i64 0) (i32 0))) (ret)))
-    When I allocate counter and call set-count with (i64 99)
-    Then loading field 0 returns (i64 99)
+    And the expression (define (get-count i64) ((ptr c)) (block entry (ret (load i64 (getelementptr %struct.counter c (i64 0) (i32 0))))))
+    And the expression (define (test-counter i64) () (block entry (let ((c (alloca i64))) (call @set-count c (i64 99)) (ret (call @get-count c)))))
+    When I call test-counter
+    Then the result is (i64 99)
 
   # ============================================================
   # PHASE 7: Closure Simulation (Ultimate Test)
@@ -130,10 +139,12 @@ Feature: Integration Milestone (lIR readiness for liar)
   # This demonstrates lIR can represent closures via struct + function pointer.
   # The pattern: environment struct + function that takes (env, args...).
 
-  Scenario: Closure simulation - adder
+  Scenario: Closure simulation - adder (self-contained)
+    # Simulates: (defun make-adder (x) (fn (y) (+ x y)))
+    # Then: ((make-adder 10) 32) => 42
     Given the expression (defstruct adder_env (i64))
     And the expression (define (adder_fn i64) ((ptr env) (i64 y)) (block entry (let ((x (load i64 (getelementptr %struct.adder_env env (i64 0) (i32 0))))) (ret (add x y)))))
     And the expression (define (make_adder ptr) ((i64 x)) (block entry (let ((env (alloca i64))) (store x env) (ret env))))
-    And I create an adder with captured value (i64 10)
-    When I call the adder with (i64 32)
+    And the expression (define (test-closure i64) () (block entry (let ((env (call @make_adder (i64 10)))) (ret (call @adder_fn env (i64 32))))))
+    When I call test-closure
     Then the result is (i64 42)

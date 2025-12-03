@@ -31,7 +31,8 @@ Feature: Memory Operations (alloca, load, store)
 
   Scenario: store and load through function parameters
     Given the expression (define (read-ptr i32) ((ptr p)) (block entry (ret (load i32 p))))
-    When I call read-ptr with a pointer to (i32 99)
+    And the expression (define (test-read-ptr i32) () (block entry (let ((p (alloca i32))) (store (i32 99) p) (ret (call @read-ptr p)))))
+    When I call test-read-ptr
     Then the result is (i32 99)
 
   # Getelementptr (GEP) - pointer arithmetic
