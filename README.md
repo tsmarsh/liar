@@ -1,97 +1,285 @@
-# lIR
+# liar
 
-An S-expression assembler for LLVM IR. Not a Lisp—just LLVM IR in parens.
+A memory-safe Lisp without garbage collection, compiled to native code via LLVM.
 
 ## What is this?
 
-lIR (pronounced "liar") provides a 1:1 mapping to LLVM IR using S-expression syntax. There's no evaluation model, no macros, no type promotion—just LLVM IR with parentheses.
+**liar** is a borrow-checked Lisp that compiles through **lIR** (an S-expression assembler for LLVM IR) to produce native executables. It provides Rust-like memory safety guarantees without a garbage collector, while maintaining Lisp's expressive power.
 
-```lisp
-(fadd (double 5.0) (double 6.0))
 ```
-
-Maps directly to:
-
-```llvm
-%0 = fadd double 5.0, 6.0
+liar source → liar compiler → lIR → LLVM IR → native code
 ```
 
 ## Quick Start
 
 ```bash
-# Build the compiler
+# Build the toolchain
 cargo build --release
 
-# Compile lIR source to native executable
-./target/release/lair hello.lir -o hello
+# Compile a liar program to native executable
+./target/release/liarc hello.liar -o hello
 ./hello
 
-# Or use the REPL for interactive exploration
-./target/release/lir-repl
+# Or use the REPL for interactive development
+./target/release/liar-repl
+
+# For IDE integration, start the nREPL server
+./target/release/liar-nrepl
 ```
 
-### Example: Fibonacci
+## The Two Layers
+
+This project consists of two complementary languages:
+
+### liar - High-Level Lisp (User-Facing)
+
+A full-featured Lisp with:
+- **Ownership & borrowing** — compile-time memory safety without GC
+- **Type inference** — types inferred automatically
+- **Closures** — first-class functions with captured state
+- **Atoms** — thread-safe shared state (like Clojure)
+- **let vs plet** — explicit single-threaded vs thread-safe bindings
+- **Protocols** — polymorphism via protocol dispatch
+- **FFI** — call C libraries via `unsafe` blocks
 
 ```lisp
-; fib.lir - Recursive Fibonacci
+; liar example
+(defun factorial (n)
+  (if (<= n 1)
+      1
+      (* n (factorial (- n 1)))))
 
-(declare atoi i32 (ptr))
-(declare printf i32 (ptr i64))
-
-(define (fib i64) ((i64 n))
-  (block entry
-    (br (icmp sle n (i64 1)) base recurse))
-  (block base
-    (ret n))
-  (block recurse
-    (let ((n1 (call @fib (sub n (i64 1))))
-          (n2 (call @fib (sub n (i64 2)))))
-      (ret (add n1 n2)))))
-
-(define (main i32) ((i32 argc) (ptr argv))
-  (block entry
-    (let ((argv1-ptr (getelementptr ptr argv (i64 1)))
-          (argv1 (load ptr argv1-ptr))
-          (n (sext i64 (call @atoi argv1)))
-          (result (call @fib n)))
-      (call @printf (string "%lld\n") result)
-      (ret (i32 0)))))
+(defun main ()
+  (println "10! = {}" (factorial 10)))
 ```
 
-```bash
-$ lair fib.lir -o fib
-$ ./fib 10
-55
+### lIR - S-Expression LLVM IR (Backend)
+
+A 1:1 mapping to LLVM IR with parentheses. No evaluation model, just LLVM IR syntax:
+
+```lisp
+; lIR - direct LLVM IR representation
+(define (add i64) ((i64 a) (i64 b))
+  (block entry
+    (ret (add a b))))
 ```
 
-## Tools
+## Complete Toolchain
 
-| Tool | Description |
-|------|-------------|
-| `lair` | AOT compiler - compiles lIR to native executables |
-| `lir` | Expression evaluator - evaluates single expressions |
-| `lir-repl` | Interactive REPL for exploration |
+| Tool | Status | What | Input | Output |
+|------|--------|------|-------|--------|
+| `liarc` | ✅ Done | liar compiler | .liar source | LLVM IR / native |
+| `liar-repl` | ✅ Done | Interactive REPL | - | - |
+| `liar-nrepl` | ✅ Done | nREPL server | - | IDE integration |
+| `lair` | ✅ Done | lIR assembler | .lir source | LLVM IR / native |
+| `lir` | ✅ Done | lIR evaluator | lIR expression | Result |
+| `lir-repl` | ✅ Done | lIR REPL | - | - |
 
-### lair - The Compiler
+## Language Features
+
+### Memory Safety Without GC
+
+liar uses ownership and borrowing rules (similar to Rust) enforced at compile time:
+
+```lisp
+; Immutable by default
+(let ((x 10))
+  (let ((y x))  ; x moved to y
+    y))         ; x no longer accessible
+
+; Explicit borrowing
+(defun use-value (v)
+  (println "Value: {}" v))
+
+(let ((x 42))
+  (use-value (ref x))   ; shared borrow - x still usable
+  (println "x is {}" x))
+
+; Mutable borrowing
+(defun increment! (v)
+  (set! v (+ v 1)))
+
+(let ((x 10))
+  (increment! (ref-mut x))  ; exclusive mutable borrow
+  (println "x is now {}" x))
+```
+
+### Closures with Analysis
+
+Closures capture their environment and are analyzed for thread-safety:
+
+```lisp
+; Closure capturing outer variable
+(defun make-adder (n)
+  (fn (x) (+ x n)))  ; captures n
+
+(let ((add5 (make-adder 5)))
+  (println "{}" (add5 10)))  ; prints 15
+
+; Thread-safe closures with plet
+(plet ((counter (atom 0)))
+  (defun increment! ()
+    (swap! counter (fn (x) (+ x 1)))))
+```
+
+### let vs plet - Explicit Concurrency
+
+```lisp
+; let - single-threaded, fast, borrows allowed
+(let ((x 10)
+      (y 20))
+  (+ x y))
+
+; plet - thread-safe, all values must be Send+Sync
+(plet ((shared-state (atom 0)))
+  (spawn (fn () (swap! shared-state inc)))
+  (spawn (fn () (swap! shared-state inc))))
+```
+
+### Atoms for Shared State
+
+```lisp
+(plet ((counter (atom 0)))
+  ; swap! applies function atomically
+  (swap! counter (fn (x) (+ x 1)))
+  
+  ; reset! sets new value
+  (reset! counter 10)
+  
+  ; deref gets current value
+  (println "Counter: {}" (deref counter)))
+```
+
+### Protocols (Polymorphism)
+
+```lisp
+; Define a protocol
+(defprotocol Stringify
+  (to-string [this] String))
+
+; Implement for a type
+(defstruct Point (i64 x) (i64 y))
+
+(extend-protocol Stringify Point
+  (to-string [p]
+    (format "Point({}, {})" (.x p) (.y p))))
+
+; Use it
+(let ((p (Point 10 20)))
+  (println "{}" (to-string p)))
+```
+
+## Examples
+
+### Fibonacci (Recursive)
+
+```lisp
+(defun fib (n)
+  (if (<= n 1)
+      n
+      (+ (fib (- n 1))
+         (fib (- n 2)))))
+
+(defun main ()
+  (println "fib(10) = {}" (fib 10)))
+```
+
+### Counter with Atoms
+
+```lisp
+(plet ((counter (atom 0)))
+  (defun increment! ()
+    (swap! counter (fn (x) (+ x 1))))
+  
+  (defun get-count ()
+    (deref counter))
+  
+  (defun main ()
+    (dotimes (i 10)
+      (increment!))
+    (println "Count: {}" (get-count))))
+```
+
+### Map/Filter/Reduce
+
+```lisp
+(defun main ()
+  (let ((nums [1 2 3 4 5])
+        (doubled (map (fn (x) (* x 2)) nums))
+        (evens (filter even? nums))
+        (sum (reduce + 0 nums)))
+    (println "Doubled: {}" doubled)
+    (println "Evens: {}" evens)
+    (println "Sum: {}" sum)))
+```
+
+## Compiler Pipeline
+
+```
+liar source
+    ↓
+Lexer → Tokens
+    ↓
+Parser → AST
+    ↓
+Name Resolution → Resolved AST
+    ↓
+Type Inference → Typed AST
+    ↓
+Closure Analysis → Annotated AST
+    ↓
+Ownership Checking → Verified AST
+    ↓
+Code Generation → lIR AST
+    ↓
+lIR Codegen → LLVM IR
+    ↓
+LLVM → Native Code
+```
+
+## IDE Integration
+
+The nREPL server provides standard editor integration:
 
 ```bash
-# Compile and link
+# Start nREPL server (writes .nrepl-port file)
+liar-nrepl
+
+# Or specify port
+NREPL_PORT=7888 liar-nrepl
+```
+
+Works with:
+- VS Code + Calva
+- Emacs + CIDER
+- Any nREPL-compatible editor
+
+## Compiler Options
+
+### liar Compiler (liarc)
+
+```bash
+# Compile to executable
+liarc main.liar -o prog
+
+# Emit lIR (intermediate representation)
+liarc main.liar --emit-lir -o out.lir
+
+# Optimization levels
+liarc main.liar -O3 -o prog
+
+# Link with libraries
+liarc main.liar -lm -o prog
+```
+
+### lIR Compiler (lair)
+
+```bash
+# Compile lIR to executable
 lair main.lir -o prog
-
-# Compile only (produce .o)
-lair main.lir -c -o main.o
 
 # Emit LLVM IR
 lair main.lir --emit-llvm -o out.ll
-
-# Emit assembly
-lair main.lir -S -o out.s
-
-# Optimization levels
-lair main.lir -O3 -o prog
-
-# Link with libraries
-lair main.lir -lm -o prog
 
 # Cross-compilation
 lair main.lir --target aarch64-linux-gnu -o prog
@@ -100,195 +288,128 @@ lair main.lir --target aarch64-linux-gnu -o prog
 lair --print-targets
 ```
 
-## Why?
+## Architecture Decision Records
 
-lIR is a foundation layer for building higher-level languages. It provides:
+The language design is documented in [Architecture Decision Records](doc/adr/):
 
-- **Exact LLVM IR semantics** — no surprises
-- **No implicit conversions** — types must match exactly
-- **No operator overloading** — `add` for integers, `fadd` for floats
-- **Predictable behavior** — what you write is what you get
+**Ownership & Memory Safety:**
+- [ADR-001](doc/adr/001-immutability-by-default.md) - Immutability by default
+- [ADR-002](doc/adr/002-pass-by-reference.md) - Pass by reference semantics
+- [ADR-003](doc/adr/003-mutable-reference-sigil.md) - Mutable reference sigil
+- [ADR-004](doc/adr/004-lexical-ownership.md) - Lexical ownership
+- [ADR-007](doc/adr/007-aliasing-allowed.md) - Aliasing rules
 
-## Quick Reference
+**Closures & Concurrency:**
+- [ADR-005](doc/adr/005-closure-captures-ownership.md) - Closure captures
+- [ADR-009](doc/adr/009-let-vs-plet.md) - let vs plet
+- [ADR-010](doc/adr/010-closure-color.md) - Closure color tracking
+- [ADR-011](doc/adr/011-atoms-for-shared-state.md) - Atoms for shared state
 
-### Types
+**Type System:**
+- [ADR-015](doc/adr/015-numeric-primitives.md) - Numeric primitives
+- [ADR-016](doc/adr/016-simd-vectors.md) - SIMD vectors
+- [ADR-017](doc/adr/017-type-promotion.md) - Type promotion rules
 
-```lisp
-; Integers
-(i1 1)              ; boolean (true)
-(i8 42)             ; 8-bit
-(i32 -1)            ; 32-bit
-(i64 9223372036854775807)
+**Collections & Protocols:**
+- [ADR-018](doc/adr/018-collections.md) - Collections
+- [ADR-022](doc/adr/022-Liar-Core-Protocols) - Core protocols
 
-; Floats
-(float 3.14)
-(double 2.718281828)
-
-; Pointers
-ptr                 ; opaque pointer type
-
-; Vectors
-(<4 x i32> 1 2 3 4)
-(<2 x double> 1.0 2.0)
-```
-
-### Arithmetic
-
-```lisp
-; Integer (operands must match)
-(add (i32 5) (i32 3))       ; => (i32 8)
-(sub (i32 10) (i32 3))      ; => (i32 7)
-(mul (i32 6) (i32 7))       ; => (i32 42)
-(sdiv (i32 -10) (i32 3))    ; => (i32 -3) signed
-(udiv (i32 -1) (i32 2))     ; => (i32 2147483647) unsigned
-
-; Float
-(fadd (double 1.5) (double 2.5))  ; => (double 4.0)
-(fmul (double 2.5) (double 4.0))  ; => (double 10.0)
-```
-
-### Comparisons
-
-```lisp
-; Integer comparison (returns i1)
-(icmp eq (i32 5) (i32 5))   ; => (i1 1)
-(icmp slt (i32 -1) (i32 1)) ; => (i1 1) signed less than
-(icmp ult (i32 -1) (i32 1)) ; => (i1 0) unsigned (-1 is MAX)
-
-; Float comparison
-(fcmp olt (double 1.0) (double 2.0))  ; => (i1 1)
-(fcmp uno (double nan) (double 1.0))  ; => (i1 1) unordered (NaN)
-```
-
-### Conversions
-
-```lisp
-; Integer size changes
-(trunc i8 (i32 257))        ; => (i8 1)
-(zext i32 (i8 255))         ; => (i32 255) zero-extend
-(sext i32 (i8 -1))          ; => (i32 -1) sign-extend
-
-; Int/float conversions
-(sitofp double (i32 -42))   ; => (double -42.0)
-(fptosi i32 (double 3.7))   ; => (i32 3)
-```
-
-### Memory
-
-```lisp
-; Stack allocation
-(alloca i64)                ; allocate space for i64
-(alloca i32 (i32 10))       ; allocate array of 10 i32s
-
-; Load and store
-(load i64 ptr)              ; load i64 from pointer
-(store (i64 42) ptr)        ; store 42 to pointer
-
-; Pointer arithmetic
-(getelementptr i8 ptr (i64 5))           ; ptr + 5 bytes
-(getelementptr %struct.point ptr (i32 0) (i32 1))  ; field access
-```
-
-### Control Flow
-
-```lisp
-; Unconditional branch
-(br label)
-
-; Conditional branch
-(br (icmp slt x (i64 0)) negative positive)
-
-; Phi nodes (SSA merge)
-(phi i64 (block1 val1) (block2 val2))
-
-; Select (ternary)
-(select (icmp slt x y) x y)  ; min(x, y)
-```
-
-### Functions
-
-```lisp
-; Define a function
-(define (add2 i64) ((i64 a) (i64 b))
-  (block entry
-    (ret (add a b))))
-
-; Call a function
-(call @add2 (i64 3) (i64 4))  ; => (i64 7)
-
-; External declaration (FFI)
-(declare printf i32 (ptr i64))
-(call @printf (string "Value: %lld\n") (i64 42))
-```
-
-### Structs
-
-```lisp
-; Define a struct type
-(defstruct point (i64 i64))
-
-; Access struct fields via GEP
-(getelementptr %struct.point ptr (i32 0) (i32 0))  ; field 0
-(getelementptr %struct.point ptr (i32 0) (i32 1))  ; field 1
-```
-
-## Type Safety
-
-lIR has strict type checking. No implicit conversions:
-
-```lisp
-(add (i8 1) (i32 2))              ; ERROR: type mismatch
-(add (sext i32 (i8 1)) (i32 2))   ; OK: explicit conversion
-
-(add (double 1.0) (double 2.0))   ; ERROR: use fadd for floats
-(fadd (double 1.0) (double 2.0))  ; OK
-```
-
-## Documentation
-
-- [Language Guide](doc/lIR.md) — comprehensive reference
-- [Architecture Decision Records](doc/adr/) — design decisions
+**Architecture:**
+- [ADR-019](doc/adr/019-lir-universal-backend.md) - lIR as universal backend
+- [ADR-020](doc/adr/020-toolchain-architecture.md) - Toolchain architecture
+- [ADR-021](doc/adr/021-lIR-safety-features.md) - lIR safety features
 
 ## Project Structure
 
 ```
-lir/
-├── lir-core/       # AST, parser, types
-├── lir-codegen/    # LLVM code generation
-├── lir-lair/       # AOT compiler binary (lair)
-├── lir-cli/        # Expression evaluator (lir)
-├── lir-repl/       # Interactive REPL
-├── cert/           # BDD test specifications
-│   └── features/   # Cucumber feature files
-└── doc/            # Documentation
+liar/
+├── liar/               # High-level Lisp compiler
+│   └── src/
+│       ├── lexer.rs    # Tokenization
+│       ├── parser.rs   # AST construction
+│       ├── resolve.rs  # Name resolution
+│       ├── infer.rs    # Type inference
+│       ├── closures.rs # Closure analysis
+│       ├── ownership.rs# Borrow checking
+│       └── codegen.rs  # lIR generation
+├── liar-repl/          # Interactive REPL
+├── liar-nrepl/         # nREPL server for IDEs
+├── liar-cert/          # BDD tests for liar
+├── lir-core/           # lIR AST, parser, types
+├── lir-codegen/        # LLVM code generation
+├── lir-lair/           # lIR AOT compiler
+├── lir-cli/            # lIR expression evaluator
+├── lir-repl/           # lIR interactive REPL
+├── cert/               # BDD tests for lIR
+│   └── features/       # Cucumber specifications
+├── lib/
+│   └── stdlib.liar     # Standard library
+└── doc/
+    ├── adr/            # Architecture decisions
+    ├── LIAR.md         # liar language guide
+    └── lIR.md          # lIR reference
 ```
 
 ## Development
 
-This project uses spec-first BDD development. Feature files in `cert/features/` define the language specification.
-
-Test states:
-- **Green**: Implemented correctly
-- **Yellow/Pending**: Not implemented yet (runtime exits non-zero)
-- **Red**: Implemented wrong (runtime gives wrong answer)
-
-### Running Tests
+Both languages use spec-first BDD development with Cucumber:
 
 ```bash
+# Run lIR tests (202 scenarios passing)
 cargo test --test cert
+
+# Run liar tests
+cargo test --test liar-cert
 ```
 
-### Current Status
+### Test States
+- **Green**: Implemented correctly
+- **Yellow/Pending**: Spec exists, not implemented (exits non-zero)
+- **Red**: Implemented incorrectly (wrong answer)
 
-202 scenarios passing, covering:
-- All scalar and vector types
-- Arithmetic, bitwise, and comparison operations
-- Type conversions
-- Memory operations (alloca, load, store, GEP)
-- Control flow (branches, phi nodes)
-- Functions (definition, calls, recursion)
-- Structs and field access
-- FFI (external declarations)
+## Implementation Status
+
+### lIR (Backend) - ✅ Complete
+- ✅ 202 scenarios passing
+- ✅ All LLVM IR features: types, arithmetic, memory, control flow
+- ✅ Structs, vectors, atomics
+- ✅ FFI support
+- ✅ AOT compiler with optimization
+- ✅ JIT evaluation
+- ✅ REPL
+
+### liar (Frontend) - ✅ Complete
+- ✅ Full lexer, parser, AST
+- ✅ Name resolution
+- ✅ Type inference (Hindley-Milner style)
+- ✅ Closure analysis with color tracking
+- ✅ Ownership & borrow checking
+- ✅ Code generation to lIR
+- ✅ AOT compiler
+- ✅ REPL with incremental JIT
+- ✅ nREPL server for IDE integration
+
+## Documentation
+
+- [liar Language Guide](doc/LIAR.md) - Complete language reference
+- [lIR Reference](doc/lIR.md) - LLVM IR assembler documentation
+- [Architecture Decision Records](doc/adr/) - Design decisions and rationale
+- [Standard Library](lib/stdlib.liar) - Core functions
+
+## Contributing
+
+See the [moths](https://github.com/tsmarsh/moth) in `.moth/` for current work items. This project uses moth for git-friendly issue tracking with speakable 5-character IDs.
+
+```bash
+# List current issues
+moth ls
+
+# View specific issue
+moth show <id>
+
+# Start working on an issue
+moth start <id>
+```
 
 ## License
 
