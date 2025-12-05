@@ -14,11 +14,11 @@
 
 set -e
 
-MOTH_DIR=".moth"
+MOTH_DIR=".moth/ready"
 mkdir -p "$MOTH_DIR"
 
-# Counter for ordering (ensures files sort in dependency order)
-ORDER=100
+# Counter for priority ordering
+PRIORITY_NUM=1
 
 # Generate a speakable 5-char ID (consonant-vowel pattern)
 generate_id() {
@@ -33,34 +33,47 @@ generate_id() {
     echo "$id"
 }
 
+# Map tier to severity
+tier_to_severity() {
+    case "$1" in
+        P1) echo "high" ;;
+        P2) echo "med" ;;
+        P3) echo "low" ;;
+        P4) echo "low" ;;
+        *) echo "med" ;;
+    esac
+}
+
 # Create a moth file
 # Args: priority title description implementation deps tests category
 create_moth() {
-    local priority="$1"
+    local tier="$1"
     local title="$2"
     local description="$3"
     local implementation="$4"
     local deps="$5"
     local tests="$6"
     local category="$7"
-    
+
     local id=$(generate_id)
+    local severity=$(tier_to_severity "$tier")
     local slug="${title// /-}"
-    local file="$MOTH_DIR/${id}-stdlib-${slug}.md"
-    
+    # Format: priority_num-id-severity-slug.md (with zero-padded priority)
+    local priority_prefix=$(printf "%03d" $PRIORITY_NUM)
+    local file="$MOTH_DIR/${priority_prefix}-${id}-${severity}-${slug}.md"
+
     # Avoid collision
     while [ -f "$file" ]; do
         id=$(generate_id)
-        file="$MOTH_DIR/${id}-stdlib-${slug}.md"
+        file="$MOTH_DIR/${priority_prefix}-${id}-${severity}-${slug}.md"
     done
-    
+
     cat > "$file" << EOF
 # stdlib: $title
 
-**Priority:** $priority  
-**Category:** stdlib/$category  
-**Dependencies:** $deps  
-**Order:** $ORDER
+**Tier:** $tier
+**Category:** stdlib/$category
+**Dependencies:** $deps
 
 ## Description
 
@@ -85,8 +98,8 @@ $tests
 - [ ] Documented in lib/stdlib.liar header comment
 EOF
 
-    echo "[$priority] $title -> $file"
-    ORDER=$((ORDER + 10))
+    echo "[$tier] $title -> $file"
+    PRIORITY_NUM=$((PRIORITY_NUM + 1))
 }
 
 echo "Creating stdlib moths in dependency order..."
@@ -555,10 +568,10 @@ echo "========================================"
 echo "Done! Created moths in $MOTH_DIR/"
 echo ""
 echo "Summary:"
-echo "  P1 (no deps):     $(grep -l 'Priority: P1' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
-echo "  P2 (basic deps):  $(grep -l 'Priority: P2' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
-echo "  P3 (optimized):   $(grep -l 'Priority: P3' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
-echo "  P4 (BLOCKED):     $(grep -l 'Priority: P4' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
+echo "  P1 (no deps):     $(grep -l 'Tier.*P1' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
+echo "  P2 (basic deps):  $(grep -l 'Tier.*P2' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
+echo "  P3 (optimized):   $(grep -l 'Tier.*P3' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
+echo "  P4 (BLOCKED):     $(grep -l 'Tier.*P4' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
 echo ""
 echo "To implement in order:"
 echo "  1. All P1 functions (no dependencies)"
@@ -566,8 +579,5 @@ echo "  2. All P2 functions (depend on P1)"
 echo "  3. P3 functions (optimized versions)"
 echo "  4. P4 functions require lIR/runtime work first"
 echo ""
-echo "Quick start - add these to lib/stdlib.liar:"
-echo "  grep -h '^(defun' $MOTH_DIR/*-P1-*.md 2>/dev/null || \\"
-echo "  for f in \$(grep -l 'Priority: P1' $MOTH_DIR/*.md); do"
-echo "    sed -n '/^\`\`\`lisp/,/^\`\`\`/p' \"\$f\" | grep -v '\`\`\`'"
-echo "  done"
+echo "View moths with:"
+echo "  moth ls"
