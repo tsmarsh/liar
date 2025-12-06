@@ -1,0 +1,67 @@
+;; liar Async Library
+;;
+;; Provides the Pollable protocol and async combinators for
+;; non-blocking asynchronous programming.
+
+;; ============================================================
+;; Pollable Protocol
+;; ============================================================
+
+;; The fundamental async abstraction.
+;; A Pollable can be polled for completion, returning either
+;; a result value or pending status.
+;;
+;; poll returns:
+;;   - non-zero value if ready (the result)
+;;   - 0 if pending
+
+(defprotocol Pollable
+  "A value that can be polled for completion."
+  (poll [self waker]))
+
+;; ============================================================
+;; Immediate Future
+;; ============================================================
+
+;; A future that is immediately ready with a value.
+;; Useful for testing and wrapping synchronous results.
+
+(defstruct ImmediateFuture (value: i64))
+
+(extend-protocol Pollable ImmediateFuture
+  (poll [self waker]
+    (. self value)))
+
+;; ============================================================
+;; Pending Future
+;; ============================================================
+
+;; A future that never completes. Useful for testing.
+
+(defstruct NeverFuture (dummy: i64))
+
+(extend-protocol Pollable NeverFuture
+  (poll [self waker]
+    0))
+
+;; ============================================================
+;; Basic Combinators
+;; ============================================================
+
+;; Join two futures, wait for both
+(defstruct JoinFuture (a: ptr b: ptr a-result: i64 b-result: i64 a-done: i64 b-done: i64))
+
+;; ============================================================
+;; Test Functions
+;; ============================================================
+
+;; Test immediate future with direct struct instantiation
+;; (works around type inference limitation)
+(defun test-immediate-poll ()
+  (let ((f (ImmediateFuture 42)))
+    (poll f 0)))
+
+;; Test never future
+(defun test-never-poll ()
+  (let ((f (NeverFuture 0)))
+    (poll f 0)))

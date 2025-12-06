@@ -1,0 +1,78 @@
+;; liar Runtime FFI Declarations
+;;
+;; These declarations allow liar code to call into the liar-runtime
+;; Rust library for async I/O support.
+;;
+;; The runtime must be linked into the final executable for these
+;; functions to be available.
+
+;; Runtime initialization
+(extern liar_runtime_init i32 ())
+
+;; Task management
+;;
+;; liar_spawn: Create a new async task
+;;   pollable: ptr to the Pollable struct
+;;   poll_fn: function pointer fn(pollable, waker) -> Poll
+;;   returns: ptr to Task
+(extern liar_spawn ptr (ptr ptr))
+
+;; liar_block_on: Block until task completes
+;;   task: ptr to Task
+;;   returns: ptr to result value
+(extern liar_block_on ptr (ptr))
+
+;; Async I/O operations
+;;
+;; liar_io_read: Create an async read operation
+;;   fd: file descriptor (i64)
+;;   buf: buffer pointer
+;;   len: max bytes to read (i64)
+;;   returns: ptr to ReadFuture
+(extern liar_io_read ptr (i64 ptr i64))
+
+;; liar_io_read_poll: Poll a read operation
+;;   future: ptr to ReadFuture
+;;   waker: ptr to Waker
+;;   returns: Poll (Ready with bytes read, or Pending)
+(extern liar_io_read_poll ptr (ptr ptr))
+
+;; liar_io_read_free: Free a read future
+;;   future: ptr to ReadFuture
+(extern liar_io_read_free void (ptr))
+
+;; liar_io_write: Create an async write operation
+;;   fd: file descriptor (i64)
+;;   buf: buffer pointer
+;;   len: bytes to write (i64)
+;;   returns: ptr to WriteFuture
+(extern liar_io_write ptr (i64 ptr i64))
+
+;; liar_io_write_poll: Poll a write operation
+;;   future: ptr to WriteFuture
+;;   waker: ptr to Waker
+;;   returns: Poll (Ready with bytes written, or Pending)
+(extern liar_io_write_poll ptr (ptr ptr))
+
+;; liar_io_write_free: Free a write future
+;;   future: ptr to WriteFuture
+(extern liar_io_write_free void (ptr))
+
+;; Reactor operations
+;;
+;; liar_reactor_register_read: Register fd for read readiness
+;;   fd: file descriptor (i64)
+;;   waker: ptr to Waker
+;;   returns: 0 on success, -1 on error
+(extern liar_reactor_register_read i32 (i64 ptr))
+
+;; liar_reactor_register_write: Register fd for write readiness
+;;   fd: file descriptor (i64)
+;;   waker: ptr to Waker
+;;   returns: 0 on success, -1 on error
+(extern liar_reactor_register_write i32 (i64 ptr))
+
+;; liar_reactor_deregister: Remove fd from reactor
+;;   fd: file descriptor (i64)
+;;   returns: 0 on success, -1 on error
+(extern liar_reactor_deregister i32 (i64))
