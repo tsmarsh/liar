@@ -45,12 +45,15 @@ pub enum TokenKind {
     Wrapping, // wrapping
 
     // Operators/Punctuation
-    Quote, // '
-    Colon, // :
-    Amp,   // &
-    Dot,   // .
-    Arrow, // ->
-    At,    // @ (atom deref)
+    Quote,    // '
+    Backtick, // ` (quasiquote)
+    Comma,    // , (unquote)
+    CommaAt,  // ,@ (unquote-splicing)
+    Colon,    // :
+    Amp,      // &
+    Dot,      // .
+    Arrow,    // ->
+    At,       // @ (atom deref)
 
     // Atom keywords
     Atom,          // atom
@@ -71,6 +74,10 @@ pub enum TokenKind {
     // Protocol keywords (ADR-022)
     Defprotocol,    // defprotocol
     ExtendProtocol, // extend-protocol
+
+    // Macro keywords
+    Defmacro, // defmacro
+    Gensym,   // gensym
 
     // Iterator keywords
     Iter,    // iter (create iterator)
@@ -160,6 +167,16 @@ impl<'a> Lexer<'a> {
                 }
             }
             '\'' => TokenKind::Quote,
+            '`' => TokenKind::Backtick,
+            ',' => {
+                // Check for ,@ (unquote-splicing)
+                if self.peek_char() == Some('@') {
+                    self.advance();
+                    TokenKind::CommaAt
+                } else {
+                    TokenKind::Comma
+                }
+            }
 
             // Conventional mutable collections (ADR-018) and SIMD vectors (ADR-016)
             '<' => match self.peek_char() {
@@ -433,6 +450,9 @@ impl<'a> Lexer<'a> {
             // Protocol keywords
             "defprotocol" => TokenKind::Defprotocol,
             "extend-protocol" => TokenKind::ExtendProtocol,
+            // Macro keywords
+            "defmacro" => TokenKind::Defmacro,
+            "gensym" => TokenKind::Gensym,
             // Iterator keywords
             "iter" => TokenKind::Iter,
             "collect" => TokenKind::Collect,

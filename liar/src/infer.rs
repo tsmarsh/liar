@@ -582,6 +582,12 @@ impl Inferencer {
                 // Wrapping preserves inner type
                 self.infer_expr(inner, env)
             }
+
+            // Macro syntax - should be expanded before type inference
+            Expr::Quasiquote(inner) | Expr::Unquote(inner) | Expr::UnquoteSplicing(inner) => {
+                self.infer_expr(inner, env)
+            }
+            Expr::Gensym(_) => Ty::Named("Symbol".to_string()),
         }
     }
 

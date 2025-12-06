@@ -416,6 +416,9 @@ impl BorrowChecker {
                 // Protocol definitions don't have ownership semantics
             }
             Item::ExtendProtocol(extend) => self.check_extend_protocol(extend),
+            Item::Defmacro(_) => {
+                // Macros are expanded before ownership checking
+            }
         }
     }
 
@@ -740,6 +743,12 @@ impl BorrowChecker {
             Expr::Boxed(inner) | Expr::Wrapping(inner) => {
                 self.check_expr(inner);
             }
+
+            // Macro syntax should be expanded before ownership checking
+            Expr::Quasiquote(inner) | Expr::Unquote(inner) | Expr::UnquoteSplicing(inner) => {
+                self.check_expr(inner);
+            }
+            Expr::Gensym(_) => {}
         }
     }
 

@@ -63,9 +63,13 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Item::ExtendProtocol(self.parse_extend_protocol()?)
             }
+            TokenKind::Defmacro => {
+                self.advance();
+                Item::Defmacro(self.parse_defmacro()?)
+            }
             _ => return Err(CompileError::parse(
                 self.current_span(),
-                "expected top-level form: defun, def, defstruct, defprotocol, or extend-protocol",
+                "expected top-level form: defun, def, defstruct, defprotocol, extend-protocol, or defmacro",
             )),
         };
 
@@ -208,6 +212,23 @@ impl<'a> Parser<'a> {
         Ok(Defprotocol { name, doc, methods })
     }
 
+    /// Parse macro definition: (defmacro name (params...) body)
+    fn parse_defmacro(&mut self) -> Result<Defmacro> {
+        let name = self.parse_symbol()?;
+
+        // Parse simple parameter list (just names, no types for macros)
+        self.expect(TokenKind::LParen)?;
+        let mut params = Vec::new();
+        while !self.check(TokenKind::RParen) {
+            params.push(self.parse_symbol()?);
+        }
+        self.expect(TokenKind::RParen)?;
+
+        let body = self.parse_expr()?;
+
+        Ok(Defmacro { name, params, body })
+    }
+
     /// Parse protocol extension: (extend-protocol ProtocolName TypeName (method [self args...] body)...)
     fn parse_extend_protocol(&mut self) -> Result<ExtendProtocol> {
         let protocol = self.parse_symbol()?;
@@ -331,6 +352,21 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let expr = self.parse_expr()?;
                 Expr::AtomDeref(Box::new(expr))
+            }
+            TokenKind::Backtick => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Expr::Quasiquote(Box::new(expr))
+            }
+            TokenKind::Comma => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Expr::Unquote(Box::new(expr))
+            }
+            TokenKind::CommaAt => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Expr::UnquoteSplicing(Box::new(expr))
             }
             TokenKind::Keyword(s) => {
                 let s = s.clone();
@@ -565,6 +601,19 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let expr = self.parse_expr()?;
                 Ok(Expr::Wrapping(Box::new(expr)))
+            }
+            // Macro support
+            TokenKind::Gensym => {
+                self.advance();
+                // Optional prefix string
+                let prefix = if let TokenKind::String(s) = &self.peek().kind {
+                    let s = s.clone();
+                    self.advance();
+                    Some(s)
+                } else {
+                    None
+                };
+                Ok(Expr::Gensym(prefix))
             }
             _ => self.parse_call(),
         }

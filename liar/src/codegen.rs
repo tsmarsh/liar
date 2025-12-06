@@ -253,6 +253,10 @@ fn generate_item(item: &Spanned<Item>) -> Result<Option<lir::Item>> {
             // Protocol implementations are metadata - skip for now
             Ok(None)
         }
+        Item::Defmacro(_) => {
+            // Macros are used during expansion, not in codegen
+            Ok(None)
+        }
     }
 }
 
@@ -992,6 +996,14 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<lir::Expr> {
         Expr::Wrapping(inner) => {
             // Wrapping arithmetic is the default LLVM behavior
             generate_expr(inner)
+        }
+
+        // Macro syntax - should be expanded before codegen
+        Expr::Quasiquote(_) | Expr::Unquote(_) | Expr::UnquoteSplicing(_) | Expr::Gensym(_) => {
+            Err(CompileError::codegen(
+                expr.span,
+                "macro syntax should be expanded before code generation",
+            ))
         }
     }
 }

@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    Def, Defprotocol, Defstruct, Defun, Expr, ExtendProtocol, Item, LetBinding, MatchArm, Pattern,
-    Program,
+    Def, Defmacro, Defprotocol, Defstruct, Defun, Expr, ExtendProtocol, Item, LetBinding, MatchArm,
+    Pattern, Program,
 };
 use crate::error::{CompileError, Errors, Result};
 use crate::span::{Span, Spanned};
@@ -33,6 +33,7 @@ pub enum BindingKind {
     Constant,
     Struct,
     Protocol,
+    Macro,
 }
 
 /// A scope containing bindings
@@ -184,6 +185,9 @@ impl Resolver {
                 Item::ExtendProtocol(_) => {
                     // extend-protocol doesn't define a new name
                 }
+                Item::Defmacro(defmacro) => {
+                    self.define(&defmacro.name.node, defmacro.name.span, BindingKind::Macro);
+                }
             }
         }
 
@@ -204,7 +208,22 @@ impl Resolver {
             Item::Defstruct(defstruct) => self.resolve_defstruct(defstruct),
             Item::Defprotocol(defprotocol) => self.resolve_defprotocol(defprotocol),
             Item::ExtendProtocol(extend) => self.resolve_extend_protocol(extend),
+            Item::Defmacro(defmacro) => self.resolve_defmacro(defmacro),
         }
+    }
+
+    fn resolve_defmacro(&mut self, defmacro: &Defmacro) {
+        self.push_scope();
+
+        // Define parameters
+        for param in &defmacro.params {
+            self.define(&param.node, param.span, BindingKind::Parameter);
+        }
+
+        // Resolve body
+        self.resolve_expr(&defmacro.body);
+
+        self.pop_scope();
     }
 
     fn resolve_defun(&mut self, defun: &Defun) {
@@ -454,6 +473,14 @@ impl Resolver {
             // Overflow handling - recurse into inner expression
             Expr::Boxed(inner) | Expr::Wrapping(inner) => {
                 self.resolve_expr(inner);
+            }
+
+            // Macro expressions - should be expanded before resolution, but handle them gracefully
+            Expr::Quasiquote(inner) | Expr::Unquote(inner) | Expr::UnquoteSplicing(inner) => {
+                self.resolve_expr(inner);
+            }
+            Expr::Gensym(_) => {
+                // Gensym generates a unique symbol - no resolution needed
             }
         }
     }

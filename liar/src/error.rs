@@ -46,6 +46,10 @@ impl CompileError {
     pub fn thread_safety(span: Span, message: impl Into<String>) -> Self {
         Self::new(ErrorKind::ThreadSafety, span, message)
     }
+
+    pub fn macro_error(span: Span, message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::Macro, span, message)
+    }
 }
 
 impl std::fmt::Display for CompileError {
@@ -69,6 +73,7 @@ pub enum ErrorKind {
     Borrow,
     ThreadSafety,
     Codegen,
+    Macro,
 }
 
 impl std::fmt::Display for ErrorKind {
@@ -81,6 +86,7 @@ impl std::fmt::Display for ErrorKind {
             ErrorKind::Borrow => write!(f, "borrow error"),
             ErrorKind::ThreadSafety => write!(f, "thread safety error"),
             ErrorKind::Codegen => write!(f, "codegen error"),
+            ErrorKind::Macro => write!(f, "macro expansion error"),
         }
     }
 }

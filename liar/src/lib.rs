@@ -7,6 +7,8 @@
 //!               ↓
 //!          Parser → AST
 //!               ↓
+//!          Expand → AST with macros expanded
+//!               ↓
 //!          Resolve → AST with resolved names
 //!               ↓
 //!          Infer → Typed AST
@@ -22,6 +24,7 @@ pub mod ast;
 pub mod closures;
 pub mod codegen;
 pub mod error;
+pub mod expand;
 pub mod infer;
 pub mod lexer;
 pub mod ownership;
@@ -39,6 +42,9 @@ pub fn compile(source: &str) -> std::result::Result<String, Vec<CompileError>> {
     // Parse
     let mut parser = Parser::new(source).map_err(|e| vec![e])?;
     let mut program = parser.parse_program().map_err(|e| vec![e])?;
+
+    // Expand macros
+    expand::expand(&mut program).map_err(|e| vec![e])?;
 
     // Resolve names
     resolve::resolve(&program).map_err(|e| vec![e])?;

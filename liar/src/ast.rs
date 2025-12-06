@@ -21,6 +21,8 @@ pub enum Item {
     Defprotocol(Defprotocol),
     /// Protocol extension: (extend-protocol ProtocolName TypeName (method [self args...] body)...)
     ExtendProtocol(ExtendProtocol),
+    /// Macro definition: (defmacro name (params...) body)
+    Defmacro(Defmacro),
 }
 
 /// Function definition
@@ -90,6 +92,14 @@ pub struct ExtendProtocol {
 pub struct MethodImpl {
     pub name: Spanned<String>,
     pub params: Vec<Spanned<String>>, // includes self
+    pub body: Spanned<Expr>,
+}
+
+/// Macro definition
+#[derive(Debug, Clone)]
+pub struct Defmacro {
+    pub name: Spanned<String>,
+    pub params: Vec<Spanned<String>>,
     pub body: Spanned<Expr>,
 }
 
@@ -231,6 +241,16 @@ pub enum Expr {
     Boxed(Box<Spanned<Expr>>),
     /// Wrapping arithmetic: C-style silent wrap
     Wrapping(Box<Spanned<Expr>>),
+
+    // Macro syntax
+    /// Quasiquote: `expr - template with possible unquotes
+    Quasiquote(Box<Spanned<Expr>>),
+    /// Unquote: ,expr - insert value into quasiquote
+    Unquote(Box<Spanned<Expr>>),
+    /// Unquote-splicing: ,@expr - splice list into quasiquote
+    UnquoteSplicing(Box<Spanned<Expr>>),
+    /// Generate unique symbol: (gensym) or (gensym "prefix")
+    Gensym(Option<String>),
 }
 
 /// Let binding

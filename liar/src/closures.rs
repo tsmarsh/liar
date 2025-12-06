@@ -140,6 +140,8 @@ impl ClosureAnalyzer {
             Item::Defstruct(_) => {}
             Item::Defprotocol(_) => {}
             Item::ExtendProtocol(extend) => self.analyze_extend_protocol(extend),
+            // Macros should be expanded before closure analysis
+            Item::Defmacro(_) => {}
         }
     }
 
@@ -367,6 +369,12 @@ impl ClosureAnalyzer {
             Expr::Boxed(inner) | Expr::Wrapping(inner) => {
                 self.analyze_expr(inner);
             }
+
+            // Macro syntax should be expanded before closure analysis
+            Expr::Quasiquote(inner) | Expr::Unquote(inner) | Expr::UnquoteSplicing(inner) => {
+                self.analyze_expr(inner);
+            }
+            Expr::Gensym(_) => {}
         }
     }
 
@@ -668,6 +676,12 @@ impl ClosureAnalyzer {
             Expr::Boxed(inner) | Expr::Wrapping(inner) => {
                 self.find_free_vars_lambda_inner(inner, local, free);
             }
+
+            // Macro syntax should be expanded before this analysis
+            Expr::Quasiquote(inner) | Expr::Unquote(inner) | Expr::UnquoteSplicing(inner) => {
+                self.find_free_vars_lambda_inner(inner, local, free);
+            }
+            Expr::Gensym(_) => {}
         }
     }
 
@@ -853,6 +867,7 @@ impl<'a> ThreadSafetyChecker<'a> {
                     self.check_expr(&method.body);
                 }
             }
+            Item::Defmacro(_) => {}
         }
     }
 
@@ -1101,6 +1116,12 @@ impl<'a> ThreadSafetyChecker<'a> {
             Expr::Boxed(inner) | Expr::Wrapping(inner) => {
                 self.check_expr(inner);
             }
+
+            // Macro syntax should be expanded before this check
+            Expr::Quasiquote(inner) | Expr::Unquote(inner) | Expr::UnquoteSplicing(inner) => {
+                self.check_expr(inner);
+            }
+            Expr::Gensym(_) => {}
         }
     }
 }
