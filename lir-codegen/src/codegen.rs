@@ -1882,6 +1882,9 @@ impl<'ctx> CodeGen<'ctx> {
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
 
+            // Let bindings with locals support - must be handled here so nested lets work
+            Expr::Let { bindings, body } => self.compile_let_expr(bindings, body, locals),
+
             // ExtractValue with locals support
             Expr::ExtractValue { aggregate, indices } => {
                 let agg_val = self
@@ -3232,6 +3235,46 @@ impl<'ctx> CodeGen<'ctx> {
                     .builder
                     .build_load(llvm_type, ptr_val, "load")
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?)
+            }
+
+            // GetElementPtr with locals support
+            Expr::GetElementPtr {
+                ty,
+                ptr,
+                indices,
+                inbounds,
+            } => {
+                let ptr_val = self.compile_with_locals(ptr, locals)?;
+                let ptr_val = ptr_val.into_pointer_value();
+
+                // Get the element type
+                let elem_ty = self.gep_type_to_basic_type(ty)?;
+
+                // Compile indices
+                let compiled_indices: Vec<inkwell::values::IntValue> = indices
+                    .iter()
+                    .map(|idx| {
+                        self.compile_with_locals(idx, locals)
+                            .map(|v| v.into_int_value())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                // Build GEP
+                let gep = if *inbounds {
+                    unsafe {
+                        self.builder
+                            .build_in_bounds_gep(elem_ty, ptr_val, &compiled_indices, "gep")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                    }
+                } else {
+                    unsafe {
+                        self.builder
+                            .build_gep(elem_ty, ptr_val, &compiled_indices, "gep")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                    }
+                };
+
+                Ok(gep.into())
             }
 
             // Atomic operations with locals support

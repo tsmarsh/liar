@@ -6,7 +6,7 @@ use inkwell::context::Context;
 use inkwell::OptimizationLevel;
 use lir_codegen::codegen::{CodeGen, Value};
 use lir_codegen::jit::JitEngine;
-use lir_core::ast::FunctionDef;
+use lir_core::ast::{FunctionDef, StructDef};
 use lir_core::parser::{ParseResult, Parser};
 use std::collections::HashMap;
 
@@ -26,11 +26,18 @@ pub fn compile_and_call(source: &str, func_name: &str) -> Result<Value, String> 
         .parse_items()
         .map_err(|e| format!("lIR parse error: {:?}", e))?;
 
-    // Collect all functions
+    // Collect all functions and structs
     let mut functions: HashMap<String, FunctionDef> = HashMap::new();
+    let mut structs: Vec<StructDef> = Vec::new();
     for item in items {
-        if let ParseResult::Function(func) = item {
-            functions.insert(func.name.clone(), func);
+        match item {
+            ParseResult::Function(func) => {
+                functions.insert(func.name.clone(), func);
+            }
+            ParseResult::Struct(s) => {
+                structs.push(s);
+            }
+            _ => {}
         }
     }
 
@@ -42,7 +49,12 @@ pub fn compile_and_call(source: &str, func_name: &str) -> Result<Value, String> 
 
     // Create JIT context and compile all functions
     let context = Context::create();
-    let codegen = CodeGen::new(&context, "liar_test");
+    let mut codegen = CodeGen::new(&context, "liar_test");
+
+    // Register struct types first (before compiling functions that use them)
+    for s in &structs {
+        codegen.register_struct_type(&s.name, &s.fields);
+    }
 
     // First pass: declare all functions (for mutual recursion support)
     for f in functions.values() {

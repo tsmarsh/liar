@@ -51,6 +51,13 @@ async fn given_definition(world: &mut LiarWorld, rest: String) {
     world.source.push('\n');
 }
 
+#[given(regex = "^the definition \\(defstruct (.*)$")]
+async fn given_defstruct(world: &mut LiarWorld, rest: String) {
+    world.source.push_str("(defstruct ");
+    world.source.push_str(&rest);
+    world.source.push('\n');
+}
+
 #[when(regex = "^I evaluate \\(test\\)$")]
 async fn when_evaluate_test(world: &mut LiarWorld) {
     world.func_name = "test".to_string();

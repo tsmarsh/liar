@@ -193,15 +193,41 @@ impl Inferencer {
             }
 
             Expr::Call(func, args) => {
-                // Infer function type
-                let func_ty = self.infer_expr(func, env);
-
                 // Handle builtin operators
                 if let Expr::Var(op) = &func.node {
                     if let Some(ty) = self.infer_builtin(op, args, env, expr.span) {
                         return ty;
                     }
+
+                    // Check if this is a struct constructor call
+                    if let Some(type_def) = env.types.get(op) {
+                        // Verify argument count matches field count
+                        if args.len() != type_def.fields.len() {
+                            self.errors.push(CompileError::type_error(
+                                expr.span,
+                                format!(
+                                    "struct {} expects {} fields, got {}",
+                                    op,
+                                    type_def.fields.len(),
+                                    args.len()
+                                ),
+                            ));
+                            return Ty::Error;
+                        }
+
+                        // Unify each argument with the corresponding field type
+                        for (arg, (_, field_ty)) in args.iter().zip(type_def.fields.iter()) {
+                            let arg_ty = self.infer_expr(arg, env);
+                            let _ = self.unify(&arg_ty, field_ty, arg.span);
+                        }
+
+                        // Return the struct type
+                        return Ty::Named(op.clone());
+                    }
                 }
+
+                // Infer function type
+                let func_ty = self.infer_expr(func, env);
 
                 // Check it's a function
                 let ret_ty = self.fresh_var();
