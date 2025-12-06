@@ -65,6 +65,20 @@ async fn given_defmacro(world: &mut LiarWorld, rest: String) {
     world.source.push('\n');
 }
 
+#[given(regex = "^the definition \\(defprotocol (.*)$")]
+async fn given_defprotocol(world: &mut LiarWorld, rest: String) {
+    world.source.push_str("(defprotocol ");
+    world.source.push_str(&rest);
+    world.source.push('\n');
+}
+
+#[given(regex = "^the definition \\(extend-protocol (.*)$")]
+async fn given_extend_protocol(world: &mut LiarWorld, rest: String) {
+    world.source.push_str("(extend-protocol ");
+    world.source.push_str(&rest);
+    world.source.push('\n');
+}
+
 #[when(regex = "^I evaluate \\(test\\)$")]
 async fn when_evaluate_test(world: &mut LiarWorld) {
     world.func_name = "test".to_string();

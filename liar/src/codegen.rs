@@ -4,7 +4,7 @@
 //! - Displayed as S-expression strings (for debugging/testing)
 //! - Passed directly to LLVM codegen (type-safe, no parsing)
 
-use crate::ast::{Defstruct, Defun, Expr, Item, Program};
+use crate::ast::{Defstruct, Defun, Expr, ExtendProtocol, Item, Program};
 use crate::error::{CompileError, Result};
 use crate::span::Spanned;
 use lir_core::ast as lir;
@@ -36,6 +36,19 @@ thread_local! {
 // Thread-local variable type tracking (variable name -> struct type name)
 thread_local! {
     static VAR_STRUCT_TYPES: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+// Thread-local protocol method table (method_name -> protocol_name)
+thread_local! {
+    static PROTOCOL_METHODS: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+// Thread-local protocol implementation table
+// Key: (type_name, method_name), Value: generated function name
+thread_local! {
+    static PROTOCOL_IMPLS: std::cell::RefCell<HashMap<(String, String), String>> =
         std::cell::RefCell::new(HashMap::new());
 }
 
@@ -75,6 +88,46 @@ fn lookup_struct(name: &str) -> Option<StructInfo> {
 /// Reset the variable struct type table
 fn reset_var_struct_types() {
     VAR_STRUCT_TYPES.with(|table| table.borrow_mut().clear());
+}
+
+/// Reset protocol tables
+fn reset_protocol_tables() {
+    PROTOCOL_METHODS.with(|table| table.borrow_mut().clear());
+    PROTOCOL_IMPLS.with(|table| table.borrow_mut().clear());
+}
+
+/// Register a protocol method
+fn register_protocol_method(method_name: &str, protocol_name: &str) {
+    PROTOCOL_METHODS.with(|table| {
+        table
+            .borrow_mut()
+            .insert(method_name.to_string(), protocol_name.to_string());
+    });
+}
+
+/// Check if a name is a protocol method
+fn is_protocol_method(name: &str) -> Option<String> {
+    PROTOCOL_METHODS.with(|table| table.borrow().get(name).cloned())
+}
+
+/// Register a protocol implementation
+fn register_protocol_impl(type_name: &str, method_name: &str, impl_fn_name: &str) {
+    PROTOCOL_IMPLS.with(|table| {
+        table.borrow_mut().insert(
+            (type_name.to_string(), method_name.to_string()),
+            impl_fn_name.to_string(),
+        );
+    });
+}
+
+/// Look up a protocol implementation
+fn lookup_protocol_impl(type_name: &str, method_name: &str) -> Option<String> {
+    PROTOCOL_IMPLS.with(|table| {
+        table
+            .borrow()
+            .get(&(type_name.to_string(), method_name.to_string()))
+            .cloned()
+    })
 }
 
 /// Register a variable's struct type
@@ -189,6 +242,7 @@ pub fn generate(program: &Program) -> Result<Module> {
     reset_func_table();
     reset_struct_table();
     reset_var_struct_types();
+    reset_protocol_tables();
 
     // First pass: collect struct definitions
     for item in &program.items {
@@ -205,7 +259,16 @@ pub fn generate(program: &Program) -> Result<Module> {
         }
     }
 
-    // Second pass: collect function signatures for type inference
+    // Second pass: collect protocol methods
+    for item in &program.items {
+        if let Item::Defprotocol(protocol) = &item.node {
+            for method in &protocol.methods {
+                register_protocol_method(&method.name.node, &protocol.name.node);
+            }
+        }
+    }
+
+    // Third pass: collect function signatures for type inference
     for item in &program.items {
         if let Item::Defun(defun) = &item.node {
             let return_type = infer_function_return_type(defun);
@@ -213,11 +276,21 @@ pub fn generate(program: &Program) -> Result<Module> {
         }
     }
 
-    // Third pass: generate code
+    // Fourth pass: generate code (including protocol implementations)
     let mut items = Vec::new();
     for item in &program.items {
-        if let Some(lir_item) = generate_item(item)? {
-            items.push(lir_item);
+        match &item.node {
+            Item::ExtendProtocol(extend) => {
+                // Generate functions for each method implementation
+                for impl_fn in generate_extend_protocol(extend)? {
+                    items.push(lir::Item::Function(impl_fn));
+                }
+            }
+            _ => {
+                if let Some(lir_item) = generate_item(item)? {
+                    items.push(lir_item);
+                }
+            }
         }
     }
 
@@ -269,6 +342,70 @@ fn generate_defstruct(defstruct: &Defstruct) -> Result<lir::StructDef> {
         .map(|f| liar_type_to_lir_param(&f.ty.node))
         .collect();
     Ok(lir::StructDef { name, fields })
+}
+
+/// Generate lIR functions for an extend-protocol declaration
+/// Each method implementation becomes a function: __<Protocol>_<Type>_<method>
+fn generate_extend_protocol(extend: &ExtendProtocol) -> Result<Vec<lir::FunctionDef>> {
+    let protocol_name = &extend.protocol.node;
+    let type_name = &extend.type_name.node;
+
+    let mut functions = Vec::new();
+
+    for method_impl in &extend.implementations {
+        let method_name = &method_impl.name.node;
+
+        // Generate function name: __Greet_Person_greet
+        let fn_name = format!("__{}_{}__{}", protocol_name, type_name, method_name);
+
+        // Register this implementation so we can dispatch to it
+        register_protocol_impl(type_name, method_name, &fn_name);
+
+        // Generate parameters - first param is `self` (ptr to struct)
+        let params: Vec<lir::Param> = method_impl
+            .params
+            .iter()
+            .map(|p| {
+                // `self` is a pointer to the struct
+                let ty = if p.node == "self" {
+                    lir::ParamType::Ptr
+                } else {
+                    // Other params default to i64
+                    lir::ParamType::Scalar(lir::ScalarType::I64)
+                };
+                lir::Param {
+                    ty,
+                    name: p.node.clone(),
+                }
+            })
+            .collect();
+
+        // Register self's struct type for field access in the body
+        register_var_struct_type("self", type_name);
+
+        // Generate body expression
+        let body_expr = generate_expr(&method_impl.body)?;
+
+        // Infer return type from body (before moving body_expr)
+        let return_type = infer_return_type(&body_expr);
+
+        // Wrap in ret instruction
+        let ret_instr = lir::Expr::Ret(Some(Box::new(body_expr)));
+
+        let entry_block = lir::BasicBlock {
+            label: "entry".to_string(),
+            instructions: vec![ret_instr],
+        };
+
+        functions.push(lir::FunctionDef {
+            name: fn_name,
+            return_type,
+            params,
+            blocks: vec![entry_block],
+        });
+    }
+
+    Ok(functions)
 }
 
 /// Convert a liar type to lIR ParamType
@@ -1008,7 +1145,7 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<lir::Expr> {
     }
 }
 
-/// Generate code for a function call (handles builtins and struct constructors)
+/// Generate code for a function call (handles builtins, struct constructors, and protocol methods)
 fn generate_call(
     expr: &Spanned<Expr>,
     func: &Spanned<Expr>,
@@ -1023,6 +1160,11 @@ fn generate_call(
         // Check for struct constructor
         if let Some(struct_info) = lookup_struct(op) {
             return generate_struct_constructor(expr, op, &struct_info, args);
+        }
+
+        // Check for protocol method call
+        if is_protocol_method(op).is_some() {
+            return generate_protocol_call(expr, op, args);
         }
     }
 
@@ -1043,6 +1185,75 @@ fn generate_call(
         name: func_name,
         args: call_args?,
     })
+}
+
+/// Generate code for a protocol method call
+/// Uses static dispatch based on the known type of the first (self) argument
+fn generate_protocol_call(
+    expr: &Spanned<Expr>,
+    method_name: &str,
+    args: &[Spanned<Expr>],
+) -> Result<lir::Expr> {
+    if args.is_empty() {
+        return Err(CompileError::codegen(
+            expr.span,
+            format!(
+                "protocol method '{}' requires at least one argument (self)",
+                method_name
+            ),
+        ));
+    }
+
+    // The first argument is `self` - we need to determine its struct type
+    let self_arg = &args[0];
+    let type_name = infer_struct_type(self_arg).ok_or_else(|| {
+        CompileError::codegen(
+            self_arg.span,
+            format!(
+                "cannot determine type of receiver for protocol method '{}' - expected struct type",
+                method_name
+            ),
+        )
+    })?;
+
+    // Look up the implementation function for this type
+    let impl_fn_name = lookup_protocol_impl(&type_name, method_name).ok_or_else(|| {
+        CompileError::codegen(
+            expr.span,
+            format!(
+                "no implementation of method '{}' for type '{}'",
+                method_name, type_name
+            ),
+        )
+    })?;
+
+    // Generate arguments
+    let call_args: Result<Vec<lir::Expr>> = args.iter().map(generate_expr).collect();
+
+    Ok(lir::Expr::Call {
+        name: impl_fn_name,
+        args: call_args?,
+    })
+}
+
+/// Infer the struct type of an expression (for protocol dispatch)
+fn infer_struct_type(expr: &Spanned<Expr>) -> Option<String> {
+    match &expr.node {
+        // Direct variable reference - look up in our tracking table
+        Expr::Var(name) => lookup_var_struct_type(name),
+
+        // Struct constructor call
+        Expr::Call(func, _) => {
+            if let Expr::Var(name) = &func.node {
+                if lookup_struct(name).is_some() {
+                    return Some(name.clone());
+                }
+            }
+            None
+        }
+
+        _ => None,
+    }
 }
 
 /// Generate code for struct constructor: (Point 10 20)

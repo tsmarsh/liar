@@ -33,6 +33,7 @@ pub enum BindingKind {
     Constant,
     Struct,
     Protocol,
+    ProtocolMethod,
     Macro,
 }
 
@@ -181,6 +182,14 @@ impl Resolver {
                         defprotocol.name.span,
                         BindingKind::Protocol,
                     );
+                    // Also register all method names as callable
+                    for method in &defprotocol.methods {
+                        self.define(
+                            &method.name.node,
+                            method.name.span,
+                            BindingKind::ProtocolMethod,
+                        );
+                    }
                 }
                 Item::ExtendProtocol(_) => {
                     // extend-protocol doesn't define a new name
