@@ -89,3 +89,21 @@ Feature: Standard Library
     Given the definition (defun test () (abs 0))
     When I evaluate (test)
     Then the result is 0
+
+  Scenario: neg of positive
+    Given the definition (defun neg (x) (- 0 x))
+    Given the definition (defun test () (neg 5))
+    When I evaluate (test)
+    Then the result is -5
+
+  Scenario: neg of negative
+    Given the definition (defun neg (x) (- 0 x))
+    Given the definition (defun test () (neg -5))
+    When I evaluate (test)
+    Then the result is 5
+
+  Scenario: neg of zero
+    Given the definition (defun neg (x) (- 0 x))
+    Given the definition (defun test () (neg 0))
+    When I evaluate (test)
+    Then the result is 0

@@ -16,6 +16,8 @@
 
 (defun abs (x) (if (< x 0) (- 0 x) x))
 
+(defun neg (x) (- 0 x))
+
 ;; Predicates
 
 (defun zerop (x) (= x 0))
