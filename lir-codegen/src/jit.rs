@@ -1058,6 +1058,62 @@ mod tests {
     }
 
     #[test]
+    fn test_ctpop_zero() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // popcount(0) = 0
+        let expr = Expr::Ctpop(Box::new(Expr::IntLit {
+            ty: ScalarType::I32,
+            value: 0,
+        }));
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(0));
+    }
+
+    #[test]
+    fn test_ctpop_one_bit() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // popcount(1) = 1
+        let expr = Expr::Ctpop(Box::new(Expr::IntLit {
+            ty: ScalarType::I32,
+            value: 1,
+        }));
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(1));
+    }
+
+    #[test]
+    fn test_ctpop_multiple_bits() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // popcount(0b10101010) = 4
+        let expr = Expr::Ctpop(Box::new(Expr::IntLit {
+            ty: ScalarType::I32,
+            value: 0b10101010,
+        }));
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(4));
+    }
+
+    #[test]
+    fn test_ctpop_all_ones_i32() {
+        let context = Context::create();
+        let jit = JitEngine::new(&context);
+
+        // popcount(-1) for i32 = 32 (all bits set)
+        let expr = Expr::Ctpop(Box::new(Expr::IntLit {
+            ty: ScalarType::I32,
+            value: -1,
+        }));
+        let result = jit.eval(&expr).unwrap();
+        assert_eq!(result, Value::I32(32));
+    }
+
+    #[test]
     fn test_i1_and() {
         let context = Context::create();
         let jit = JitEngine::new(&context);

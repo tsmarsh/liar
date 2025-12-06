@@ -85,6 +85,7 @@ impl Display for Expr {
             Expr::Shl(a, b) => write!(f, "(shl {} {})", a, b),
             Expr::LShr(a, b) => write!(f, "(lshr {} {})", a, b),
             Expr::AShr(a, b) => write!(f, "(ashr {} {})", a, b),
+            Expr::Ctpop(v) => write!(f, "(ctpop {})", v),
 
             // Comparisons
             Expr::ICmp { pred, lhs, rhs } => write!(f, "(icmp {} {} {})", pred, lhs, rhs),

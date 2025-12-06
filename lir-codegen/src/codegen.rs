@@ -11,6 +11,7 @@ use inkwell::values::{
     VectorValue as LLVMVectorValue,
 };
 
+use inkwell::intrinsics::Intrinsic;
 use inkwell::{AtomicOrdering, AtomicRMWBinOp, FloatPredicate, IntPredicate};
 use lir_core::ast::{
     AtomicRMWOp, BranchTarget, Expr, ExternDecl, FCmpPred, FloatValue, FunctionDef, GepType,
@@ -2334,6 +2335,32 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_right_shift(lhs_val, rhs_val, true, "ashr")
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                     .into())
+            }
+
+            Expr::Ctpop(val) => {
+                let val = self.compile_expr(val)?.into_int_value();
+                let val_type = val.get_type();
+
+                // Get the llvm.ctpop intrinsic for this integer type
+                let intrinsic = Intrinsic::find("llvm.ctpop").ok_or_else(|| {
+                    CodeGenError::CodeGen("llvm.ctpop intrinsic not found".to_string())
+                })?;
+
+                let intrinsic_fn = intrinsic
+                    .get_declaration(&self.module, &[val_type.into()])
+                    .ok_or_else(|| {
+                        CodeGenError::CodeGen("Failed to get ctpop declaration".to_string())
+                    })?;
+
+                let call_site = self
+                    .builder
+                    .build_call(intrinsic_fn, &[val.into()], "ctpop")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                call_site
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| CodeGenError::CodeGen("ctpop returned no value".to_string()))
             }
 
             // Integer comparison - handle both scalars and vectors

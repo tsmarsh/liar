@@ -223,6 +223,10 @@ impl BorrowChecker {
                 self.check_expr(b);
             }
 
+            Expr::Ctpop(v) => {
+                self.check_expr(v);
+            }
+
             Expr::ICmp { lhs, rhs, .. } | Expr::FCmp { lhs, rhs, .. } => {
                 self.check_expr(lhs);
                 self.check_expr(rhs);

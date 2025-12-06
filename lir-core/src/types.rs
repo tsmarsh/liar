@@ -132,6 +132,15 @@ impl TypeChecker {
                 Ok(lhs_ty)
             }
 
+            // Popcount - returns the same integer type as input
+            Expr::Ctpop(val) => {
+                let val_ty = self.check(val)?;
+                if !val_ty.is_integer() {
+                    return Err(TypeError::BitwiseOpOnFloat);
+                }
+                Ok(val_ty)
+            }
+
             // Integer comparison
             Expr::ICmp { lhs, rhs, .. } => {
                 let lhs_ty = self.check(lhs)?;

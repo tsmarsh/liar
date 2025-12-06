@@ -207,6 +207,10 @@ impl<'a> Parser<'a> {
             "shl" => self.parse_binop(|l, r| Expr::Shl(Box::new(l), Box::new(r))),
             "lshr" => self.parse_binop(|l, r| Expr::LShr(Box::new(l), Box::new(r))),
             "ashr" => self.parse_binop(|l, r| Expr::AShr(Box::new(l), Box::new(r))),
+            "ctpop" => {
+                let val = self.parse_expr()?;
+                Ok(Expr::Ctpop(Box::new(val)))
+            }
 
             // Comparisons
             "icmp" => self.parse_icmp(),

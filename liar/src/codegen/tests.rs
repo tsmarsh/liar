@@ -359,3 +359,53 @@ fn test_lambda_with_capture() {
     assert!(lir.contains("defstruct"));
     assert!(lir.contains("_env"));
 }
+
+#[test]
+fn test_bit_and() {
+    let lir = compile("(defun test (a b) (bit-and a b))");
+    assert!(lir.contains("(and"));
+}
+
+#[test]
+fn test_bit_or() {
+    let lir = compile("(defun test (a b) (bit-or a b))");
+    assert!(lir.contains("(or"));
+}
+
+#[test]
+fn test_bit_xor() {
+    let lir = compile("(defun test (a b) (bit-xor a b))");
+    assert!(lir.contains("(xor"));
+}
+
+#[test]
+fn test_bit_not() {
+    let lir = compile("(defun test (a) (bit-not a))");
+    // bit-not is XOR with -1
+    assert!(lir.contains("(xor"));
+    assert!(lir.contains("(i64 -1)"));
+}
+
+#[test]
+fn test_bit_shift_left() {
+    let lir = compile("(defun test (a b) (bit-shift-left a b))");
+    assert!(lir.contains("(shl"));
+}
+
+#[test]
+fn test_bit_shift_right() {
+    let lir = compile("(defun test (a b) (bit-shift-right a b))");
+    assert!(lir.contains("(lshr"));
+}
+
+#[test]
+fn test_arithmetic_shift_right() {
+    let lir = compile("(defun test (a b) (arithmetic-shift-right a b))");
+    assert!(lir.contains("(ashr"));
+}
+
+#[test]
+fn test_popcount() {
+    let lir = compile("(defun test (a) (popcount a))");
+    assert!(lir.contains("(ctpop"));
+}

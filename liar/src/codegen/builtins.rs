@@ -158,6 +158,61 @@ pub fn generate_builtin(
             Some(lir::Expr::Or(Box::new(a), Box::new(b)))
         }
 
+        // Integer bitwise operations (distinct from boolean and/or)
+        "bit-and" => {
+            check_binary(expr, "bit-and", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::And(Box::new(a), Box::new(b)))
+        }
+        "bit-or" => {
+            check_binary(expr, "bit-or", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::Or(Box::new(a), Box::new(b)))
+        }
+        "bit-xor" => {
+            check_binary(expr, "bit-xor", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::Xor(Box::new(a), Box::new(b)))
+        }
+        "bit-not" => {
+            check_unary(expr, "bit-not", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            // XOR with -1 (all bits set) inverts all bits
+            Some(lir::Expr::Xor(
+                Box::new(lir::Expr::IntLit {
+                    ty: lir::ScalarType::I64,
+                    value: -1,
+                }),
+                Box::new(a),
+            ))
+        }
+        "bit-shift-left" | "shl" => {
+            check_binary(expr, "bit-shift-left", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::Shl(Box::new(a), Box::new(b)))
+        }
+        "bit-shift-right" | "shr" => {
+            check_binary(expr, "bit-shift-right", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::LShr(Box::new(a), Box::new(b)))
+        }
+        "arithmetic-shift-right" | "ashr" => {
+            check_binary(expr, "arithmetic-shift-right", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::AShr(Box::new(a), Box::new(b)))
+        }
+        "popcount" => {
+            check_unary(expr, "popcount", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            Some(lir::Expr::Ctpop(Box::new(a)))
+        }
+
         // Ownership operations
         "alloc" => Some(lir::Expr::AllocOwn {
             elem_type: lir::ScalarType::I64,

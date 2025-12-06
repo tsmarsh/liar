@@ -339,6 +339,9 @@ pub enum Expr {
     LShr(Box<Expr>, Box<Expr>),
     AShr(Box<Expr>, Box<Expr>),
 
+    /// Population count (count set bits) - maps to llvm.ctpop
+    Ctpop(Box<Expr>),
+
     // Comparisons
     ICmp {
         pred: ICmpPred,
