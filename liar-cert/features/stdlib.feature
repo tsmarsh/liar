@@ -125,3 +125,21 @@ Feature: Standard Library
     Given the definition (defun test () (min 4 4))
     When I evaluate (test)
     Then the result is 4
+
+  Scenario: max of different values
+    Given the definition (defun max (a b) (if (> a b) a b))
+    Given the definition (defun test () (max 1 2))
+    When I evaluate (test)
+    Then the result is 2
+
+  Scenario: max when first is larger
+    Given the definition (defun max (a b) (if (> a b) a b))
+    Given the definition (defun test () (max 5 3))
+    When I evaluate (test)
+    Then the result is 5
+
+  Scenario: max of equal values
+    Given the definition (defun max (a b) (if (> a b) a b))
+    Given the definition (defun test () (max 4 4))
+    When I evaluate (test)
+    Then the result is 4

@@ -20,6 +20,8 @@
 
 (defun min (a b) (if (< a b) a b))
 
+(defun max (a b) (if (> a b) a b))
+
 ;; Predicates
 
 (defun zerop (x) (= x 0))
