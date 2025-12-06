@@ -175,3 +175,4 @@ Scenario: popcount of all ones
 ## Notes
 
 This is prerequisite infrastructure. Once complete, PersistentVector and PersistentHashMap can be implemented in pure liar, which validates the ownership/borrow/arc system on real recursive data structures.
+
