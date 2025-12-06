@@ -21,24 +21,6 @@ thread_local! {
         std::cell::RefCell::new(HashMap::new());
 }
 
-// Thread-local function parameter types table (for generating thunks)
-thread_local! {
-    static FUNC_PARAM_TYPES: std::cell::RefCell<HashMap<String, Vec<lir::ParamType>>> =
-        std::cell::RefCell::new(HashMap::new());
-}
-
-// Thread-local generated thunk functions (wrappers for functions used as closures)
-thread_local! {
-    static GENERATED_THUNKS: std::cell::RefCell<Vec<lir::FunctionDef>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-// Thread-local thunk name cache (original fn name -> thunk name)
-thread_local! {
-    static THUNK_CACHE: std::cell::RefCell<HashMap<String, String>> =
-        std::cell::RefCell::new(HashMap::new());
-}
-
 /// Struct field information for codegen
 #[derive(Clone, Debug)]
 struct StructInfo {
@@ -199,94 +181,6 @@ fn lookup_func_return_type(name: &str) -> Option<lir::ReturnType> {
     FUNC_RETURN_TYPES.with(|table| table.borrow().get(name).cloned())
 }
 
-/// Register a function's parameter types
-fn register_func_param_types(name: &str, param_types: Vec<lir::ParamType>) {
-    FUNC_PARAM_TYPES.with(|table| {
-        table.borrow_mut().insert(name.to_string(), param_types);
-    });
-}
-
-/// Look up a function's parameter types
-fn lookup_func_param_types(name: &str) -> Option<Vec<lir::ParamType>> {
-    FUNC_PARAM_TYPES.with(|table| table.borrow().get(name).cloned())
-}
-
-/// Get or create a thunk for a function (wraps it to have closure signature)
-fn get_or_create_thunk(fn_name: &str) -> String {
-    // Check cache first
-    if let Some(thunk_name) = THUNK_CACHE.with(|cache| cache.borrow().get(fn_name).cloned()) {
-        return thunk_name;
-    }
-
-    // Look up function signature
-    let return_type =
-        lookup_func_return_type(fn_name).unwrap_or(lir::ReturnType::Scalar(lir::ScalarType::I64));
-    let param_types = lookup_func_param_types(fn_name).unwrap_or_default();
-
-    // Generate thunk name
-    let thunk_name = format!("{}_thunk", fn_name);
-
-    // Generate thunk function:
-    // (define (fn_name_thunk ret_type) ((ptr __env) (param_types...))
-    //   (block entry (ret (call @fn_name args...))))
-    let mut thunk_params = vec![lir::Param {
-        ty: lir::ParamType::Ptr,
-        name: "__env".to_string(),
-    }];
-
-    let mut call_args = Vec::new();
-    for (i, ty) in param_types.iter().enumerate() {
-        let param_name = format!("__arg{}", i);
-        thunk_params.push(lir::Param {
-            ty: ty.clone(),
-            name: param_name.clone(),
-        });
-        call_args.push(lir::Expr::LocalRef(param_name));
-    }
-
-    let call_expr = lir::Expr::Call {
-        name: fn_name.to_string(),
-        args: call_args,
-    };
-
-    let ret_instr = lir::Expr::Ret(Some(Box::new(call_expr)));
-    let entry_block = lir::BasicBlock {
-        label: "entry".to_string(),
-        instructions: vec![ret_instr],
-    };
-
-    let thunk_fn = lir::FunctionDef {
-        name: thunk_name.clone(),
-        return_type,
-        params: thunk_params,
-        blocks: vec![entry_block],
-    };
-
-    // Add to generated thunks
-    GENERATED_THUNKS.with(|thunks| thunks.borrow_mut().push(thunk_fn));
-
-    // Cache the thunk name
-    THUNK_CACHE.with(|cache| {
-        cache
-            .borrow_mut()
-            .insert(fn_name.to_string(), thunk_name.clone());
-    });
-
-    thunk_name
-}
-
-/// Take all generated thunks (clears the list)
-fn take_generated_thunks() -> Vec<lir::FunctionDef> {
-    GENERATED_THUNKS.with(|thunks| std::mem::take(&mut *thunks.borrow_mut()))
-}
-
-/// Clear the thunk cache
-fn reset_thunk_cache() {
-    THUNK_CACHE.with(|cache| cache.borrow_mut().clear());
-    GENERATED_THUNKS.with(|thunks| thunks.borrow_mut().clear());
-    FUNC_PARAM_TYPES.with(|table| table.borrow_mut().clear());
-}
-
 /// Infer the return type of a liar function definition
 fn infer_function_return_type(defun: &Defun) -> lir::ReturnType {
     // If explicit return type is given, use it
@@ -372,7 +266,6 @@ pub fn generate(program: &Program) -> Result<Module> {
     reset_struct_table();
     reset_var_struct_types();
     reset_protocol_tables();
-    reset_thunk_cache();
 
     // First pass: collect struct definitions
     for item in &program.items {
@@ -422,11 +315,6 @@ pub fn generate(program: &Program) -> Result<Module> {
                 }
             }
         }
-    }
-
-    // Collect generated thunk functions (wrappers for functions used as closures)
-    for thunk_fn in take_generated_thunks() {
-        items.push(lir::Item::Function(thunk_fn));
     }
 
     // Add malloc declaration if any closures with captures were generated
@@ -710,10 +598,6 @@ fn generate_defun(defun: &Defun) -> Result<lir::FunctionDef> {
         })
         .collect();
 
-    // Register parameter types for thunk generation
-    let param_types: Vec<lir::ParamType> = params.iter().map(|p| p.ty.clone()).collect();
-    register_func_param_types(&name, param_types);
-
     // Generate body expression
     let body_expr = generate_expr(&defun.body)?;
 
@@ -831,24 +715,9 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<lir::Expr> {
         Expr::String(s) => Ok(lir::Expr::StringLit(s.clone())),
         Expr::Nil => Ok(lir::Expr::NullPtr),
 
-        // Variables
-        Expr::Var(name) => {
-            // Check if this is a known function name - if so, return a closure struct
-            // This allows passing functions as values
-            if lookup_func_return_type(name).is_some() {
-                // Generate a thunk wrapper that has the closure signature (ptr env, args...)
-                // This allows the function to be called uniformly like any closure
-                let thunk_name = get_or_create_thunk(name);
-                // Wrap thunk in closure struct { fn_ptr, null env }
-                Ok(lir::Expr::StructLit(vec![
-                    lir::Expr::GlobalRef(thunk_name),
-                    lir::Expr::NullPtr,
-                ]))
-            } else {
-                // Regular local variable
-                Ok(lir::Expr::LocalRef(name.clone()))
-            }
-        }
+        // Variables - just emit LocalRef
+        // Function references are converted to ClosureLit by closure conversion pass
+        Expr::Var(name) => Ok(lir::Expr::LocalRef(name.clone())),
 
         // Function calls
         Expr::Call(func, args) => generate_call(expr, func, args),
@@ -1514,11 +1383,15 @@ fn generate_call(
     if let Expr::Var(name) = &func.node {
         // Check if this is a known function (direct call)
         if lookup_func_return_type(name).is_some() {
-            // Direct function call
-            let call_args: Result<Vec<lir::Expr>> = args.iter().map(generate_expr).collect();
+            // Direct function call - prepend null for __env parameter
+            // All functions now have __env as first param (uniform calling convention)
+            let mut call_args = vec![lir::Expr::NullPtr];
+            for arg in args {
+                call_args.push(generate_expr(arg)?);
+            }
             return Ok(lir::Expr::Call {
                 name: name.clone(),
-                args: call_args?,
+                args: call_args,
             });
         }
 

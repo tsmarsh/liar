@@ -1436,8 +1436,19 @@ impl ClosureConverter {
             defun.params.iter().map(|p| p.name.node.clone()).collect();
         let callable_params = find_callable_vars(&defun.body.node, &param_names);
 
+        // Add __env as first parameter (uniform calling convention)
+        // All functions take an env parameter, even if they don't use it
+        let env_param = Param {
+            name: Spanned::new("__env".to_string(), defun.name.span),
+            ty: Some(Spanned::new(
+                crate::ast::Type::Named("ptr".to_string()),
+                defun.name.span,
+            )),
+            mutable: false,
+        };
+
         // Update parameter types for callable params that don't have explicit types
-        let new_params: Vec<Param> = defun
+        let user_params: Vec<Param> = defun
             .params
             .into_iter()
             .map(|p| {
@@ -1453,6 +1464,10 @@ impl ClosureConverter {
                 }
             })
             .collect();
+
+        // Combine: __env first, then user params
+        let mut new_params = vec![env_param];
+        new_params.extend(user_params);
 
         // Convert the body, which may contain lambdas
         let new_body = self.convert_expr(defun.body)?;
@@ -1498,8 +1513,20 @@ impl ClosureConverter {
             }
 
             // Recursively convert sub-expressions
+            // For calls: don't wrap the function position in ClosureLit
             Expr::Call(func, args) => {
-                let new_func = Box::new(self.convert_expr(*func)?);
+                // Convert function - if it's a known function name, keep it as Var (direct call)
+                // Otherwise convert recursively (might be a closure call)
+                let new_func = match &func.node {
+                    Expr::Var(name) if self.known_functions.contains(name) => {
+                        // Direct call to known function - keep as Var
+                        func
+                    }
+                    _ => {
+                        // Closure or computed function - convert recursively
+                        Box::new(self.convert_expr(*func)?)
+                    }
+                };
                 let new_args: Result<Vec<_>> =
                     args.into_iter().map(|a| self.convert_expr(a)).collect();
                 Expr::Call(new_func, new_args?)
@@ -1708,6 +1735,15 @@ impl ClosureConverter {
                 Expr::RcAlloc {
                     struct_name,
                     fields: new_fields?,
+                }
+            }
+
+            // Function references used as values get wrapped in ClosureLit
+            Expr::Var(ref name) if self.known_functions.contains(name) => {
+                // Function used as a value - wrap in ClosureLit { fn_name, None }
+                Expr::ClosureLit {
+                    fn_name: name.clone(),
+                    env: None,
                 }
             }
 
@@ -2343,9 +2379,9 @@ mod tests {
         let defun_count = count_items_of_type(&program, |i| matches!(i, Item::Defun(_)));
         assert_eq!(defun_count, 1, "Expected 1 function");
 
-        // The function should be preserved
+        // The function should be preserved (with __env added as first param)
         let add = find_defun(&program, "add").expect("Should have add function");
-        assert_eq!(add.params.len(), 2);
+        assert_eq!(add.params.len(), 3); // __env, a, b
     }
 
     #[test]
