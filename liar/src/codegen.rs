@@ -9,10 +9,17 @@ use crate::error::{CompileError, Result};
 use crate::span::Spanned;
 use lir_core::ast as lir;
 use lir_core::display::Module;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 // Fresh variable counter for generating unique temporaries
 static VAR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+// Thread-local function signature table for type inference
+thread_local! {
+    static FUNC_RETURN_TYPES: std::cell::RefCell<HashMap<String, lir::ReturnType>> =
+        std::cell::RefCell::new(HashMap::new());
+}
 
 /// Generate a fresh variable name with the given prefix
 fn fresh_var(prefix: &str) -> String {
@@ -25,11 +32,106 @@ pub fn reset_var_counter() {
     VAR_COUNTER.store(0, Ordering::SeqCst);
 }
 
+/// Reset the function signature table (for testing)
+fn reset_func_table() {
+    FUNC_RETURN_TYPES.with(|table| table.borrow_mut().clear());
+}
+
+/// Register a function's return type
+fn register_func_return_type(name: &str, return_type: lir::ReturnType) {
+    FUNC_RETURN_TYPES.with(|table| {
+        table.borrow_mut().insert(name.to_string(), return_type);
+    });
+}
+
+/// Look up a function's return type
+fn lookup_func_return_type(name: &str) -> Option<lir::ReturnType> {
+    FUNC_RETURN_TYPES.with(|table| table.borrow().get(name).cloned())
+}
+
+/// Infer the return type of a liar function definition
+fn infer_function_return_type(defun: &Defun) -> lir::ReturnType {
+    // If explicit return type is given, use it
+    if let Some(ref ty) = defun.return_type {
+        return liar_type_to_return(&ty.node);
+    }
+    // Otherwise infer from body
+    infer_liar_expr_type(&defun.body.node)
+}
+
+/// Infer the return type of a liar expression (before lowering to lIR)
+fn infer_liar_expr_type(expr: &Expr) -> lir::ReturnType {
+    match expr {
+        // Literals
+        Expr::Int(_) => lir::ReturnType::Scalar(lir::ScalarType::I64),
+        Expr::Float(_) => lir::ReturnType::Scalar(lir::ScalarType::Double),
+        Expr::Bool(_) => lir::ReturnType::Scalar(lir::ScalarType::I1),
+        Expr::String(_) => lir::ReturnType::Ptr,
+        Expr::Nil => lir::ReturnType::Ptr,
+
+        // Comparison operators return bool
+        Expr::Call(func, _args) => {
+            if let Expr::Var(op) = &func.node {
+                match op.as_str() {
+                    // Comparisons return i1
+                    "=" | "==" | "!=" | "<" | ">" | "<=" | ">=" => {
+                        return lir::ReturnType::Scalar(lir::ScalarType::I1);
+                    }
+                    // Boolean ops return i1
+                    "not" | "and" | "or" => {
+                        return lir::ReturnType::Scalar(lir::ScalarType::I1);
+                    }
+                    // Look up user-defined function return types
+                    name => {
+                        if let Some(ret_type) = lookup_func_return_type(name) {
+                            return ret_type;
+                        }
+                    }
+                }
+            }
+            // Default for unknown calls
+            lir::ReturnType::Scalar(lir::ScalarType::I64)
+        }
+
+        // If inherits from branches (check true branch)
+        Expr::If(_cond, then_branch, _else_branch) => infer_liar_expr_type(&then_branch.node),
+
+        // Let inherits from body
+        Expr::Let(_bindings, body) => infer_liar_expr_type(&body.node),
+        Expr::Plet(_bindings, body) => infer_liar_expr_type(&body.node),
+
+        // Do block inherits from last expression
+        Expr::Do(exprs) => {
+            if let Some(last) = exprs.last() {
+                infer_liar_expr_type(&last.node)
+            } else {
+                lir::ReturnType::Scalar(lir::ScalarType::I64)
+            }
+        }
+
+        // Variable - we don't track variable types, default to i64
+        Expr::Var(_) => lir::ReturnType::Scalar(lir::ScalarType::I64),
+
+        // Default
+        _ => lir::ReturnType::Scalar(lir::ScalarType::I64),
+    }
+}
+
 /// Generate lIR module from a liar program
 pub fn generate(program: &Program) -> Result<Module> {
     reset_var_counter();
-    let mut items = Vec::new();
+    reset_func_table();
 
+    // First pass: collect function signatures for type inference
+    for item in &program.items {
+        if let Item::Defun(defun) = &item.node {
+            let return_type = infer_function_return_type(defun);
+            register_func_return_type(&defun.name.node, return_type);
+        }
+    }
+
+    // Second pass: generate code
+    let mut items = Vec::new();
     for item in &program.items {
         if let Some(lir_item) = generate_item(item)? {
             items.push(lir_item);
@@ -153,13 +255,6 @@ fn liar_type_to_return(ty: &crate::ast::Type) -> lir::ReturnType {
 fn generate_defun(defun: &Defun) -> Result<lir::FunctionDef> {
     let name = defun.name.node.clone();
 
-    // Determine return type
-    let return_type = defun
-        .return_type
-        .as_ref()
-        .map(|t| liar_type_to_return(&t.node))
-        .unwrap_or(lir::ReturnType::Scalar(lir::ScalarType::I64));
-
     // Generate parameters
     let params: Vec<lir::Param> = defun
         .params
@@ -179,6 +274,13 @@ fn generate_defun(defun: &Defun) -> Result<lir::FunctionDef> {
     // Generate body expression
     let body_expr = generate_expr(&defun.body)?;
 
+    // Determine return type - use explicit if provided, otherwise infer from body
+    let return_type = defun
+        .return_type
+        .as_ref()
+        .map(|t| liar_type_to_return(&t.node))
+        .unwrap_or_else(|| infer_return_type(&body_expr));
+
     // Wrap in ret instruction
     let ret_instr = lir::Expr::Ret(Some(Box::new(body_expr)));
 
@@ -194,6 +296,59 @@ fn generate_defun(defun: &Defun) -> Result<lir::FunctionDef> {
         params,
         blocks: vec![entry_block],
     })
+}
+
+/// Infer the return type of an expression
+fn infer_return_type(expr: &lir::Expr) -> lir::ReturnType {
+    match expr {
+        // Literals
+        lir::Expr::IntLit { ty, .. } => lir::ReturnType::Scalar(ty.clone()),
+        lir::Expr::FloatLit { ty, .. } => lir::ReturnType::Scalar(ty.clone()),
+        lir::Expr::NullPtr => lir::ReturnType::Ptr,
+        lir::Expr::StringLit(_) => lir::ReturnType::Ptr,
+
+        // Comparisons return i1
+        lir::Expr::ICmp { .. } => lir::ReturnType::Scalar(lir::ScalarType::I1),
+        lir::Expr::FCmp { .. } => lir::ReturnType::Scalar(lir::ScalarType::I1),
+
+        // Boolean ops return i1
+        lir::Expr::And(_, _) | lir::Expr::Or(_, _) | lir::Expr::Xor(_, _) => {
+            // Check if it's i1 operations - for now assume i1
+            lir::ReturnType::Scalar(lir::ScalarType::I1)
+        }
+
+        // Arithmetic inherits from operands (assume i64)
+        lir::Expr::Add(a, _)
+        | lir::Expr::Sub(a, _)
+        | lir::Expr::Mul(a, _)
+        | lir::Expr::SDiv(a, _)
+        | lir::Expr::UDiv(a, _)
+        | lir::Expr::SRem(a, _)
+        | lir::Expr::URem(a, _) => infer_return_type(a),
+
+        // Select inherits from its branches
+        lir::Expr::Select { true_val, .. } => infer_return_type(true_val),
+
+        // Let returns type of body
+        lir::Expr::Let { body, .. } => {
+            if let Some(last) = body.last() {
+                infer_return_type(last)
+            } else {
+                lir::ReturnType::Scalar(lir::ScalarType::I64)
+            }
+        }
+
+        // Call - look up from function table
+        lir::Expr::Call { name, .. } => {
+            lookup_func_return_type(name).unwrap_or(lir::ReturnType::Scalar(lir::ScalarType::I64))
+        }
+
+        // Local ref - we don't track types, default to i64
+        lir::Expr::LocalRef(_) => lir::ReturnType::Scalar(lir::ScalarType::I64),
+
+        // Default to i64
+        _ => lir::ReturnType::Scalar(lir::ScalarType::I64),
+    }
 }
 
 /// Generate lIR expression from liar expression

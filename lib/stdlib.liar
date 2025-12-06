@@ -2,6 +2,10 @@
 ;;
 ;; Core functions and utilities
 
+;; Core
+
+(defun identity (x) x)
+
 ;; Arithmetic
 
 (defun inc (x) (+ x 1))
@@ -9,3 +13,17 @@
 (defun dec (x) (- x 1))
 
 (defun square (x) (* x x))
+
+(defun abs (x) (if (< x 0) (- 0 x) x))
+
+;; Predicates
+
+(defun zerop (x) (= x 0))
+
+(defun posp (x) (> x 0))
+
+(defun negp (x) (< x 0))
+
+(defun evenp (x) (= 0 (rem x 2)))
+
+(defun oddp (x) (= 1 (rem x 2)))
