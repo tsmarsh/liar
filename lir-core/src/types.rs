@@ -30,6 +30,8 @@ impl TypeChecker {
                 ParamType::Own(_) | ParamType::Ref(_) | ParamType::RefMut(_) | ParamType::Rc(_) => {
                     Type::Ptr
                 }
+                // Anonymous structs (for closures) - passed by value
+                ParamType::AnonStruct(_) => Type::Ptr, // TODO: proper struct type tracking
             };
             locals.insert(param.name.clone(), ty);
         }
@@ -351,6 +353,9 @@ impl TypeChecker {
                 .cloned()
                 .ok_or(TypeError::UndefinedVariable(name.clone())),
 
+            // Global/function reference (always a pointer)
+            Expr::GlobalRef(_) => Ok(Type::Ptr),
+
             // Return instruction
             Expr::Ret(value) => {
                 if let Some(ret_ty) = self.return_type.clone() {
@@ -377,6 +382,11 @@ impl TypeChecker {
                             } else {
                                 Err(TypeError::TypeMismatch)
                             }
+                        }
+                        (ReturnType::AnonStruct(_), Some(_v)) => {
+                            // For anonymous struct returns, just accept any struct return
+                            // Detailed type checking of struct fields would require more context
+                            Ok(Type::Scalar(ScalarType::Void)) // ret itself is void
                         }
                     }
                 } else {
@@ -413,6 +423,8 @@ impl TypeChecker {
                     | ParamType::Ref(_)
                     | ParamType::RefMut(_)
                     | ParamType::Rc(_) => Ok(Type::Ptr),
+                    // Anonymous structs (for closures)
+                    ParamType::AnonStruct(_) => Ok(Type::Ptr), // TODO: proper struct type tracking
                 }
             }
 
@@ -490,6 +502,33 @@ impl TypeChecker {
                 // Tail calls return whatever the called function returns
                 // Without function context, assume i32
                 Ok(Type::Scalar(ScalarType::I32))
+            }
+
+            Expr::IndirectCall {
+                fn_ptr,
+                ret_ty,
+                args,
+            } => {
+                // Type check function pointer (must be ptr)
+                let fn_ptr_ty = self.check(fn_ptr)?;
+                if fn_ptr_ty != Type::Ptr {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Type check all arguments
+                for arg in args {
+                    self.check(arg)?;
+                }
+                // Return the specified return type
+                match ret_ty {
+                    ParamType::Scalar(s) => Ok(Type::Scalar(s.clone())),
+                    ParamType::Ptr => Ok(Type::Ptr),
+                    ParamType::Own(_)
+                    | ParamType::Ref(_)
+                    | ParamType::RefMut(_)
+                    | ParamType::Rc(_) => Ok(Type::Ptr),
+                    // Anonymous structs (for closures)
+                    ParamType::AnonStruct(_) => Ok(Type::Ptr), // TODO: proper struct type tracking
+                }
             }
 
             // Array operations

@@ -125,6 +125,12 @@ impl<'a> Parser<'a> {
                 self.lexer.next_token_peeked()?; // consume the token
                 Ok(Expr::LocalRef(name[1..].to_string())) // strip the %
             }
+            Some(Token::Ident(ref s)) if s.starts_with('@') => {
+                // Global/function reference
+                let name = s.clone();
+                self.lexer.next_token_peeked()?; // consume the token
+                Ok(Expr::GlobalRef(name[1..].to_string())) // strip the @
+            }
             Some(Token::Ident(ref s)) => {
                 // Could be a bare parameter name (without %)
                 let name = s.clone();
@@ -281,6 +287,7 @@ impl<'a> Parser<'a> {
             // Function call
             "call" => self.parse_call(),
             "tailcall" => self.parse_tailcall(),
+            "indirect-call" => self.parse_indirect_call(),
 
             // Array operations
             "array-alloc" => self.parse_array_alloc(),
@@ -357,9 +364,17 @@ impl<'a> Parser<'a> {
 
     /// Parse load: (load type ptr)
     fn parse_load(&mut self) -> Result<Expr, ParseError> {
-        // Parse the type to load (supports ptr and scalars)
-        let ty = match self.lexer.next_token_peeked()? {
-            Some(Token::Ident(ref s)) => self.param_type_from_name(s)?,
+        // Parse the type to load (supports ptr, scalars, and anonymous structs)
+        let ty = match self.lexer.peek()?.cloned() {
+            Some(Token::LBrace) => {
+                self.lexer.next_token_peeked()?; // consume {
+                self.parse_anon_struct_param_type()?
+            }
+            Some(Token::Ident(ref s)) => {
+                let ty = self.param_type_from_name(s)?;
+                self.lexer.next_token_peeked()?; // consume type name
+                ty
+            }
             Some(tok) => {
                 return Err(ParseError::Expected {
                     expected: "type".to_string(),
@@ -694,6 +709,40 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Expr::TailCall { name, args })
+    }
+
+    /// Parse indirect-call: (indirect-call fn_ptr ret_ty args...)
+    /// Example: (indirect-call fn_ptr_expr i64 arg1 arg2)
+    fn parse_indirect_call(&mut self) -> Result<Expr, ParseError> {
+        // Parse function pointer expression
+        let fn_ptr = Box::new(self.parse_expr()?);
+
+        // Parse return type
+        let ret_ty = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => self.param_type_from_name(&s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "return type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse arguments
+        let mut args = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            args.push(self.parse_expr()?);
+        }
+
+        Ok(Expr::IndirectCall {
+            fn_ptr,
+            ret_ty,
+            args,
+        })
     }
 
     /// Parse array-alloc: (array-alloc type size)
@@ -1173,13 +1222,23 @@ impl<'a> Parser<'a> {
             None => return Err(ParseError::UnexpectedEof),
         };
 
-        let return_type = match self.lexer.next_token_peeked()? {
-            Some(Token::Ident(ref s)) => self.return_type_from_name(s)?,
+        let return_type = match self.lexer.peek()? {
+            Some(Token::Ident(ref s)) => {
+                let s = s.clone(); // Clone to avoid borrow conflict
+                let ret_ty = self.return_type_from_name(&s)?;
+                self.lexer.next_token_peeked()?; // consume the type name
+                ret_ty
+            }
+            Some(Token::LBrace) => {
+                // Anonymous struct return type: { type, type, ... }
+                self.parse_anon_struct_return_type()?
+            }
             Some(tok) => {
+                let found = format!("{}", tok);
                 return Err(ParseError::Expected {
                     expected: "return type".to_string(),
-                    found: format!("{}", tok),
-                })
+                    found,
+                });
             }
             None => return Err(ParseError::UnexpectedEof),
         };
@@ -1318,12 +1377,20 @@ impl<'a> Parser<'a> {
             if *tok == Token::RParen {
                 break;
             }
-            match self.lexer.next_token_peeked()? {
+            match self.lexer.peek()?.cloned() {
+                Some(Token::LBrace) => {
+                    // Anonymous struct field type: { ptr, ptr }
+                    self.lexer.next_token_peeked()?; // consume {
+                    let anon_struct = self.parse_anon_struct_param_type()?;
+                    fields.push(anon_struct);
+                }
                 Some(Token::Ident(ref s)) if s == "ptr" => {
+                    self.lexer.next_token_peeked()?; // consume ptr
                     fields.push(ParamType::Ptr);
                 }
                 Some(Token::Ident(ref s)) => {
                     let ty = self.type_from_name(s)?;
+                    self.lexer.next_token_peeked()?; // consume type name
                     fields.push(ParamType::Scalar(ty));
                 }
                 Some(tok) => {
@@ -1772,8 +1839,27 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a function parameter: (type name) or (own/ref/refmut type name)
+    /// Parse a function parameter: (type name), (own/ref/refmut type name), or ({ type, type } name)
     fn parse_param(&mut self) -> Result<(ParamType, String), ParseError> {
+        // Check for anonymous struct type: { type, type, ... }
+        let peeked = self.lexer.peek()?.cloned();
+        if matches!(peeked, Some(Token::LBrace)) {
+            self.lexer.next_token_peeked()?; // consume '{'
+            let anon_type = self.parse_anon_struct_param_type()?;
+            // Parse parameter name
+            let param_name = match self.lexer.next_token_peeked()? {
+                Some(Token::Ident(s)) => s,
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "parameter name".to_string(),
+                        found: format!("{}", tok),
+                    })
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            };
+            return Ok((anon_type, param_name));
+        }
+
         let first = match self.lexer.next_token_peeked()? {
             Some(Token::Ident(s)) => s,
             Some(tok) => {
@@ -1877,6 +1963,104 @@ impl<'a> Parser<'a> {
             "void" => Ok(ReturnType::Scalar(ScalarType::Void)),
             _ => Err(ParseError::UnknownType(name.to_string())),
         }
+    }
+
+    /// Parse anonymous struct return type: { type, type, ... }
+    /// Parse an anonymous struct parameter type: { type, type, ... }
+    /// Assumes the opening '{' has already been consumed.
+    fn parse_anon_struct_param_type(&mut self) -> Result<ParamType, ParseError> {
+        let mut fields = Vec::new();
+
+        loop {
+            // Peek to check for closing brace
+            let token = self.lexer.peek()?.cloned();
+            match token {
+                Some(Token::RBrace) => {
+                    self.lexer.next_token_peeked()?; // consume }
+                    break;
+                }
+                Some(Token::Ident(ref s)) => {
+                    let ty = self.param_type_from_name(s)?;
+                    self.lexer.next_token_peeked()?; // consume the type name
+                    fields.push(ty);
+
+                    // Check for comma or closing brace
+                    match self.lexer.peek()? {
+                        Some(Token::Comma) => {
+                            self.lexer.next_token_peeked()?; // consume comma
+                        }
+                        Some(Token::RBrace) => {
+                            // Will be consumed in next iteration
+                        }
+                        Some(tok) => {
+                            let found = format!("{}", tok);
+                            return Err(ParseError::Expected {
+                                expected: "',' or '}'".to_string(),
+                                found,
+                            });
+                        }
+                        None => return Err(ParseError::UnexpectedEof),
+                    }
+                }
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "type name or '}'".to_string(),
+                        found: format!("{}", tok),
+                    });
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            }
+        }
+
+        Ok(ParamType::AnonStruct(fields))
+    }
+
+    fn parse_anon_struct_return_type(&mut self) -> Result<ReturnType, ParseError> {
+        self.expect(Token::LBrace)?;
+        let mut fields = Vec::new();
+
+        loop {
+            // Peek to check for closing brace
+            let token = self.lexer.peek()?.cloned();
+            match token {
+                Some(Token::RBrace) => {
+                    self.lexer.next_token_peeked()?; // consume }
+                    break;
+                }
+                Some(Token::Ident(ref s)) => {
+                    let ty = self.param_type_from_name(s)?;
+                    self.lexer.next_token_peeked()?; // consume the type name
+                    fields.push(ty);
+
+                    // Check for comma or closing brace
+                    match self.lexer.peek()? {
+                        Some(Token::Comma) => {
+                            self.lexer.next_token_peeked()?; // consume comma
+                        }
+                        Some(Token::RBrace) => {
+                            // Will be consumed in next iteration
+                        }
+                        Some(tok) => {
+                            let found = format!("{}", tok);
+                            return Err(ParseError::Expected {
+                                expected: "',' or '}'".to_string(),
+                                found,
+                            });
+                        }
+                        None => return Err(ParseError::UnexpectedEof),
+                    }
+                }
+                Some(tok) => {
+                    return Err(ParseError::Expected {
+                        expected: "type name or '}'".to_string(),
+                        found: format!("{}", tok),
+                    });
+                }
+                None => return Err(ParseError::UnexpectedEof),
+            }
+        }
+
+        Ok(ReturnType::AnonStruct(fields))
     }
 
     fn expect(&mut self, expected: Token) -> Result<(), ParseError> {

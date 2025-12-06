@@ -59,4 +59,15 @@
 (defun sum-to (n) (if (<= n 0) 0 (+ n (sum-to (- n 1)))))
 
 ;; Higher-order functions
-;; Note: comp, flip, constantly require closure support (not yet implemented)
+
+;; Returns a function that always returns v, ignoring its argument
+(defun constantly (v)
+  (fn (x) v))
+
+;; Returns composition of two functions: (comp f g) returns fn that does (f (g x))
+(defun comp (f g)
+  (fn (x) (f (g x))))
+
+;; Returns a function with arguments flipped: (flip f) returns (fn (a b) (f b a))
+(defun flip (f)
+  (fn (a b) (f b a)))

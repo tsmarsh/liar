@@ -103,7 +103,10 @@ impl BorrowChecker {
                 ParamType::Own(_) => OwnershipState::Owned,
                 ParamType::Ref(_) => OwnershipState::Borrowed { count: 1 },
                 ParamType::RefMut(_) => OwnershipState::BorrowedMut,
-                ParamType::Scalar(_) | ParamType::Ptr | ParamType::Rc(_) => continue, // Non-ownership types (RC has its own tracking)
+                ParamType::Scalar(_)
+                | ParamType::Ptr
+                | ParamType::Rc(_)
+                | ParamType::AnonStruct(_) => continue, // Non-ownership types (RC has its own tracking)
             };
             self.bindings.insert(param.name.clone(), state);
         }
@@ -253,6 +256,13 @@ impl BorrowChecker {
                 }
             }
 
+            Expr::IndirectCall { fn_ptr, args, .. } => {
+                self.check_expr(fn_ptr);
+                for arg in args {
+                    self.check_expr(arg);
+                }
+            }
+
             Expr::Ret(Some(value)) => self.check_expr(value),
             Expr::Ret(None) => {}
 
@@ -384,6 +394,9 @@ impl BorrowChecker {
             }
             Expr::Fence { .. } => {
                 // Fence has no operands to check
+            }
+            Expr::GlobalRef(_) => {
+                // Global references are always valid, nothing to check
             }
         }
     }

@@ -200,6 +200,13 @@ impl<'ctx> CodeGen<'ctx> {
                         .into(),
                 )
             }
+            ParamType::AnonStruct(fields) => {
+                let field_types: Vec<BasicTypeEnum<'ctx>> = fields
+                    .iter()
+                    .filter_map(|f| self.param_type_to_basic_type(f))
+                    .collect();
+                Some(self.context.struct_type(&field_types, false).into())
+            }
         }
     }
 
@@ -356,6 +363,15 @@ impl<'ctx> CodeGen<'ctx> {
                 .context
                 .ptr_type(inkwell::AddressSpace::default())
                 .fn_type(&param_types, false),
+            ReturnType::AnonStruct(fields) => {
+                // Build anonymous struct type from field types
+                let field_types: Vec<BasicTypeEnum<'ctx>> = fields
+                    .iter()
+                    .filter_map(|f| self.param_type_to_basic_type(f))
+                    .collect();
+                let struct_type = self.context.struct_type(&field_types, false);
+                struct_type.fn_type(&param_types, false)
+            }
         };
 
         self.module.add_function(&func.name, fn_type, None)
@@ -432,6 +448,14 @@ impl<'ctx> CodeGen<'ctx> {
                             .into(),
                     )
                 }
+                // Anonymous struct types (for closures)
+                ParamType::AnonStruct(fields) => {
+                    let field_types: Vec<BasicTypeEnum<'ctx>> = fields
+                        .iter()
+                        .filter_map(|f| self.param_type_to_basic_type(f))
+                        .collect();
+                    Some(self.context.struct_type(&field_types, false).into())
+                }
             })
             .map(|t| t.into())
             .collect();
@@ -465,6 +489,14 @@ impl<'ctx> CodeGen<'ctx> {
             }
             ReturnType::Scalar(ScalarType::Double) => {
                 self.context.f64_type().fn_type(&param_types, decl.varargs)
+            }
+            ReturnType::AnonStruct(fields) => {
+                let field_types: Vec<BasicTypeEnum<'ctx>> = fields
+                    .iter()
+                    .filter_map(|f| self.param_type_to_basic_type(f))
+                    .collect();
+                let struct_type = self.context.struct_type(&field_types, false);
+                struct_type.fn_type(&param_types, decl.varargs)
             }
         };
 
@@ -646,6 +678,50 @@ impl<'ctx> CodeGen<'ctx> {
 
                 // TailCall is a terminator, returns None
                 Ok(None)
+            }
+
+            Expr::IndirectCall {
+                fn_ptr,
+                ret_ty,
+                args,
+            } => {
+                // Compile the function pointer
+                let fn_ptr_val = self.compile_expr_recursive(fn_ptr, locals)?;
+
+                // Build the function type from ret_ty and arg count
+                let ret_llvm_ty = self.param_type_to_basic_type(ret_ty);
+                let arg_types: Vec<BasicMetadataTypeEnum> = args
+                    .iter()
+                    .map(|_| {
+                        self.context
+                            .ptr_type(inkwell::AddressSpace::default())
+                            .into()
+                    })
+                    .collect();
+                let fn_type = match ret_llvm_ty {
+                    Some(basic_ty) => basic_ty.fn_type(&arg_types, false),
+                    None => self.context.void_type().fn_type(&arg_types, false),
+                };
+
+                // Compile the arguments
+                let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                for arg in args {
+                    let val = self.compile_expr_recursive(arg, locals)?;
+                    compiled_args.push(val.into());
+                }
+
+                // Build indirect call
+                let call_site = self
+                    .builder
+                    .build_indirect_call(
+                        fn_type,
+                        fn_ptr_val.into_pointer_value(),
+                        &compiled_args,
+                        "indirect_call",
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                Ok(call_site.try_as_basic_value().basic())
             }
 
             // Array operations
@@ -1184,6 +1260,14 @@ impl<'ctx> CodeGen<'ctx> {
                 .copied()
                 .ok_or_else(|| CodeGenError::CodeGen(format!("undefined variable: {}", name))),
 
+            // Global/function reference (returns function pointer)
+            Expr::GlobalRef(name) => {
+                let func = self.module.get_function(name).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("undefined function: {}", name))
+                })?;
+                Ok(func.as_global_value().as_pointer_value().into())
+            }
+
             // Null pointer literal
             Expr::NullPtr => {
                 let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
@@ -1594,6 +1678,11 @@ impl<'ctx> CodeGen<'ctx> {
                 "tailcall requires block context".to_string(),
             )),
 
+            // Indirect call - needs to be compiled from compile_expr_with_deferred_phis
+            Expr::IndirectCall { .. } => Err(CodeGenError::CodeGen(
+                "indirect-call requires function context".to_string(),
+            )),
+
             // Array operations - need block context
             Expr::ArrayAlloc { .. }
             | Expr::ArrayGet { .. }
@@ -1898,6 +1987,26 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_extract_value(agg_val, *idx, "extractvalue")
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
                 Ok(result)
+            }
+
+            // Struct literal with locals support (for closures)
+            Expr::StructLit(fields) => {
+                let mut compiled_fields: Vec<BasicValueEnum<'ctx>> = Vec::new();
+                for field in fields {
+                    compiled_fields.push(self.compile_expr_recursive(field, locals)?);
+                }
+                let field_types: Vec<BasicTypeEnum<'ctx>> =
+                    compiled_fields.iter().map(|v| v.get_type()).collect();
+                let struct_type = self.context.struct_type(&field_types, false);
+                let mut struct_val = struct_type.get_undef();
+                for (i, val) in compiled_fields.iter().enumerate() {
+                    struct_val = self
+                        .builder
+                        .build_insert_value(struct_val, *val, i as u32, "struct_field")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into_struct_value();
+                }
+                Ok(struct_val.into())
             }
 
             // For any other expressions, fall back to compile_expr
@@ -2490,6 +2599,14 @@ impl<'ctx> CodeGen<'ctx> {
                     .into())
             }
 
+            // Global/function reference (returns function pointer)
+            Expr::GlobalRef(name) => {
+                let func = self.module.get_function(name).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("undefined function: {}", name))
+                })?;
+                Ok(func.as_global_value().as_pointer_value().into())
+            }
+
             // These are handled at function level, not expression level
             Expr::LocalRef(_) => Err(CodeGenError::CodeGen(
                 "local references require function context".to_string(),
@@ -2552,6 +2669,10 @@ impl<'ctx> CodeGen<'ctx> {
 
             Expr::TailCall { .. } => Err(CodeGenError::CodeGen(
                 "tailcall requires block context".to_string(),
+            )),
+
+            Expr::IndirectCall { .. } => Err(CodeGenError::CodeGen(
+                "indirect-call requires function context".to_string(),
             )),
 
             // Array operations - need block context
@@ -3407,6 +3528,82 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_extract_value(agg_val, *idx, "extractvalue")
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
                 Ok(result)
+            }
+
+            // Struct literal with locals support (for closures)
+            Expr::StructLit(fields) => {
+                let mut compiled_fields: Vec<BasicValueEnum<'ctx>> = Vec::new();
+                for field in fields {
+                    compiled_fields.push(self.compile_with_locals(field, locals)?);
+                }
+                let field_types: Vec<BasicTypeEnum<'ctx>> =
+                    compiled_fields.iter().map(|v| v.get_type()).collect();
+                let struct_type = self.context.struct_type(&field_types, false);
+                let mut struct_val = struct_type.get_undef();
+                for (i, val) in compiled_fields.iter().enumerate() {
+                    struct_val = self
+                        .builder
+                        .build_insert_value(struct_val, *val, i as u32, "struct_field")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into_struct_value();
+                }
+                Ok(struct_val.into())
+            }
+
+            // GlobalRef (for function pointers) - available in any context
+            Expr::GlobalRef(name) => {
+                let func = self.module.get_function(name).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("undefined function: {}", name))
+                })?;
+                Ok(func.as_global_value().as_pointer_value().into())
+            }
+
+            // IndirectCall with locals support (for closure calls)
+            Expr::IndirectCall {
+                fn_ptr,
+                ret_ty,
+                args,
+            } => {
+                // Compile the function pointer
+                let fn_ptr_val = self.compile_with_locals(fn_ptr, locals)?;
+
+                // Build the function type from ret_ty and arg count
+                let ret_llvm_ty = self.param_type_to_basic_type(ret_ty);
+                let arg_types: Vec<BasicMetadataTypeEnum> = args
+                    .iter()
+                    .map(|_| {
+                        self.context
+                            .ptr_type(inkwell::AddressSpace::default())
+                            .into()
+                    })
+                    .collect();
+                let fn_type = match ret_llvm_ty {
+                    Some(basic_ty) => basic_ty.fn_type(&arg_types, false),
+                    None => self.context.void_type().fn_type(&arg_types, false),
+                };
+
+                // Compile the arguments
+                let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                for arg in args {
+                    let val = self.compile_with_locals(arg, locals)?;
+                    compiled_args.push(val.into());
+                }
+
+                // Build indirect call
+                let call_site = self
+                    .builder
+                    .build_indirect_call(
+                        fn_type,
+                        fn_ptr_val.into_pointer_value(),
+                        &compiled_args,
+                        "indirect_call_with_locals",
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                call_site
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| CodeGenError::CodeGen("indirect-call returned void".to_string()))
             }
 
             // For simple literals and non-nested expressions, delegate to compile_expr

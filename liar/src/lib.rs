@@ -15,7 +15,7 @@
 //!               ↓
 //!          Ownership → Verified AST (borrow-checked)
 //!               ↓
-//!          Closures → AST with closure info
+//!          Closures → AST with closure info + converted lambdas
 //!               ↓
 //!          Codegen → lIR
 //! ```
@@ -56,8 +56,12 @@ pub fn compile(source: &str) -> std::result::Result<String, Vec<CompileError>> {
     // Ownership checking
     ownership::check(&program).map_err(|e| vec![e])?;
 
-    // Closure analysis
-    closures::analyze(&mut program).map_err(|e| vec![e])?;
+    // Closure analysis - get capture info for each lambda
+    let capture_info = closures::analyze(&program).map_err(|e| vec![e])?;
+
+    // Closure conversion - transform lambdas into lifted functions
+    // Lambdas become ClosureLit nodes with explicit environment structs
+    let program = closures::convert(program, capture_info).map_err(|e| vec![e])?;
 
     // Code generation
     codegen::generate_string(&program).map_err(|e| vec![e])

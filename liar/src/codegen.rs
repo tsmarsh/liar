@@ -21,10 +21,28 @@ thread_local! {
         std::cell::RefCell::new(HashMap::new());
 }
 
+// Thread-local function parameter types table (for generating thunks)
+thread_local! {
+    static FUNC_PARAM_TYPES: std::cell::RefCell<HashMap<String, Vec<lir::ParamType>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+// Thread-local generated thunk functions (wrappers for functions used as closures)
+thread_local! {
+    static GENERATED_THUNKS: std::cell::RefCell<Vec<lir::FunctionDef>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+// Thread-local thunk name cache (original fn name -> thunk name)
+thread_local! {
+    static THUNK_CACHE: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
 /// Struct field information for codegen
 #[derive(Clone, Debug)]
 struct StructInfo {
-    fields: Vec<(String, lir::ScalarType)>,
+    fields: Vec<(String, lir::ParamType)>,
 }
 
 // Thread-local struct definition table
@@ -50,6 +68,19 @@ thread_local! {
 thread_local! {
     static PROTOCOL_IMPLS: std::cell::RefCell<HashMap<(String, String), String>> =
         std::cell::RefCell::new(HashMap::new());
+}
+
+// Thread-local flag for whether malloc is needed (closures with captures)
+thread_local! {
+    static NEEDS_MALLOC: std::cell::RefCell<bool> = const { std::cell::RefCell::new(false) };
+}
+
+fn set_needs_malloc() {
+    NEEDS_MALLOC.with(|flag| *flag.borrow_mut() = true);
+}
+
+fn take_needs_malloc() -> bool {
+    NEEDS_MALLOC.with(|flag| std::mem::take(&mut *flag.borrow_mut()))
 }
 
 /// Generate a fresh variable name with the given prefix
@@ -168,6 +199,94 @@ fn lookup_func_return_type(name: &str) -> Option<lir::ReturnType> {
     FUNC_RETURN_TYPES.with(|table| table.borrow().get(name).cloned())
 }
 
+/// Register a function's parameter types
+fn register_func_param_types(name: &str, param_types: Vec<lir::ParamType>) {
+    FUNC_PARAM_TYPES.with(|table| {
+        table.borrow_mut().insert(name.to_string(), param_types);
+    });
+}
+
+/// Look up a function's parameter types
+fn lookup_func_param_types(name: &str) -> Option<Vec<lir::ParamType>> {
+    FUNC_PARAM_TYPES.with(|table| table.borrow().get(name).cloned())
+}
+
+/// Get or create a thunk for a function (wraps it to have closure signature)
+fn get_or_create_thunk(fn_name: &str) -> String {
+    // Check cache first
+    if let Some(thunk_name) = THUNK_CACHE.with(|cache| cache.borrow().get(fn_name).cloned()) {
+        return thunk_name;
+    }
+
+    // Look up function signature
+    let return_type =
+        lookup_func_return_type(fn_name).unwrap_or(lir::ReturnType::Scalar(lir::ScalarType::I64));
+    let param_types = lookup_func_param_types(fn_name).unwrap_or_default();
+
+    // Generate thunk name
+    let thunk_name = format!("{}_thunk", fn_name);
+
+    // Generate thunk function:
+    // (define (fn_name_thunk ret_type) ((ptr __env) (param_types...))
+    //   (block entry (ret (call @fn_name args...))))
+    let mut thunk_params = vec![lir::Param {
+        ty: lir::ParamType::Ptr,
+        name: "__env".to_string(),
+    }];
+
+    let mut call_args = Vec::new();
+    for (i, ty) in param_types.iter().enumerate() {
+        let param_name = format!("__arg{}", i);
+        thunk_params.push(lir::Param {
+            ty: ty.clone(),
+            name: param_name.clone(),
+        });
+        call_args.push(lir::Expr::LocalRef(param_name));
+    }
+
+    let call_expr = lir::Expr::Call {
+        name: fn_name.to_string(),
+        args: call_args,
+    };
+
+    let ret_instr = lir::Expr::Ret(Some(Box::new(call_expr)));
+    let entry_block = lir::BasicBlock {
+        label: "entry".to_string(),
+        instructions: vec![ret_instr],
+    };
+
+    let thunk_fn = lir::FunctionDef {
+        name: thunk_name.clone(),
+        return_type,
+        params: thunk_params,
+        blocks: vec![entry_block],
+    };
+
+    // Add to generated thunks
+    GENERATED_THUNKS.with(|thunks| thunks.borrow_mut().push(thunk_fn));
+
+    // Cache the thunk name
+    THUNK_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(fn_name.to_string(), thunk_name.clone());
+    });
+
+    thunk_name
+}
+
+/// Take all generated thunks (clears the list)
+fn take_generated_thunks() -> Vec<lir::FunctionDef> {
+    GENERATED_THUNKS.with(|thunks| std::mem::take(&mut *thunks.borrow_mut()))
+}
+
+/// Clear the thunk cache
+fn reset_thunk_cache() {
+    THUNK_CACHE.with(|cache| cache.borrow_mut().clear());
+    GENERATED_THUNKS.with(|thunks| thunks.borrow_mut().clear());
+    FUNC_PARAM_TYPES.with(|table| table.borrow_mut().clear());
+}
+
 /// Infer the return type of a liar function definition
 fn infer_function_return_type(defun: &Defun) -> lir::ReturnType {
     // If explicit return type is given, use it
@@ -231,6 +350,16 @@ fn infer_liar_expr_type(expr: &Expr) -> lir::ReturnType {
         // Variable - we don't track variable types, default to i64
         Expr::Var(_) => lir::ReturnType::Scalar(lir::ScalarType::I64),
 
+        // Lambda returns a closure struct { fn_ptr: ptr, env_ptr: ptr }
+        Expr::Lambda(_, _) => {
+            lir::ReturnType::AnonStruct(vec![lir::ParamType::Ptr, lir::ParamType::Ptr])
+        }
+
+        // ClosureLit also returns a closure struct { fn_ptr: ptr, env_ptr: ptr }
+        Expr::ClosureLit { .. } => {
+            lir::ReturnType::AnonStruct(vec![lir::ParamType::Ptr, lir::ParamType::Ptr])
+        }
+
         // Default
         _ => lir::ReturnType::Scalar(lir::ScalarType::I64),
     }
@@ -243,15 +372,16 @@ pub fn generate(program: &Program) -> Result<Module> {
     reset_struct_table();
     reset_var_struct_types();
     reset_protocol_tables();
+    reset_thunk_cache();
 
     // First pass: collect struct definitions
     for item in &program.items {
         if let Item::Defstruct(defstruct) = &item.node {
-            let fields: Vec<(String, lir::ScalarType)> = defstruct
+            let fields: Vec<(String, lir::ParamType)> = defstruct
                 .fields
                 .iter()
                 .map(|f| {
-                    let ty = liar_type_to_scalar(&f.ty.node);
+                    let ty = liar_type_to_lir_param(&f.ty.node);
                     (f.name.node.clone(), ty)
                 })
                 .collect();
@@ -292,6 +422,24 @@ pub fn generate(program: &Program) -> Result<Module> {
                 }
             }
         }
+    }
+
+    // Collect generated thunk functions (wrappers for functions used as closures)
+    for thunk_fn in take_generated_thunks() {
+        items.push(lir::Item::Function(thunk_fn));
+    }
+
+    // Add malloc declaration if any closures with captures were generated
+    if take_needs_malloc() {
+        items.insert(
+            0,
+            lir::Item::ExternDecl(lir::ExternDecl {
+                name: "malloc".to_string(),
+                return_type: lir::ReturnType::Ptr,
+                param_types: vec![lir::ParamType::Scalar(lir::ScalarType::I64)],
+                varargs: false,
+            }),
+        );
     }
 
     Ok(Module { items })
@@ -447,6 +595,11 @@ fn liar_type_to_lir_return(ty: &crate::ast::Type) -> lir::ReturnType {
         Type::Ref(_) | Type::RefMut(_) => lir::ReturnType::Ptr,
         Type::Fn(_, _) => lir::ReturnType::Ptr,
         Type::Tuple(_) => lir::ReturnType::Ptr,
+        Type::Ptr => lir::ReturnType::Ptr,
+        // Closure is { fn_ptr: ptr, env_ptr: ptr }
+        Type::Closure => {
+            lir::ReturnType::AnonStruct(vec![lir::ParamType::Ptr, lir::ParamType::Ptr])
+        }
     }
 }
 
@@ -476,6 +629,9 @@ fn liar_type_to_lir_param(ty: &crate::ast::Type) -> lir::ParamType {
         Type::Unit => lir::ParamType::Scalar(lir::ScalarType::Void),
         Type::Fn(_, _) => lir::ParamType::Ptr,
         Type::Tuple(_) => lir::ParamType::Ptr,
+        Type::Ptr => lir::ParamType::Ptr,
+        // Closure is { fn_ptr: ptr, env_ptr: ptr }
+        Type::Closure => lir::ParamType::AnonStruct(vec![lir::ParamType::Ptr, lir::ParamType::Ptr]),
     }
 }
 
@@ -513,6 +669,9 @@ fn liar_type_to_return(ty: &crate::ast::Type) -> lir::ReturnType {
             _ => lir::ReturnType::Ptr,
         },
         Type::Unit => lir::ReturnType::Scalar(lir::ScalarType::Void),
+        Type::Closure => {
+            lir::ReturnType::AnonStruct(vec![lir::ParamType::Ptr, lir::ParamType::Ptr])
+        }
         _ => lir::ReturnType::Scalar(lir::ScalarType::I64),
     }
 }
@@ -521,15 +680,29 @@ fn liar_type_to_return(ty: &crate::ast::Type) -> lir::ReturnType {
 fn generate_defun(defun: &Defun) -> Result<lir::FunctionDef> {
     let name = defun.name.node.clone();
 
-    // Generate parameters
+    // Register struct types for parameters with struct type annotations
+    // This is needed for closure conversion where __env has a named struct type
+    for p in &defun.params {
+        if let Some(ty) = &p.ty {
+            if let crate::ast::Type::Named(struct_name) = &ty.node {
+                // Check if this type is a registered struct
+                if lookup_struct(struct_name).is_some() {
+                    register_var_struct_type(&p.name.node, struct_name);
+                }
+            }
+        }
+    }
+
+    // Generate parameters - closure conversion pass already annotates callable params
     let params: Vec<lir::Param> = defun
         .params
         .iter()
         .map(|p| {
-            let ty =
-                p.ty.as_ref()
-                    .map(|t| liar_type_to_lir_param(&t.node))
-                    .unwrap_or(lir::ParamType::Scalar(lir::ScalarType::I64));
+            let ty = if p.ty.is_some() {
+                liar_type_to_lir_param(&p.ty.as_ref().unwrap().node)
+            } else {
+                lir::ParamType::Scalar(lir::ScalarType::I64)
+            };
             lir::Param {
                 ty,
                 name: p.name.node.clone(),
@@ -537,15 +710,21 @@ fn generate_defun(defun: &Defun) -> Result<lir::FunctionDef> {
         })
         .collect();
 
+    // Register parameter types for thunk generation
+    let param_types: Vec<lir::ParamType> = params.iter().map(|p| p.ty.clone()).collect();
+    register_func_param_types(&name, param_types);
+
     // Generate body expression
     let body_expr = generate_expr(&defun.body)?;
 
-    // Determine return type - use explicit if provided, otherwise infer from body
+    // Determine return type - use explicit if provided, otherwise infer from liar body
+    // We use the original liar AST for inference since it preserves higher-level type info
+    // (e.g., Lambda -> closure struct { ptr, ptr })
     let return_type = defun
         .return_type
         .as_ref()
         .map(|t| liar_type_to_return(&t.node))
-        .unwrap_or_else(|| infer_return_type(&body_expr));
+        .unwrap_or_else(|| infer_liar_expr_type(&defun.body.node));
 
     // Wrap in ret instruction
     let ret_instr = lir::Expr::Ret(Some(Box::new(body_expr)));
@@ -612,6 +791,22 @@ fn infer_return_type(expr: &lir::Expr) -> lir::ReturnType {
         // Local ref - we don't track types, default to i64
         lir::Expr::LocalRef(_) => lir::ReturnType::Scalar(lir::ScalarType::I64),
 
+        // Struct literal - infer types from fields (for closure returns)
+        lir::Expr::StructLit(fields) => {
+            let field_types: Vec<lir::ParamType> = fields
+                .iter()
+                .map(|f| match infer_return_type(f) {
+                    lir::ReturnType::Scalar(s) => lir::ParamType::Scalar(s),
+                    lir::ReturnType::Ptr => lir::ParamType::Ptr,
+                    lir::ReturnType::AnonStruct(_) => lir::ParamType::Ptr, // Nested struct - treat as ptr
+                })
+                .collect();
+            lir::ReturnType::AnonStruct(field_types)
+        }
+
+        // Global ref is a function pointer
+        lir::Expr::GlobalRef(_) => lir::ReturnType::Ptr,
+
         // Default to i64
         _ => lir::ReturnType::Scalar(lir::ScalarType::I64),
     }
@@ -637,7 +832,23 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<lir::Expr> {
         Expr::Nil => Ok(lir::Expr::NullPtr),
 
         // Variables
-        Expr::Var(name) => Ok(lir::Expr::LocalRef(name.clone())),
+        Expr::Var(name) => {
+            // Check if this is a known function name - if so, return a closure struct
+            // This allows passing functions as values
+            if lookup_func_return_type(name).is_some() {
+                // Generate a thunk wrapper that has the closure signature (ptr env, args...)
+                // This allows the function to be called uniformly like any closure
+                let thunk_name = get_or_create_thunk(name);
+                // Wrap thunk in closure struct { fn_ptr, null env }
+                Ok(lir::Expr::StructLit(vec![
+                    lir::Expr::GlobalRef(thunk_name),
+                    lir::Expr::NullPtr,
+                ]))
+            } else {
+                // Regular local variable
+                Ok(lir::Expr::LocalRef(name.clone()))
+            }
+        }
 
         // Function calls
         Expr::Call(func, args) => generate_call(expr, func, args),
@@ -722,11 +933,10 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<lir::Expr> {
             Ok(result)
         }
 
-        // Lambdas
-        Expr::Lambda(_params, _body) => Err(CompileError::codegen(
-            expr.span,
-            "lambdas require closure analysis (not yet implemented)",
-        )),
+        // Lambdas should be converted to ClosureLit by closure conversion pass
+        Expr::Lambda(_, _) => {
+            unreachable!("Lambda should be converted to ClosureLit before codegen")
+        }
 
         // Mutation
         Expr::Set(name, value) => {
@@ -828,7 +1038,7 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<lir::Expr> {
             Ok(lir::Expr::Let {
                 bindings: vec![(field_ptr_var.clone(), Box::new(gep))],
                 body: vec![lir::Expr::Load {
-                    ty: lir::ParamType::Scalar(field_ty),
+                    ty: field_ty,
                     ptr: Box::new(lir::Expr::LocalRef(field_ptr_var)),
                 }],
             })
@@ -1184,6 +1394,96 @@ fn generate_expr(expr: &Spanned<Expr>) -> Result<lir::Expr> {
                 "macro syntax should be expanded before code generation",
             ))
         }
+
+        // Closure conversion output - generated by closure pass
+        Expr::ClosureLit { fn_name, env } => {
+            let fn_ptr = lir::Expr::GlobalRef(fn_name.clone());
+            match env {
+                Some(e) => {
+                    // Generate the env allocation (RcAlloc returns a Let expression)
+                    let env_expr = generate_expr(e)?;
+                    // Bind the env pointer, then create the closure struct
+                    let env_var = fresh_var("cenv");
+                    Ok(lir::Expr::Let {
+                        bindings: vec![(env_var.clone(), Box::new(env_expr))],
+                        body: vec![lir::Expr::StructLit(vec![
+                            fn_ptr,
+                            lir::Expr::LocalRef(env_var),
+                        ])],
+                    })
+                }
+                None => Ok(lir::Expr::StructLit(vec![fn_ptr, lir::Expr::NullPtr])),
+            }
+        }
+
+        Expr::RcAlloc {
+            struct_name,
+            fields,
+        } => {
+            // Heap-allocate environment struct and store field values
+            let env_alloc_name = fresh_var("env");
+
+            // Mark that we need malloc declaration
+            set_needs_malloc();
+
+            // Calculate size based on field types
+            // Look up struct info to get actual field sizes
+            let struct_size = if let Some(struct_info) = lookup_struct(struct_name) {
+                struct_info
+                    .fields
+                    .iter()
+                    .map(|(_, ty)| {
+                        match ty {
+                            lir::ParamType::AnonStruct(inner) => inner.len() * 8, // Each ptr is 8 bytes
+                            _ => 8, // Scalars and pointers are 8 bytes
+                        }
+                    })
+                    .sum()
+            } else {
+                // Fallback: assume 8 bytes per field
+                fields.len() * 8
+            };
+
+            // Call malloc to allocate the environment struct on the heap
+            let malloc_call = lir::Expr::Call {
+                name: "malloc".to_string(),
+                args: vec![lir::Expr::IntLit {
+                    ty: lir::ScalarType::I64,
+                    value: struct_size as i128,
+                }],
+            };
+
+            // Store field values into the struct
+            let mut stores = vec![(env_alloc_name.clone(), Box::new(malloc_call))];
+            for (idx, (_, value)) in fields.iter().enumerate() {
+                let gep = lir::Expr::GetElementPtr {
+                    ty: lir::GepType::Struct(struct_name.clone()),
+                    ptr: Box::new(lir::Expr::LocalRef(env_alloc_name.clone())),
+                    indices: vec![
+                        lir::Expr::IntLit {
+                            ty: lir::ScalarType::I64,
+                            value: 0,
+                        },
+                        lir::Expr::IntLit {
+                            ty: lir::ScalarType::I32,
+                            value: idx as i128,
+                        },
+                    ],
+                    inbounds: true,
+                };
+                let store = lir::Expr::Store {
+                    value: Box::new(generate_expr(value)?),
+                    ptr: Box::new(gep),
+                };
+                stores.push((format!("_store{}", idx), Box::new(store)));
+            }
+
+            // Return the pointer to the allocated struct
+            Ok(lir::Expr::Let {
+                bindings: stores,
+                body: vec![lir::Expr::LocalRef(env_alloc_name)],
+            })
+        }
     }
 }
 
@@ -1210,22 +1510,120 @@ fn generate_call(
         }
     }
 
-    // Regular function call
-    let func_name = match &func.node {
-        Expr::Var(name) => name.clone(),
-        _ => {
-            return Err(CompileError::codegen(
-                func.span,
-                "indirect function calls not yet supported",
-            ))
+    // Get the function name if it's a variable
+    if let Expr::Var(name) = &func.node {
+        // Check if this is a known function (direct call)
+        if lookup_func_return_type(name).is_some() {
+            // Direct function call
+            let call_args: Result<Vec<lir::Expr>> = args.iter().map(generate_expr).collect();
+            return Ok(lir::Expr::Call {
+                name: name.clone(),
+                args: call_args?,
+            });
         }
-    };
 
-    let call_args: Result<Vec<lir::Expr>> = args.iter().map(generate_expr).collect();
+        // Otherwise, treat it as a closure variable
+        return generate_closure_call(expr, name, args);
+    }
 
-    Ok(lir::Expr::Call {
-        name: func_name,
-        args: call_args?,
+    // For non-variable function expressions, generate and call as closure
+    generate_closure_call_expr(expr, func, args)
+}
+
+/// Generate code for calling a closure stored in a variable
+fn generate_closure_call(
+    _expr: &Spanned<Expr>,
+    closure_var: &str,
+    args: &[Spanned<Expr>],
+) -> Result<lir::Expr> {
+    // Closure struct is { fn_ptr: ptr, env_ptr: ptr }
+    // Extract fn_ptr (field 0) and env_ptr (field 1)
+    let fn_ptr_var = fresh_var("fn_ptr");
+    let env_ptr_var = fresh_var("env_ptr");
+
+    // Generate the arguments
+    let mut call_args = Vec::new();
+    for arg in args {
+        call_args.push(generate_expr(arg)?);
+    }
+
+    // Build let bindings to extract fn_ptr and env_ptr, then call
+    // (let ((fn_ptr (extractvalue closure 0))
+    //       (env_ptr (extractvalue closure 1)))
+    //   (indirect-call fn_ptr i64 env_ptr ...args))
+    Ok(lir::Expr::Let {
+        bindings: vec![
+            (
+                fn_ptr_var.clone(),
+                Box::new(lir::Expr::ExtractValue {
+                    aggregate: Box::new(lir::Expr::LocalRef(closure_var.to_string())),
+                    indices: vec![0],
+                }),
+            ),
+            (
+                env_ptr_var.clone(),
+                Box::new(lir::Expr::ExtractValue {
+                    aggregate: Box::new(lir::Expr::LocalRef(closure_var.to_string())),
+                    indices: vec![1],
+                }),
+            ),
+        ],
+        body: vec![lir::Expr::IndirectCall {
+            fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var)),
+            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
+            args: std::iter::once(lir::Expr::LocalRef(env_ptr_var))
+                .chain(call_args)
+                .collect(),
+        }],
+    })
+}
+
+/// Generate code for calling a closure expression (not a variable)
+fn generate_closure_call_expr(
+    _expr: &Spanned<Expr>,
+    func: &Spanned<Expr>,
+    args: &[Spanned<Expr>],
+) -> Result<lir::Expr> {
+    // Generate the closure expression
+    let closure_expr = generate_expr(func)?;
+
+    // Bind it to a temporary, then call
+    let closure_var = fresh_var("closure");
+
+    // Generate the arguments
+    let mut call_args = Vec::new();
+    for arg in args {
+        call_args.push(generate_expr(arg)?);
+    }
+
+    let fn_ptr_var = fresh_var("fn_ptr");
+    let env_ptr_var = fresh_var("env_ptr");
+
+    Ok(lir::Expr::Let {
+        bindings: vec![
+            (closure_var.clone(), Box::new(closure_expr)),
+            (
+                fn_ptr_var.clone(),
+                Box::new(lir::Expr::ExtractValue {
+                    aggregate: Box::new(lir::Expr::LocalRef(closure_var.clone())),
+                    indices: vec![0],
+                }),
+            ),
+            (
+                env_ptr_var.clone(),
+                Box::new(lir::Expr::ExtractValue {
+                    aggregate: Box::new(lir::Expr::LocalRef(closure_var)),
+                    indices: vec![1],
+                }),
+            ),
+        ],
+        body: vec![lir::Expr::IndirectCall {
+            fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var)),
+            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
+            args: std::iter::once(lir::Expr::LocalRef(env_ptr_var))
+                .chain(call_args)
+                .collect(),
+        }],
     })
 }
 
@@ -1345,13 +1743,15 @@ fn generate_struct_constructor(
             inbounds: true,
         };
 
-        // Wrap value in typed literal if needed
-        let typed_value = match value {
-            lir::Expr::IntLit { value: v, .. } => lir::Expr::IntLit {
-                ty: field_ty.clone(),
-                value: v,
-            },
-            other => other,
+        // Wrap value in typed literal if needed (only for scalar types)
+        let typed_value = match (&value, field_ty) {
+            (lir::Expr::IntLit { value: v, .. }, lir::ParamType::Scalar(scalar_ty)) => {
+                lir::Expr::IntLit {
+                    ty: scalar_ty.clone(),
+                    value: *v,
+                }
+            }
+            _ => value,
         };
 
         // Store value at field pointer
@@ -1998,5 +2398,28 @@ mod tests {
         assert!(lir.contains("declare"));
         assert!(lir.contains("free"));
         assert!(lir.contains("void"));
+    }
+
+    #[test]
+    fn test_lambda_pure() {
+        // Pure lambda (no captures) - use full pipeline
+        let lir = crate::compile("(defun mk-adder () (fn (x y) (+ x y)))").unwrap();
+        assert!(lir.contains("define"));
+        // Should generate a lambda function
+        assert!(lir.contains("__lambda_"));
+        // Should reference the lambda with @
+        assert!(lir.contains("@__lambda_"));
+    }
+
+    #[test]
+    fn test_lambda_with_capture() {
+        // Lambda with capture - use full pipeline
+        let lir = crate::compile("(defun constantly (v) (fn () v))").unwrap();
+        assert!(lir.contains("define"));
+        // Should generate a lambda function
+        assert!(lir.contains("__lambda_"));
+        // Should generate env struct
+        assert!(lir.contains("defstruct"));
+        assert!(lir.contains("_env"));
     }
 }

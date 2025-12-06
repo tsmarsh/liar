@@ -12,6 +12,7 @@ pub enum Token {
     RAngle,
     LBrace,
     RBrace,
+    Comma,
     Integer(i128),
     Float(f64),
     Ident(String),
@@ -30,6 +31,7 @@ impl std::fmt::Display for Token {
             Token::RAngle => write!(f, ">"),
             Token::LBrace => write!(f, "{{"),
             Token::RBrace => write!(f, "}}"),
+            Token::Comma => write!(f, ","),
             Token::Integer(n) => write!(f, "{}", n),
             Token::Float(n) => write!(f, "{}", n),
             Token::Ident(s) => write!(f, "{}", s),
@@ -119,6 +121,10 @@ impl<'a> Lexer<'a> {
             '}' => {
                 self.chars.next();
                 Ok(Some(Token::RBrace))
+            }
+            ',' => {
+                self.chars.next();
+                Ok(Some(Token::Comma))
             }
             '.' => {
                 // Check for ... (varargs)

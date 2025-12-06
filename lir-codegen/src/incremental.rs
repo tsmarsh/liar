@@ -12,7 +12,7 @@ use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
 use inkwell::module::Module;
 use inkwell::OptimizationLevel;
-use lir_core::ast::{FunctionDef, ReturnType, ScalarType};
+use lir_core::ast::{FunctionDef, ParamType, ReturnType, ScalarType};
 use std::collections::HashMap;
 
 use crate::codegen::{CodeGen, CodeGenError, Value};
@@ -239,6 +239,46 @@ impl<'ctx> IncrementalJit<'ctx> {
                 .context
                 .ptr_type(inkwell::AddressSpace::default())
                 .fn_type(&param_types, true),
+            ReturnType::AnonStruct(fields) => {
+                let field_types: Vec<inkwell::types::BasicTypeEnum> = fields
+                    .iter()
+                    .filter_map(|f| match f {
+                        ParamType::Scalar(s) => match s {
+                            ScalarType::I1 => Some(self.context.bool_type().into()),
+                            ScalarType::I8 => Some(self.context.i8_type().into()),
+                            ScalarType::I16 => Some(self.context.i16_type().into()),
+                            ScalarType::I32 => Some(self.context.i32_type().into()),
+                            ScalarType::I64 => Some(self.context.i64_type().into()),
+                            ScalarType::Float => Some(self.context.f32_type().into()),
+                            ScalarType::Double => Some(self.context.f64_type().into()),
+                            ScalarType::Void => None,
+                        },
+                        ParamType::Ptr
+                        | ParamType::Own(_)
+                        | ParamType::Ref(_)
+                        | ParamType::RefMut(_)
+                        | ParamType::Rc(_) => Some(
+                            self.context
+                                .ptr_type(inkwell::AddressSpace::default())
+                                .into(),
+                        ),
+                        ParamType::AnonStruct(inner_fields) => {
+                            // Nested anonymous structs - just use ptr for now
+                            let field_types: Vec<inkwell::types::BasicTypeEnum> = inner_fields
+                                .iter()
+                                .map(|_| {
+                                    self.context
+                                        .ptr_type(inkwell::AddressSpace::default())
+                                        .into()
+                                })
+                                .collect();
+                            Some(self.context.struct_type(&field_types, false).into())
+                        }
+                    })
+                    .collect();
+                let struct_type = self.context.struct_type(&field_types, false);
+                struct_type.fn_type(&param_types, true)
+            }
         };
 
         module.add_function(name, fn_type, Some(inkwell::module::Linkage::External))
@@ -354,6 +394,21 @@ impl<'ctx> IncrementalJit<'ctx> {
                 };
                 let result = unsafe { func.call() };
                 Ok(Value::Ptr(result as u64))
+            }
+            ReturnType::AnonStruct(_) => {
+                // For struct returns, we can't easily return the value
+                // Just return the first field as ptr (assumes closure struct)
+                #[allow(improper_ctypes_definitions)]
+                type F = unsafe extern "C" fn() -> (*const u8, *const u8);
+                let func = unsafe {
+                    self.execution_engine
+                        .get_function::<F>(name)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                };
+                let (fn_ptr, _env_ptr) = unsafe { func.call() };
+                // Return as a special struct representation
+                // For now, just return the first field (fn_ptr)
+                Ok(Value::Ptr(fn_ptr as u64))
             }
         }
     }

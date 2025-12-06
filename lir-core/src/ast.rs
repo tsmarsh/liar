@@ -415,6 +415,9 @@ pub enum Expr {
     // Local variable reference
     LocalRef(String),
 
+    // Global/function reference (for function pointers)
+    GlobalRef(String),
+
     // Return instruction
     Ret(Option<Box<Expr>>),
 
@@ -478,6 +481,13 @@ pub enum Expr {
     // Tail call (guaranteed tail call optimization)
     TailCall {
         name: String,
+        args: Vec<Expr>,
+    },
+
+    // Indirect call through function pointer
+    IndirectCall {
+        fn_ptr: Box<Expr>,
+        ret_ty: ParamType,
         args: Vec<Expr>,
     },
 
@@ -619,6 +629,8 @@ pub enum ParamType {
     RefMut(Box<ScalarType>), // Mutable borrow - exclusive, lifetime-bound
     // Reference-counted pointer
     Rc(Box<ScalarType>), // Reference-counted pointer with atomic inc/dec
+    // Anonymous struct (for closure parameters)
+    AnonStruct(Vec<ParamType>),
 }
 
 impl std::fmt::Display for ParamType {
@@ -630,6 +642,16 @@ impl std::fmt::Display for ParamType {
             Self::Ref(t) => write!(f, "ref {}", t),
             Self::RefMut(t) => write!(f, "refmut {}", t),
             Self::Rc(t) => write!(f, "rc {}", t),
+            Self::AnonStruct(fields) => {
+                write!(f, "{{ ")?;
+                for (i, field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", field)?;
+                }
+                write!(f, " }}")
+            }
         }
     }
 }
@@ -652,11 +674,13 @@ impl std::fmt::Display for GepType {
     }
 }
 
-/// Return type for functions (scalar or ptr)
+/// Return type for functions (scalar, ptr, or anonymous struct)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReturnType {
     Scalar(ScalarType),
     Ptr,
+    /// Anonymous struct with given field types (for closure returns)
+    AnonStruct(Vec<ParamType>),
 }
 
 impl std::fmt::Display for ReturnType {
@@ -664,6 +688,16 @@ impl std::fmt::Display for ReturnType {
         match self {
             Self::Scalar(s) => write!(f, "{}", s),
             Self::Ptr => write!(f, "ptr"),
+            Self::AnonStruct(fields) => {
+                write!(f, "{{ ")?;
+                for (i, field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", field)?;
+                }
+                write!(f, " }}")
+            }
         }
     }
 }

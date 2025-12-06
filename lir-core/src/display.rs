@@ -120,6 +120,9 @@ impl Display for Expr {
             // Local variable reference
             Expr::LocalRef(name) => write!(f, "{}", name),
 
+            // Global/function reference (for function pointers)
+            Expr::GlobalRef(name) => write!(f, "@{}", name),
+
             // Return instruction
             Expr::Ret(Some(val)) => write!(f, "(ret {})", val),
             Expr::Ret(None) => write!(f, "(ret)"),
@@ -182,6 +185,17 @@ impl Display for Expr {
             }
             Expr::TailCall { name, args } => {
                 write!(f, "(tailcall @{}", name)?;
+                for arg in args {
+                    write!(f, " {}", arg)?;
+                }
+                write!(f, ")")
+            }
+            Expr::IndirectCall {
+                fn_ptr,
+                ret_ty,
+                args,
+            } => {
+                write!(f, "(indirect-call {} {}", fn_ptr, ret_ty)?;
                 for arg in args {
                     write!(f, " {}", arg)?;
                 }

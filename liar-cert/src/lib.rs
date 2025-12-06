@@ -6,7 +6,7 @@ use inkwell::context::Context;
 use inkwell::OptimizationLevel;
 use lir_codegen::codegen::{CodeGen, Value};
 use lir_codegen::jit::JitEngine;
-use lir_core::ast::{FunctionDef, StructDef};
+use lir_core::ast::{ExternDecl, FunctionDef, StructDef};
 use lir_core::parser::{ParseResult, Parser};
 use std::collections::HashMap;
 
@@ -26,9 +26,10 @@ pub fn compile_and_call(source: &str, func_name: &str) -> Result<Value, String> 
         .parse_items()
         .map_err(|e| format!("lIR parse error: {:?}", e))?;
 
-    // Collect all functions and structs
+    // Collect all functions, structs, and extern declarations
     let mut functions: HashMap<String, FunctionDef> = HashMap::new();
     let mut structs: Vec<StructDef> = Vec::new();
+    let mut externs: Vec<ExternDecl> = Vec::new();
     for item in items {
         match item {
             ParseResult::Function(func) => {
@@ -36,6 +37,9 @@ pub fn compile_and_call(source: &str, func_name: &str) -> Result<Value, String> 
             }
             ParseResult::Struct(s) => {
                 structs.push(s);
+            }
+            ParseResult::ExternDecl(e) => {
+                externs.push(e);
             }
             _ => {}
         }
@@ -54,6 +58,13 @@ pub fn compile_and_call(source: &str, func_name: &str) -> Result<Value, String> 
     // Register struct types first (before compiling functions that use them)
     for s in &structs {
         codegen.register_struct_type(&s.name, &s.fields);
+    }
+
+    // Compile extern declarations (for malloc, etc.)
+    for e in &externs {
+        codegen
+            .compile_extern_decl(e)
+            .map_err(|e| format!("extern compile error: {:?}", e))?;
     }
 
     // First pass: declare all functions (for mutual recursion support)

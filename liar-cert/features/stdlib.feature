@@ -233,3 +233,34 @@ Feature: Standard Library
   # division/remainder (gcd, lcm) fail due to select evaluating both branches.
   # These need proper branch-based control flow (not yet implemented in liar).
   # factorial, fib, pow, sum-to also fail for same reason.
+
+  # Higher-order functions (require closure support)
+
+  Scenario: constantly returns a function that ignores its argument
+    Given the definition (defun constantly (v) (fn (x) v))
+    Given the definition (defun test () (let ((always-5 (constantly 5))) (always-5 100)))
+    When I evaluate (test)
+    Then the result is 5
+
+  Scenario: constantly with zero
+    Given the definition (defun constantly (v) (fn (x) v))
+    Given the definition (defun test () (let ((always-0 (constantly 0))) (always-0 999)))
+    When I evaluate (test)
+    Then the result is 0
+
+  Scenario: comp composes two functions
+    Given the definition (defun inc (x) (+ x 1))
+    Given the definition (defun square (x) (* x x))
+    Given the definition (defun comp (f g) (fn (x) (f (g x))))
+    Given the definition (defun test () (let ((inc-then-square (comp square inc))) (inc-then-square 4)))
+    When I evaluate (test)
+    Then the result is 25
+
+  Scenario: comp with identity
+    Given the definition (defun identity (x) x)
+    Given the definition (defun inc (x) (+ x 1))
+    Given the definition (defun comp (f g) (fn (x) (f (g x))))
+    Given the definition (defun test () (let ((just-inc (comp identity inc))) (just-inc 5)))
+    When I evaluate (test)
+    Then the result is 6
+
