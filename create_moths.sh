@@ -1,583 +1,481 @@
 #!/bin/bash
-# Generate moths for stdlib functions in dependency order
-#
-# Usage: ./scripts/create-stdlib-moths.sh
-#
-# This creates .moth/ issues for each stdlib function that needs
-# to be implemented, ordered so dependencies come first.
-#
-# Priority levels:
-#   P1 - No dependencies, implement first
-#   P2 - Depends on P1 functions
-#   P3 - Optimized versions, nice to have
-#   P4 - BLOCKED: require runtime primitives not yet in lIR
 
-set -e
+# Ensure moth is initialized
+if [ ! -d ".moth" ]; then
+    moth init
+fi
 
-MOTH_DIR=".moth/ready"
-mkdir -p "$MOTH_DIR"
+# =============================================================================
+# MOTH 0: Coding Standards
+# =============================================================================
+moth new "Establish coding standards for liar" -s high --stdin << 'EOF'
+## Summary
 
-# Counter for priority ordering
-PRIORITY_NUM=1
+Establish and document coding standards to keep files manageable for agents.
 
-# Generate a speakable 5-char ID (consonant-vowel pattern)
-generate_id() {
-    local consonants="bcdfghjklmnprstvwxz"
-    local vowels="aeiou"
-    local id=""
-    id+="${consonants:RANDOM%${#consonants}:1}"
-    id+="${vowels:RANDOM%${#vowels}:1}"
-    id+="${consonants:RANDOM%${#consonants}:1}"
-    id+="${vowels:RANDOM%${#vowels}:1}"
-    id+="${consonants:RANDOM%${#consonants}:1}"
-    echo "$id"
+## File Size Limits
+
+| Metric | Limit | Action if exceeded |
+|--------|-------|-------------------|
+| Lines per file | 500 | Split into modules |
+| Functions per file | 15 | Split by responsibility |
+| Lines per function | 50 | Extract helpers |
+| Nesting depth | 3 | Flatten or extract |
+
+## Key Rules
+
+### One Responsibility Per File
+If you need section comments like `// ========== SECTION ==========` to navigate, split the file.
+
+### No Thread-Local State for Pass Data
+Bad:
+```rust
+thread_local! {
+    static CAPTURED_VARS: RefCell<HashMap<...>> = ...
 }
+```
 
-# Map tier to severity
-tier_to_severity() {
-    case "$1" in
-        P1) echo "high" ;;
-        P2) echo "med" ;;
-        P3) echo "low" ;;
-        P4) echo "low" ;;
-        *) echo "med" ;;
-    esac
+Good:
+```rust
+struct AnalysisContext {
+    captured_vars: HashMap<...>,
 }
+```
 
-# Create a moth file
-# Args: priority title description implementation deps tests category
-create_moth() {
-    local tier="$1"
-    local title="$2"
-    local description="$3"
-    local implementation="$4"
-    local deps="$5"
-    local tests="$6"
-    local category="$7"
+### Passes Take and Return Data
+Bad:
+```rust
+fn analyze(program: &Program) {
+    // mutates global state
+}
+```
 
-    local id=$(generate_id)
-    local severity=$(tier_to_severity "$tier")
-    local slug="${title// /-}"
-    # Format: priority_num-id-severity-slug.md (with zero-padded priority)
-    local priority_prefix=$(printf "%03d" $PRIORITY_NUM)
-    local file="$MOTH_DIR/${priority_prefix}-${id}-${severity}-${slug}.md"
+Good:
+```rust
+fn analyze(program: &Program) -> AnalysisResult {
+    // returns result
+}
+```
 
-    # Avoid collision
-    while [ -f "$file" ]; do
-        id=$(generate_id)
-        file="$MOTH_DIR/${priority_prefix}-${id}-${severity}-${slug}.md"
-    done
-
-    cat > "$file" << EOF
-# stdlib: $title
-
-**Tier:** $tier
-**Category:** stdlib/$category
-**Dependencies:** $deps
-
-## Description
-
-$description
-
-## Implementation
-
-\`\`\`lisp
-$implementation
-\`\`\`
-
-## Tests
-
-\`\`\`lisp
-$tests
-\`\`\`
+### Explicit Dependencies
+All functions take context explicitly, no hidden globals.
 
 ## Acceptance Criteria
 
-- [ ] Function implemented in lib/stdlib.liar
-- [ ] Tests pass in REPL
-- [ ] Documented in lib/stdlib.liar header comment
+- [ ] Standards documented in CONTRIBUTING.md or similar
+- [ ] Team agrees on limits
+- [ ] Apply during all subsequent moths
 EOF
 
-    echo "[$tier] $title -> $file"
-    PRIORITY_NUM=$((PRIORITY_NUM + 1))
+# =============================================================================
+# MOTH 1: Split closures.rs
+# =============================================================================
+moth new "Split closures.rs into modules" -s med --stdin << 'EOF'
+## Summary
+
+`liar/src/closures.rs` is ~1400 lines. Split it into focused modules.
+
+## Current State
+
+Contains:
+- Capture analysis (which variables a closure captures)
+- Closure color determination (thread safety)
+- Thread safety checking for plet/async
+- Tests for all of the above
+
+## Target State
+
+```
+liar/src/closures/
+  mod.rs          - public API, re-exports (~30 lines)
+  types.rs        - CaptureMode, ClosureColor, Capture, CaptureInfo (~80 lines)
+  analysis.rs     - ClosureAnalyzer, capture detection (~300 lines)
+  safety.rs       - ThreadSafetyChecker (~200 lines)
+  tests.rs        - all tests (~400 lines)
+```
+
+## Steps
+
+1. Create `liar/src/closures/` directory
+2. Extract types to `types.rs`
+3. Extract analysis to `analysis.rs`
+4. Extract safety checking to `safety.rs`
+5. Move tests to `tests.rs`
+6. Create `mod.rs` with re-exports
+7. Update `lib.rs` (should work unchanged due to mod.rs)
+8. Run `cargo test -p liar`
+
+## Acceptance Criteria
+
+- [ ] No file in closures/ exceeds 400 lines
+- [ ] All existing tests pass
+- [ ] Public API unchanged (same imports work)
+- [ ] No thread-local state
+EOF
+
+# =============================================================================
+# MOTH 2: Add Closure Conversion Pass
+# =============================================================================
+moth new "Add closure conversion pass" -s crit --stdin << 'EOF'
+## Summary
+
+Add a dedicated closure conversion pass that transforms lambdas in the AST BEFORE codegen. This keeps codegen simple.
+
+## Pipeline Position
+
+```
+Parse → Resolve → Infer → Ownership → Closures Analysis → Closures Conversion → Codegen
+                                              ↑                    ↑
+                                          (exists)              (THIS)
+```
+
+## Design Decision: Uniform Calling Convention
+
+ALL functions take `env` as first parameter:
+
+```lisp
+;; User writes
+(defun inc (x) (+ x 1))
+
+;; Conversion emits
+(defun inc (__env x) (+ x 1))  ;; env ignored but present
+```
+
+This means:
+- Function reference `inc` → `{ @inc, null }`
+- Lambda `(fn (x) (+ x n))` → `{ @__lambda_0, env_ptr }`
+- All calls uniform: `(indirect-call fn_ptr env_ptr args...)`
+- NO thunks needed
+
+## Create liar/src/closures/conversion.rs
+
+### Main Entry Point
+
+```rust
+pub fn convert(
+    program: &mut Program,
+    capture_info: HashMap<Span, CaptureInfo>,
+) -> Result<()>
+```
+
+### What It Does
+
+**Input:**
+```lisp
+(defun make-adder (n)
+  (fn (x) (+ x n)))
+```
+
+**Output:**
+```lisp
+;; Environment struct for lambda
+(defstruct __env_0 (n))
+
+;; Lifted lambda with env parameter
+(defun __lambda_0 (__env x)
+  (+ x (. __env n)))
+
+;; Original function - now takes __env, lambda replaced
+(defun make-adder (__env n)
+  (let ((env (rc-alloc __env_0)))
+    (set! (. env n) n)
+    { @__lambda_0, env }))
+```
+
+### Closure Representation
+
+All closures are: `{ fn_ptr: ptr, env_ptr: ptr }`
+
+## AST Extensions Needed
+
+Add to `liar/src/ast.rs`:
+
+```rust
+/// A closure struct literal (generated by conversion pass)
+ClosureStruct {
+    fn_name: String,
+    env: Option<Box<Spanned<Expr>>>,  // None = null env
+},
+
+/// An indirect call through a closure
+ClosureCall {
+    closure: Box<Spanned<Expr>>,
+    args: Vec<Spanned<Expr>>,
+},
+```
+
+## Update lib.rs Pipeline
+
+```rust
+let capture_info = closures::analyze(&program)?;
+closures::convert(&mut program, capture_info)?;  // NEW
+codegen::generate(&program)
+```
+
+## Tests
+
+```rust
+#[test]
+fn test_convert_lambda_no_captures() {
+    // (defun f () (fn (x) x)) should generate __lambda_0
 }
 
-echo "Creating stdlib moths in dependency order..."
-echo "Output directory: $MOTH_DIR/"
-echo ""
+#[test]
+fn test_convert_lambda_with_capture() {
+    // (defun f (n) (fn (x) (+ x n))) should generate __env_0 and __lambda_0
+}
 
-# ============================================================================
-# TIER 1: No dependencies - Basic predicates and simple functions
-# ============================================================================
+#[test]
+fn test_all_functions_get_env_param() {
+    // Every defun should have __env as first param after conversion
+}
+```
 
-echo "=== Tier 1: No dependencies (P1) ==="
+## Acceptance Criteria
 
-create_moth "P1" "identity" \
-    "Returns its argument unchanged. Useful for higher-order functions." \
-    "(defun identity (x) x)" \
-    "none" \
-    "(identity 5)        ; => 5
-(identity nil)      ; => nil
-(identity true)     ; => true" \
-    "core"
+- [ ] conversion.rs < 400 lines
+- [ ] No thread-local state
+- [ ] All lambdas converted before codegen
+- [ ] All functions have __env parameter
+- [ ] No thunks generated
+- [ ] Integration: `(let ((f (fn (x) x))) (f 5))` evaluates to 5
+EOF
 
-create_moth "P1" "zero?" \
-    "Returns true if x equals zero." \
-    "(defun zero? (x) (= x 0))" \
-    "none" \
-    "(zero? 0)   ; => true
-(zero? 1)   ; => false
-(zero? -1)  ; => false" \
-    "predicates"
+# =============================================================================
+# MOTH 3: Simplify Codegen
+# =============================================================================
+moth new "Simplify codegen after closure conversion" -s high --stdin << 'EOF'
+## Summary
 
-create_moth "P1" "pos?" \
-    "Returns true if x is positive (greater than zero)." \
-    "(defun pos? (x) (> x 0))" \
-    "none" \
-    "(pos? 1)   ; => true
-(pos? 0)   ; => false
-(pos? -1)  ; => false" \
-    "predicates"
+Once closure conversion runs before codegen, remove all closure-related complexity from codegen.
 
-create_moth "P1" "neg?" \
-    "Returns true if x is negative (less than zero)." \
-    "(defun neg? (x) (< x 0))" \
-    "none" \
-    "(neg? -1)  ; => true
-(neg? 0)   ; => false
-(neg? 1)   ; => false" \
-    "predicates"
+## Prerequisites
 
-create_moth "P1" "even?" \
-    "Returns true if x is even." \
-    "(defun even? (x) (= 0 (rem x 2)))" \
-    "none" \
-    "(even? 0)  ; => true
-(even? 2)  ; => true
-(even? 3)  ; => false" \
-    "predicates"
+- Closure conversion pass (MOTH 002) must be complete
+- Lambdas are converted to ClosureStruct before codegen sees them
 
-create_moth "P1" "odd?" \
-    "Returns true if x is odd." \
-    "(defun odd? (x) (= 1 (rem x 2)))" \
-    "none" \
-    "(odd? 1)   ; => true
-(odd? 3)   ; => true
-(odd? 2)   ; => false" \
-    "predicates"
+## Remove From codegen.rs
 
-create_moth "P1" "abs" \
-    "Returns the absolute value of x." \
-    "(defun abs (x) (if (< x 0) (- 0 x) x))" \
-    "none" \
-    "(abs 5)    ; => 5
-(abs -5)   ; => 5
-(abs 0)    ; => 0" \
-    "arithmetic"
+Delete thread-local tables:
+- `CLOSURE_INFO`
+- `GENERATED_LAMBDAS`
+- `GENERATED_ENV_STRUCTS`
+- `LAMBDA_COUNTER`
+- `NEEDS_MALLOC`
+- `FUNC_PARAM_TYPES`
+- `GENERATED_THUNKS`
+- `THUNK_CACHE`
 
-create_moth "P1" "neg" \
-    "Returns the negation of x." \
-    "(defun neg (x) (- 0 x))" \
-    "none" \
-    "(neg 5)    ; => -5
-(neg -5)   ; => 5
-(neg 0)    ; => 0" \
-    "arithmetic"
+Delete related functions:
+- All `reset_*`, `set_*`, `lookup_*`, `take_*` for closure state
+- `generate_lambda()`
+- `generate_closure_call()`
+- `generate_closure_call_expr()`
+- `get_or_create_thunk()`
 
-create_moth "P1" "min" \
-    "Returns the smaller of two values." \
-    "(defun min (a b) (if (< a b) a b))" \
-    "none" \
-    "(min 1 2)  ; => 1
-(min 5 3)  ; => 3
-(min 4 4)  ; => 4" \
-    "arithmetic"
+## Simplify Cases
 
-create_moth "P1" "max" \
-    "Returns the larger of two values." \
-    "(defun max (a b) (if (> a b) a b))" \
-    "none" \
-    "(max 1 2)  ; => 2
-(max 5 3)  ; => 5
-(max 4 4)  ; => 4" \
-    "arithmetic"
+### Expr::Lambda
+```rust
+Expr::Lambda(_, _) => {
+    // Should never reach here
+    Err(CompileError::codegen(
+        expr.span,
+        "internal error: lambda should have been converted",
+    ))
+}
+```
 
-create_moth "P1" "cube" \
-    "Returns x cubed (x * x * x)." \
-    "(defun cube (x) (* x (* x x)))" \
-    "none" \
-    "(cube 2)   ; => 8
-(cube 3)   ; => 27
-(cube -2)  ; => -8" \
-    "arithmetic"
+### Expr::ClosureStruct (NEW)
+```rust
+Expr::ClosureStruct { fn_name, env } => {
+    let fn_ptr = lir::Expr::GlobalRef(fn_name.clone());
+    let env_ptr = match env {
+        Some(e) => generate_expr(e)?,
+        None => lir::Expr::NullPtr,
+    };
+    Ok(lir::Expr::StructLit(vec![fn_ptr, env_ptr]))
+}
+```
 
-create_moth "P1" "sign" \
-    "Returns -1 if x < 0, 0 if x = 0, 1 if x > 0." \
-    "(defun sign (x)
-  (if (< x 0) -1
-      (if (> x 0) 1 0)))" \
-    "none" \
-    "(sign -5)  ; => -1
-(sign 0)   ; => 0
-(sign 5)   ; => 1" \
-    "arithmetic"
+### Expr::ClosureCall (NEW)
+```rust
+Expr::ClosureCall { closure, args } => {
+    // Extract fn_ptr and env_ptr, do indirect call
+}
+```
 
-echo ""
+### Expr::Var
+```rust
+// Before: complex logic checking for function references
+// After: just emit LocalRef
+Expr::Var(name) => Ok(lir::Expr::LocalRef(name.clone()))
+```
 
-# ============================================================================
-# TIER 2: Depends on Tier 1
-# ============================================================================
+## Expected Result
 
-echo "=== Tier 2: Depends on P1 (P2) ==="
+codegen.rs should shrink by ~300-400 lines and have no closure-specific logic.
 
-create_moth "P2" "clamp" \
-    "Constrains x to be between lo and hi (inclusive)." \
-    "(defun clamp (x lo hi)
-  (max lo (min x hi)))" \
-    "min, max" \
-    "(clamp 5 0 10)   ; => 5
-(clamp -5 0 10)  ; => 0
-(clamp 15 0 10)  ; => 10" \
-    "arithmetic"
+## Acceptance Criteria
 
-create_moth "P2" "divides?" \
-    "Returns true if d divides n evenly (n mod d = 0)." \
-    "(defun divides? (d n) (= 0 (rem n d)))" \
-    "none" \
-    "(divides? 2 4)  ; => true
-(divides? 2 5)  ; => false
-(divides? 3 9)  ; => true" \
-    "predicates"
+- [ ] codegen.rs has no thread-local closure state
+- [ ] Expr::Lambda case is unreachable error
+- [ ] No thunk generation code
+- [ ] All tests pass
+- [ ] `(let ((f (fn (x) x))) (f 5))` still works
+EOF
 
-create_moth "P2" "between?" \
-    "Returns true if lo <= x <= hi." \
-    "(defun between? (x lo hi)
-  (and (<= lo x) (<= x hi)))" \
-    "none" \
-    "(between? 5 0 10)   ; => true
-(between? -1 0 10)  ; => false
-(between? 10 0 10)  ; => true" \
-    "predicates"
+# =============================================================================
+# MOTH 4: Split Codegen Into Modules
+# =============================================================================
+moth new "Split codegen.rs into modules" -s med --stdin << 'EOF'
+## Summary
 
-create_moth "P2" "gcd" \
-    "Greatest common divisor using Euclidean algorithm." \
-    "(defun gcd (a b)
-  (if (= b 0)
-      a
-      (gcd b (rem a b))))" \
-    "none" \
-    "(gcd 12 8)   ; => 4
-(gcd 17 5)   ; => 1
-(gcd 100 25) ; => 25" \
-    "math"
+`liar/src/codegen.rs` is ~1100+ lines. Split into focused modules.
 
-create_moth "P2" "lcm" \
-    "Least common multiple." \
-    "(defun lcm (a b)
-  (/ (* a b) (gcd a b)))" \
-    "gcd" \
-    "(lcm 4 6)   ; => 12
-(lcm 3 5)   ; => 15
-(lcm 8 12)  ; => 24" \
-    "math"
+## Target State
 
-create_moth "P2" "factorial" \
-    "Returns n! (n factorial). n must be non-negative." \
-    "(defun factorial (n)
-  (if (<= n 1)
-      1
-      (* n (factorial (- n 1)))))" \
-    "none" \
-    "(factorial 0)  ; => 1
-(factorial 1)  ; => 1
-(factorial 5)  ; => 120" \
-    "math"
+```
+liar/src/codegen/
+  mod.rs          - generate(), generate_expr() dispatch (~150 lines)
+  context.rs      - CodegenContext struct (~100 lines)
+  types.rs        - type conversion utilities (~150 lines)
+  builtins.rs     - arithmetic, comparison, boolean ops (~200 lines)
+  structs.rs      - struct construction, field access (~150 lines)
+  protocols.rs    - protocol method dispatch (~100 lines)
+  atoms.rs        - atom operations (~150 lines)
+  collections.rs  - vector, map, keyword literals (~100 lines)
+  tests.rs        - all codegen tests (~300 lines)
+```
 
-create_moth "P2" "fib" \
-    "Returns the nth Fibonacci number. Naive recursive implementation." \
-    "(defun fib (n)
-  (if (<= n 1)
-      n
-      (+ (fib (- n 1)) (fib (- n 2)))))" \
-    "none" \
-    "(fib 0)   ; => 0
-(fib 1)   ; => 1
-(fib 10)  ; => 55" \
-    "math"
+## Key Change: Explicit Context
 
-create_moth "P2" "pow" \
-    "Returns base raised to the power exp. exp must be non-negative integer." \
-    "(defun pow (base exp)
-  (if (= exp 0)
-      1
-      (* base (pow base (- exp 1)))))" \
-    "none" \
-    "(pow 2 0)   ; => 1
-(pow 2 10)  ; => 1024
-(pow 3 4)   ; => 81" \
-    "math"
+Replace thread-local state with explicit context:
 
-create_moth "P2" "sum-to" \
-    "Returns sum of 1 + 2 + ... + n." \
-    "(defun sum-to (n)
-  (if (<= n 0)
-      0
-      (+ n (sum-to (- n 1)))))" \
-    "none" \
-    "(sum-to 0)    ; => 0
-(sum-to 10)   ; => 55
-(sum-to 100)  ; => 5050" \
-    "math"
+```rust
+pub struct CodegenContext {
+    var_counter: usize,
+    func_return_types: HashMap<String, lir::ReturnType>,
+    struct_defs: HashMap<String, StructInfo>,
+    // etc.
+}
 
-create_moth "P2" "comp" \
-    "Returns composition of two functions: (comp f g) returns fn that does (f (g x))." \
-    "(defun comp (f g)
-  (fn (x) (f (g x))))" \
-    "none" \
-    "(let ((add1-then-square (comp square inc)))
-  (add1-then-square 4))  ; => 25" \
-    "higher-order"
+impl CodegenContext {
+    pub fn fresh_var(&mut self, prefix: &str) -> String { ... }
+    pub fn lookup_struct(&self, name: &str) -> Option<&StructInfo> { ... }
+}
+```
 
-create_moth "P2" "flip" \
-    "Returns a function with arguments flipped: (flip f) returns (fn (a b) (f b a))." \
-    "(defun flip (f)
-  (fn (a b) (f b a)))" \
-    "none" \
-    "((flip -) 3 10)  ; => 7  (computes 10 - 3)" \
-    "higher-order"
+All functions take `&mut CodegenContext`:
 
-create_moth "P2" "constantly" \
-    "Returns a function that always returns v, ignoring its argument." \
-    "(defun constantly (v)
-  (fn (x) v))" \
-    "none" \
-    "(let ((always-5 (constantly 5)))
-  (always-5 100))  ; => 5" \
-    "higher-order"
+```rust
+fn generate_struct_constructor(
+    ctx: &mut CodegenContext,
+    ...
+) -> Result<lir::Expr>
+```
+
+## Steps
+
+1. Create `CodegenContext` in `context.rs`
+2. Extract type utilities to `types.rs`
+3. Extract builtins to `builtins.rs`
+4. Extract struct handling to `structs.rs`
+5. Extract protocol dispatch to `protocols.rs`
+6. Extract atom ops to `atoms.rs`
+7. Extract collections to `collections.rs`
+8. Simplify `mod.rs` to just dispatch
+9. Thread context through all functions
+10. Move tests to `tests.rs`
+
+## Acceptance Criteria
+
+- [ ] No file in codegen/ exceeds 300 lines
+- [ ] No thread-local state (all in CodegenContext)
+- [ ] All existing tests pass
+- [ ] Context passed explicitly everywhere
+EOF
+
+# =============================================================================
+# MOTH 5: Document lIR Boundary
+# =============================================================================
+moth new "Document and enforce lIR boundary" -s low --stdin << 'EOF'
+## Summary
+
+lIR is a stable, complete compilation target. Document and enforce the boundary.
+
+## The Boundary
+
+```
+┌─────────────────────────────────────────┐
+│                liar                      │
+│  All abstractions: closures, protocols,  │
+│  atoms, type inference, etc.             │
+│                                          │
+│  Codegen just emits lIR nodes            │
+└────────────────┬────────────────────────┘
+                 │ lIR AST
+                 ▼
+┌─────────────────────────────────────────┐
+│                lIR                       │
+│  Generic primitives only                 │
+│  No liar concepts                        │
+│  Standalone, testable without liar       │
+└─────────────────────────────────────────┘
+```
+
+## Enforcement Rules
+
+### In lir-core and lir-codegen:
+1. No liar imports
+2. No liar terminology ("closure", "protocol", "atom")
+3. Generic primitives only (IndirectCall, not ClosureCall)
+
+### In liar:
+1. No lIR modification
+2. All abstraction in liar
+3. Codegen is dumb - just translates
+
+## Verification
+
+lIR should be testable without liar:
+
+```rust
+// In lir-core tests
+#[test]
+fn test_closure_pattern_without_liar() {
+    let source = r#"
+        (defstruct env (i64))
+        (define (lambda_0 i64) ((ptr env) (i64 x))
+          (block entry ...))
+    "#;
+    // Compiles without liar
+}
+```
+
+## Documentation
+
+Add to `lir-core/README.md`:
+- Design principles
+- Relationship to liar
+- What lIR does NOT know about
+
+## Acceptance Criteria
+
+- [ ] lir-core has no liar dependency
+- [ ] lir-codegen has no liar dependency
+- [ ] lir-core tests cover patterns without liar
+- [ ] README documents boundary
+- [ ] No liar terminology in lIR codebase
+EOF
 
 echo ""
-
-# ============================================================================
-# TIER 3: Optimized versions (nice to have)
-# ============================================================================
-
-echo "=== Tier 3: Optimized versions (P3) ==="
-
-create_moth "P3" "fib-fast" \
-    "Returns the nth Fibonacci number. O(n) iterative via tail recursion." \
-    "(defun fib-iter (n a b)
-  (if (= n 0)
-      a
-      (fib-iter (- n 1) b (+ a b))))
-
-(defun fib-fast (n)
-  (fib-iter n 0 1))" \
-    "none" \
-    "(fib-fast 0)    ; => 0
-(fib-fast 1)    ; => 1
-(fib-fast 50)   ; => 12586269025" \
-    "math"
-
-create_moth "P3" "pow-fast" \
-    "Fast exponentiation using squaring. O(log n)." \
-    "(defun pow-fast (base exp)
-  (if (= exp 0)
-      1
-      (if (even? exp)
-          (let ((half (pow-fast base (/ exp 2))))
-            (* half half))
-          (* base (pow-fast base (- exp 1))))))" \
-    "even?" \
-    "(pow-fast 2 10)   ; => 1024
-(pow-fast 2 20)   ; => 1048576" \
-    "math"
-
-create_moth "P3" "comp3" \
-    "Composition of three functions: (f (g (h x)))." \
-    "(defun comp3 (f g h)
-  (fn (x) (f (g (h x)))))" \
-    "none" \
-    "(let ((f (comp3 square inc inc)))
-  (f 3))  ; => 25" \
-    "higher-order"
-
-create_moth "P3" "complement" \
-    "Returns a function that returns the logical negation of f." \
-    "(defun complement (f)
-  (fn (x) (not (f x))))" \
-    "none" \
-    "(let ((not-zero? (complement zero?)))
-  (not-zero? 5))  ; => true" \
-    "higher-order"
-
-create_moth "P3" "sum-to-fast" \
-    "Returns sum of 1 + 2 + ... + n using closed-form formula." \
-    "(defun sum-to-fast (n)
-  (/ (* n (+ n 1)) 2))" \
-    "none" \
-    "(sum-to-fast 100)    ; => 5050
-(sum-to-fast 1000)   ; => 500500" \
-    "math"
-
+echo "Created moths. Run 'moth ls' to see them."
 echo ""
-
-# ============================================================================
-# TIER 4: BLOCKED - Require runtime primitives
-# ============================================================================
-
-echo "=== Tier 4: BLOCKED - require runtime primitives (P4) ==="
-
-create_moth "P4" "print" \
-    "**BLOCKED: Requires I/O primitives in lIR**
-
-Print a value to stdout without newline. Requires FFI or builtin I/O primitive." \
-    ";; BLOCKED: Needs lIR support for extern/FFI
-;; Example implementation once available:
-;; (extern puts (ptr) i32)
-;; (defun print (x) (unsafe (puts (to-cstring x))))" \
-    "lIR FFI/extern support" \
-    "(print 42)        ; prints: 42
-(print \"hello\")  ; prints: hello" \
-    "io"
-
-create_moth "P4" "println" \
-    "**BLOCKED: Requires I/O primitives in lIR**
-
-Print a value followed by newline to stdout." \
-    ";; BLOCKED: Depends on print
-;; (defun println (x) (do (print x) (print-char 10)))" \
-    "print" \
-    "(println 42)      ; prints: 42 then newline" \
-    "io"
-
-create_moth "P4" "cons" \
-    "**BLOCKED: Requires cons cell runtime**
-
-Creates a pair (cons cell) with car=a and cdr=b. Needs runtime memory allocation for pairs." \
-    ";; BLOCKED: Needs struct instantiation at runtime
-;; (defstruct Pair (car cdr))
-;; (defun cons (a b) (Pair a b))" \
-    "runtime struct allocation" \
-    "(cons 1 2)           ; => (1 . 2)
-(cons 1 (cons 2 nil)) ; => (1 2)" \
-    "lists"
-
-create_moth "P4" "car" \
-    "**BLOCKED: Requires cons cell runtime**
-
-Returns the first element of a cons cell." \
-    ";; (defun car (pair) (. pair car))" \
-    "cons" \
-    "(car (cons 1 2))  ; => 1" \
-    "lists"
-
-create_moth "P4" "cdr" \
-    "**BLOCKED: Requires cons cell runtime**
-
-Returns the second element of a cons cell." \
-    ";; (defun cdr (pair) (. pair cdr))" \
-    "cons" \
-    "(cdr (cons 1 2))  ; => 2" \
-    "lists"
-
-create_moth "P4" "nil?" \
-    "**BLOCKED: Needs nil comparison working**
-
-Returns true if x is nil." \
-    ";; May need runtime support for nil comparison
-(defun nil? (x) (= x nil))" \
-    "nil equality" \
-    "(nil? nil)        ; => true
-(nil? 0)          ; => false
-(nil? [])         ; => false" \
-    "predicates"
-
-create_moth "P4" "map" \
-    "**BLOCKED: Requires list/vector iteration**
-
-Applies f to each element of coll, returns new collection." \
-    ";; BLOCKED: Needs cons/car/cdr or vector iteration
-;; (defun map (f coll)
-;;   (if (nil? coll)
-;;       nil
-;;       (cons (f (car coll)) (map f (cdr coll)))))" \
-    "cons, car, cdr, nil?" \
-    "(map inc [1 2 3])      ; => [2 3 4]
-(map square [1 2 3])   ; => [1 4 9]" \
-    "collections"
-
-create_moth "P4" "filter" \
-    "**BLOCKED: Requires list/vector iteration**
-
-Returns collection of elements where (pred x) is true." \
-    ";; BLOCKED: Needs cons/car/cdr or vector iteration
-;; (defun filter (pred coll)
-;;   (if (nil? coll)
-;;       nil
-;;       (if (pred (car coll))
-;;           (cons (car coll) (filter pred (cdr coll)))
-;;           (filter pred (cdr coll)))))" \
-    "cons, car, cdr, nil?" \
-    "(filter even? [1 2 3 4 5])  ; => [2 4]" \
-    "collections"
-
-create_moth "P4" "reduce" \
-    "**BLOCKED: Requires list/vector iteration**
-
-Reduces coll to single value by applying (f acc item) left to right." \
-    ";; BLOCKED: Needs cons/car/cdr or vector iteration  
-;; (defun reduce (f init coll)
-;;   (if (nil? coll)
-;;       init
-;;       (reduce f (f init (car coll)) (cdr coll))))" \
-    "cons, car, cdr, nil?" \
-    "(reduce + 0 [1 2 3 4 5])  ; => 15
-(reduce * 1 [1 2 3 4])    ; => 24" \
-    "collections"
-
-create_moth "P4" "length" \
-    "**BLOCKED: Requires list/vector iteration**
-
-Returns the number of elements in a collection." \
-    ";; BLOCKED: Needs iteration
-;; (defun length (coll)
-;;   (if (nil? coll)
-;;       0
-;;       (+ 1 (length (cdr coll)))))" \
-    "cons, car, cdr, nil?" \
-    "(length [1 2 3])     ; => 3
-(length [])          ; => 0" \
-    "collections"
-
-create_moth "P4" "reverse" \
-    "**BLOCKED: Requires list iteration**
-
-Returns a new list with elements in reverse order." \
-    ";; BLOCKED: Needs cons/car/cdr
-;; (defun reverse-acc (coll acc)
-;;   (if (nil? coll)
-;;       acc
-;;       (reverse-acc (cdr coll) (cons (car coll) acc))))
-;; (defun reverse (coll) (reverse-acc coll nil))" \
-    "cons, car, cdr, nil?" \
-    "(reverse [1 2 3])  ; => [3 2 1]" \
-    "collections"
-
-echo ""
-echo "========================================"
-echo "Done! Created moths in $MOTH_DIR/"
-echo ""
-echo "Summary:"
-echo "  P1 (no deps):     $(grep -l 'Tier.*P1' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
-echo "  P2 (basic deps):  $(grep -l 'Tier.*P2' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
-echo "  P3 (optimized):   $(grep -l 'Tier.*P3' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
-echo "  P4 (BLOCKED):     $(grep -l 'Tier.*P4' $MOTH_DIR/*.md 2>/dev/null | wc -l) moths"
-echo ""
-echo "To implement in order:"
-echo "  1. All P1 functions (no dependencies)"
-echo "  2. All P2 functions (depend on P1)"
-echo "  3. P3 functions (optimized versions)"
-echo "  4. P4 functions require lIR/runtime work first"
-echo ""
-echo "View moths with:"
-echo "  moth ls"
+echo "Suggested order:"
+echo "  1. Coding standards (high) - reference throughout"
+echo "  2. Closure conversion (crit) - the core work"
+echo "  3. Simplify codegen (high) - depends on #2"
+echo "  4. Split closures (med) - prep work"
+echo "  5. Split codegen (med) - final cleanup"
+echo "  6. Document boundary (low) - verification"
