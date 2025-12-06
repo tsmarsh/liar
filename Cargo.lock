@@ -660,6 +660,7 @@ dependencies = [
  "cucumber",
  "inkwell",
  "liar",
+ "liar-runtime",
  "lir-codegen",
  "lir-core",
  "tokio",
@@ -687,6 +688,14 @@ dependencies = [
  "lir-codegen",
  "lir-core",
  "rustyline 15.0.0",
+]
+
+[[package]]
+name = "liar-runtime"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
 ]
 
 [[package]]
