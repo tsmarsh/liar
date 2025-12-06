@@ -179,3 +179,57 @@ Feature: Standard Library
     Given the definition (defun test () (sign 5))
     When I evaluate (test)
     Then the result is 1
+
+  Scenario: clamp within range
+    Given the definition (defun min (a b) (if (< a b) a b))
+    Given the definition (defun max (a b) (if (> a b) a b))
+    Given the definition (defun clamp (x lo hi) (max lo (min x hi)))
+    Given the definition (defun test () (clamp 5 0 10))
+    When I evaluate (test)
+    Then the result is 5
+
+  Scenario: clamp below range
+    Given the definition (defun min (a b) (if (< a b) a b))
+    Given the definition (defun max (a b) (if (> a b) a b))
+    Given the definition (defun clamp (x lo hi) (max lo (min x hi)))
+    Given the definition (defun test () (clamp -5 0 10))
+    When I evaluate (test)
+    Then the result is 0
+
+  Scenario: clamp above range
+    Given the definition (defun min (a b) (if (< a b) a b))
+    Given the definition (defun max (a b) (if (> a b) a b))
+    Given the definition (defun clamp (x lo hi) (max lo (min x hi)))
+    Given the definition (defun test () (clamp 15 0 10))
+    When I evaluate (test)
+    Then the result is 10
+
+  Scenario: divisible true
+    Given the definition (defun divisible (d n) (= 0 (rem n d)))
+    Given the definition (defun test () (divisible 3 9))
+    When I evaluate (test)
+    Then the result is true
+
+  Scenario: divisible false
+    Given the definition (defun divisible (d n) (= 0 (rem n d)))
+    Given the definition (defun test () (divisible 3 10))
+    When I evaluate (test)
+    Then the result is false
+
+  Scenario: in-range true
+    Given the definition (defun in-range (x lo hi) (if (<= lo x) (<= x hi) false))
+    Given the definition (defun test () (in-range 5 0 10))
+    When I evaluate (test)
+    Then the result is true
+
+  Scenario: in-range false below
+    Given the definition (defun in-range (x lo hi) (if (<= lo x) (<= x hi) false))
+    Given the definition (defun test () (in-range -1 0 10))
+    When I evaluate (test)
+    Then the result is false
+
+  # Math
+  # Note: Recursive functions with terminating conditions that involve
+  # division/remainder (gcd, lcm) fail due to select evaluating both branches.
+  # These need proper branch-based control flow (not yet implemented in liar).
+  # factorial, fib, pow, sum-to also fail for same reason.

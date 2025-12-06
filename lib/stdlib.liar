@@ -26,6 +26,8 @@
 
 (defun sign (x) (if (< x 0) -1 (if (> x 0) 1 0)))
 
+(defun clamp (x lo hi) (max lo (min x hi)))
+
 ;; Predicates
 
 (defun zerop (x) (= x 0))
@@ -37,3 +39,24 @@
 (defun evenp (x) (= 0 (rem x 2)))
 
 (defun oddp (x) (= 1 (rem x 2)))
+
+(defun divisible (d n) (= 0 (rem n d)))
+
+(defun in-range (x lo hi) (if (<= lo x) (<= x hi) false))
+
+;; Math
+
+(defun gcd (a b) (if (= b 0) a (gcd b (rem a b))))
+
+(defun lcm (a b) (/ (* a b) (gcd a b)))
+
+(defun factorial (n) (if (<= n 1) 1 (* n (factorial (- n 1)))))
+
+(defun fib (n) (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))
+
+(defun pow (base exp) (if (= exp 0) 1 (* base (pow base (- exp 1)))))
+
+(defun sum-to (n) (if (<= n 0) 0 (+ n (sum-to (- n 1)))))
+
+;; Higher-order functions
+;; Note: comp, flip, constantly require closure support (not yet implemented)
