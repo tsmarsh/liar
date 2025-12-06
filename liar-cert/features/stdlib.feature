@@ -143,3 +143,39 @@ Feature: Standard Library
     Given the definition (defun test () (max 4 4))
     When I evaluate (test)
     Then the result is 4
+
+  Scenario: cube of positive
+    Given the definition (defun cube (x) (* x (* x x)))
+    Given the definition (defun test () (cube 2))
+    When I evaluate (test)
+    Then the result is 8
+
+  Scenario: cube of 3
+    Given the definition (defun cube (x) (* x (* x x)))
+    Given the definition (defun test () (cube 3))
+    When I evaluate (test)
+    Then the result is 27
+
+  Scenario: cube of negative
+    Given the definition (defun cube (x) (* x (* x x)))
+    Given the definition (defun test () (cube -2))
+    When I evaluate (test)
+    Then the result is -8
+
+  Scenario: sign of negative
+    Given the definition (defun sign (x) (if (< x 0) -1 (if (> x 0) 1 0)))
+    Given the definition (defun test () (sign -5))
+    When I evaluate (test)
+    Then the result is -1
+
+  Scenario: sign of zero
+    Given the definition (defun sign (x) (if (< x 0) -1 (if (> x 0) 1 0)))
+    Given the definition (defun test () (sign 0))
+    When I evaluate (test)
+    Then the result is 0
+
+  Scenario: sign of positive
+    Given the definition (defun sign (x) (if (< x 0) -1 (if (> x 0) 1 0)))
+    Given the definition (defun test () (sign 5))
+    When I evaluate (test)
+    Then the result is 1
