@@ -4,8 +4,12 @@
 //! - Displayed as S-expression strings (for debugging/testing)
 //! - Passed directly to LLVM codegen (type-safe, no parsing)
 
+mod atoms;
 mod builtins;
+mod closures_codegen;
+mod collections;
 mod context;
+mod control;
 mod expr;
 mod protocols;
 mod structs;
