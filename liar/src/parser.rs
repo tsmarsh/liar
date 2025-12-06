@@ -67,9 +67,13 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Item::Defmacro(self.parse_defmacro()?)
             }
+            TokenKind::Extern => {
+                self.advance();
+                Item::Extern(self.parse_extern()?)
+            }
             _ => return Err(CompileError::parse(
                 self.current_span(),
-                "expected top-level form: defun, def, defstruct, defprotocol, extend-protocol, or defmacro",
+                "expected top-level form: defun, def, defstruct, defprotocol, extend-protocol, defmacro, or extern",
             )),
         };
 
@@ -263,6 +267,36 @@ impl<'a> Parser<'a> {
             protocol,
             type_name,
             implementations,
+        })
+    }
+
+    /// Parse extern declaration: (extern name ret-type (param-types...))
+    /// Optionally with varargs: (extern name ret-type (param-types... ...))
+    fn parse_extern(&mut self) -> Result<Extern> {
+        let name = self.parse_symbol()?;
+        let return_type = self.parse_type()?;
+
+        // Parse parameter types list
+        self.expect(TokenKind::LParen)?;
+        let mut param_types = Vec::new();
+        let mut varargs = false;
+
+        while !self.check(TokenKind::RParen) {
+            // Check for varargs marker "..."
+            if self.check(TokenKind::Ellipsis) {
+                self.advance();
+                varargs = true;
+                break;
+            }
+            param_types.push(self.parse_type()?);
+        }
+        self.expect(TokenKind::RParen)?;
+
+        Ok(Extern {
+            name,
+            return_type,
+            param_types,
+            varargs,
         })
     }
 
@@ -1348,6 +1382,67 @@ mod tests {
                 assert!(matches!(inner.node, Expr::Wrapping(_)));
             }
             _ => panic!("expected boxed"),
+        }
+    }
+
+    #[test]
+    fn test_parse_extern() {
+        let mut parser = Parser::new("(extern malloc ptr (i64))").unwrap();
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.items.len(), 1);
+        match &program.items[0].node {
+            crate::ast::Item::Extern(ext) => {
+                assert_eq!(ext.name.node, "malloc");
+                assert_eq!(
+                    ext.return_type.node,
+                    crate::ast::Type::Named("ptr".to_string())
+                );
+                assert_eq!(ext.param_types.len(), 1);
+                assert_eq!(
+                    ext.param_types[0].node,
+                    crate::ast::Type::Named("i64".to_string())
+                );
+                assert!(!ext.varargs);
+            }
+            _ => panic!("expected extern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_extern_varargs() {
+        let mut parser = Parser::new("(extern printf i32 (ptr ...))").unwrap();
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.items.len(), 1);
+        match &program.items[0].node {
+            crate::ast::Item::Extern(ext) => {
+                assert_eq!(ext.name.node, "printf");
+                assert_eq!(
+                    ext.return_type.node,
+                    crate::ast::Type::Named("i32".to_string())
+                );
+                assert_eq!(ext.param_types.len(), 1);
+                assert!(ext.varargs);
+            }
+            _ => panic!("expected extern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_extern_void() {
+        let mut parser = Parser::new("(extern free void (ptr))").unwrap();
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.items.len(), 1);
+        match &program.items[0].node {
+            crate::ast::Item::Extern(ext) => {
+                assert_eq!(ext.name.node, "free");
+                assert_eq!(
+                    ext.return_type.node,
+                    crate::ast::Type::Named("void".to_string())
+                );
+                assert_eq!(ext.param_types.len(), 1);
+                assert!(!ext.varargs);
+            }
+            _ => panic!("expected extern"),
         }
     }
 }

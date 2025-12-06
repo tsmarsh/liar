@@ -142,6 +142,8 @@ impl ClosureAnalyzer {
             Item::ExtendProtocol(extend) => self.analyze_extend_protocol(extend),
             // Macros should be expanded before closure analysis
             Item::Defmacro(_) => {}
+            // Extern declarations have no body
+            Item::Extern(_) => {}
         }
     }
 
@@ -868,6 +870,7 @@ impl<'a> ThreadSafetyChecker<'a> {
                 }
             }
             Item::Defmacro(_) => {}
+            Item::Extern(_) => {}
         }
     }
 

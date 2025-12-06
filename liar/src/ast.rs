@@ -23,6 +23,8 @@ pub enum Item {
     ExtendProtocol(ExtendProtocol),
     /// Macro definition: (defmacro name (params...) body)
     Defmacro(Defmacro),
+    /// External function declaration: (extern name ret-type (param-types...))
+    Extern(Extern),
 }
 
 /// Function definition
@@ -101,6 +103,15 @@ pub struct Defmacro {
     pub name: Spanned<String>,
     pub params: Vec<Spanned<String>>,
     pub body: Spanned<Expr>,
+}
+
+/// External function declaration (FFI)
+#[derive(Debug, Clone)]
+pub struct Extern {
+    pub name: Spanned<String>,
+    pub return_type: Spanned<Type>,
+    pub param_types: Vec<Spanned<Type>>,
+    pub varargs: bool,
 }
 
 /// Type annotation

@@ -302,7 +302,7 @@ impl Display for FunctionDef {
 
 impl Display for ExternDecl {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "(declare ({} {}) (", self.name, self.return_type)?;
+        write!(f, "(declare {} {} (", self.name, self.return_type)?;
         for (i, ty) in self.param_types.iter().enumerate() {
             if i > 0 {
                 write!(f, " ")?;

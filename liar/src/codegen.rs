@@ -330,6 +330,7 @@ fn generate_item(item: &Spanned<Item>) -> Result<Option<lir::Item>> {
             // Macros are used during expansion, not in codegen
             Ok(None)
         }
+        Item::Extern(ext) => Ok(Some(lir::Item::ExternDecl(generate_extern(ext)?))),
     }
 }
 
@@ -342,6 +343,24 @@ fn generate_defstruct(defstruct: &Defstruct) -> Result<lir::StructDef> {
         .map(|f| liar_type_to_lir_param(&f.ty.node))
         .collect();
     Ok(lir::StructDef { name, fields })
+}
+
+/// Generate lIR for an external function declaration
+fn generate_extern(ext: &crate::ast::Extern) -> Result<lir::ExternDecl> {
+    let name = ext.name.node.clone();
+    let return_type = liar_type_to_lir_return(&ext.return_type.node);
+    let param_types: Vec<lir::ParamType> = ext
+        .param_types
+        .iter()
+        .map(|t| liar_type_to_lir_param(&t.node))
+        .collect();
+
+    Ok(lir::ExternDecl {
+        name,
+        return_type,
+        param_types,
+        varargs: ext.varargs,
+    })
 }
 
 /// Generate lIR functions for an extend-protocol declaration
@@ -406,6 +425,29 @@ fn generate_extend_protocol(extend: &ExtendProtocol) -> Result<Vec<lir::Function
     }
 
     Ok(functions)
+}
+
+/// Convert a liar type to lIR ReturnType
+fn liar_type_to_lir_return(ty: &crate::ast::Type) -> lir::ReturnType {
+    use crate::ast::Type;
+    match ty {
+        Type::Named(name) => match name.as_str() {
+            "i8" => lir::ReturnType::Scalar(lir::ScalarType::I8),
+            "i16" => lir::ReturnType::Scalar(lir::ScalarType::I16),
+            "i32" => lir::ReturnType::Scalar(lir::ScalarType::I32),
+            "i64" | "int" => lir::ReturnType::Scalar(lir::ScalarType::I64),
+            "float" | "f32" => lir::ReturnType::Scalar(lir::ScalarType::Float),
+            "double" | "f64" => lir::ReturnType::Scalar(lir::ScalarType::Double),
+            "bool" => lir::ReturnType::Scalar(lir::ScalarType::I1),
+            "void" => lir::ReturnType::Scalar(lir::ScalarType::Void),
+            "ptr" => lir::ReturnType::Ptr,
+            _ => lir::ReturnType::Ptr, // User-defined types are pointers
+        },
+        Type::Unit => lir::ReturnType::Scalar(lir::ScalarType::Void),
+        Type::Ref(_) | Type::RefMut(_) => lir::ReturnType::Ptr,
+        Type::Fn(_, _) => lir::ReturnType::Ptr,
+        Type::Tuple(_) => lir::ReturnType::Ptr,
+    }
 }
 
 /// Convert a liar type to lIR ParamType
@@ -1930,5 +1972,31 @@ mod tests {
     fn test_wrapping_arithmetic() {
         let lir = compile("(defun wrap-add (a b) (wrapping (+ a b)))");
         assert!(lir.contains("add"));
+    }
+
+    #[test]
+    fn test_extern() {
+        let lir = compile("(extern malloc ptr (i64))");
+        assert!(lir.contains("declare"));
+        assert!(lir.contains("malloc"));
+        assert!(lir.contains("ptr"));
+        assert!(lir.contains("i64"));
+    }
+
+    #[test]
+    fn test_extern_varargs() {
+        let lir = compile("(extern printf i32 (ptr ...))");
+        assert!(lir.contains("declare"));
+        assert!(lir.contains("printf"));
+        assert!(lir.contains("i32"));
+        assert!(lir.contains("..."));
+    }
+
+    #[test]
+    fn test_extern_void() {
+        let lir = compile("(extern free void (ptr))");
+        assert!(lir.contains("declare"));
+        assert!(lir.contains("free"));
+        assert!(lir.contains("void"));
     }
 }

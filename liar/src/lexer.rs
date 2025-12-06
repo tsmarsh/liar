@@ -54,6 +54,7 @@ pub enum TokenKind {
     Dot,      // .
     Arrow,    // ->
     At,       // @ (atom deref)
+    Ellipsis, // ... (varargs)
 
     // Atom keywords
     Atom,          // atom
@@ -78,6 +79,9 @@ pub enum TokenKind {
     // Macro keywords
     Defmacro, // defmacro
     Gensym,   // gensym
+
+    // FFI keywords
+    Extern, // extern
 
     // Iterator keywords
     Iter,    // iter (create iterator)
@@ -228,7 +232,21 @@ impl<'a> Lexer<'a> {
                 TokenKind::Colon
             }
             '&' => TokenKind::Amp,
-            '.' => TokenKind::Dot,
+            '.' => {
+                // Check for ... (ellipsis)
+                if self.peek_char() == Some('.') {
+                    self.advance();
+                    if self.peek_char() == Some('.') {
+                        self.advance();
+                        TokenKind::Ellipsis
+                    } else {
+                        // .. is invalid, treat as two dots (error will come from parser)
+                        TokenKind::Dot
+                    }
+                } else {
+                    TokenKind::Dot
+                }
+            }
 
             '-' if self.peek_char() == Some('>') => {
                 self.advance();
@@ -453,6 +471,8 @@ impl<'a> Lexer<'a> {
             // Macro keywords
             "defmacro" => TokenKind::Defmacro,
             "gensym" => TokenKind::Gensym,
+            // FFI keywords
+            "extern" => TokenKind::Extern,
             // Iterator keywords
             "iter" => TokenKind::Iter,
             "collect" => TokenKind::Collect,

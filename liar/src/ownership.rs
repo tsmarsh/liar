@@ -419,6 +419,9 @@ impl BorrowChecker {
             Item::Defmacro(_) => {
                 // Macros are expanded before ownership checking
             }
+            Item::Extern(_) => {
+                // Extern declarations have no body
+            }
         }
     }
 

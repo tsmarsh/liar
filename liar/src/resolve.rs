@@ -35,6 +35,7 @@ pub enum BindingKind {
     Protocol,
     ProtocolMethod,
     Macro,
+    ExternFn,
 }
 
 /// A scope containing bindings
@@ -197,6 +198,9 @@ impl Resolver {
                 Item::Defmacro(defmacro) => {
                     self.define(&defmacro.name.node, defmacro.name.span, BindingKind::Macro);
                 }
+                Item::Extern(ext) => {
+                    self.define(&ext.name.node, ext.name.span, BindingKind::ExternFn);
+                }
             }
         }
 
@@ -218,6 +222,9 @@ impl Resolver {
             Item::Defprotocol(defprotocol) => self.resolve_defprotocol(defprotocol),
             Item::ExtendProtocol(extend) => self.resolve_extend_protocol(extend),
             Item::Defmacro(defmacro) => self.resolve_defmacro(defmacro),
+            Item::Extern(_) => {
+                // Extern declarations have no body to resolve
+            }
         }
     }
 

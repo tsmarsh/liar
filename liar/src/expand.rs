@@ -92,6 +92,9 @@ impl Expander {
                     self.expand_expr(&mut method.body)?;
                 }
             }
+            Item::Extern(_) => {
+                // Extern declarations have no body to expand
+            }
         }
         Ok(())
     }
