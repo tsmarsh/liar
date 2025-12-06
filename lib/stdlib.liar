@@ -18,6 +18,8 @@
 
 (defun neg (x) (- 0 x))
 
+(defun min (a b) (if (< a b) a b))
+
 ;; Predicates
 
 (defun zerop (x) (= x 0))

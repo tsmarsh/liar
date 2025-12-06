@@ -107,3 +107,21 @@ Feature: Standard Library
     Given the definition (defun test () (neg 0))
     When I evaluate (test)
     Then the result is 0
+
+  Scenario: min of different values
+    Given the definition (defun min (a b) (if (< a b) a b))
+    Given the definition (defun test () (min 1 2))
+    When I evaluate (test)
+    Then the result is 1
+
+  Scenario: min when second is smaller
+    Given the definition (defun min (a b) (if (< a b) a b))
+    Given the definition (defun test () (min 5 3))
+    When I evaluate (test)
+    Then the result is 3
+
+  Scenario: min of equal values
+    Given the definition (defun min (a b) (if (< a b) a b))
+    Given the definition (defun test () (min 4 4))
+    When I evaluate (test)
+    Then the result is 4
