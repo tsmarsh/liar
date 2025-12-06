@@ -458,7 +458,7 @@ mod tests {
         let context = Context::create();
         let mut jit = IncrementalJit::new(&context).unwrap();
 
-        // Define a simple function: (defun get42 () -> i32 (ret 42))
+        // Define a simple function: (define (get42 i32) () (block entry (ret (i32 42))))
         let func = FunctionDef {
             name: "get42".to_string(),
             return_type: ReturnType::Scalar(ScalarType::I32),

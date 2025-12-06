@@ -2350,4 +2350,91 @@ mod tests {
             _ => panic!("expected Struct"),
         }
     }
+
+    // =========================================================================
+    // Higher-Level Pattern Tests
+    // =========================================================================
+    // These tests demonstrate that lIR can express patterns used by higher-level
+    // languages (closures, protocols, etc.) without any language-specific support.
+    // lIR is purely generic primitives - the patterns emerge from composition.
+
+    #[test]
+    fn test_closure_pattern_env_struct() {
+        // Environment struct for captured variables - pure lIR
+        let result = Parser::new("(defstruct __env_0 (i64 i64))")
+            .parse_item()
+            .unwrap();
+        match result {
+            ParseResult::Struct(def) => {
+                assert_eq!(def.name, "__env_0");
+                assert_eq!(def.fields.len(), 2);
+            }
+            _ => panic!("expected struct"),
+        }
+    }
+
+    #[test]
+    fn test_closure_pattern_struct_literal() {
+        // Closure struct literal: { fn_ptr, env_ptr }
+        let expr = Parser::new("{ @__lambda_0 env_ptr }").parse().unwrap();
+        match expr {
+            Expr::StructLit(fields) => {
+                assert_eq!(fields.len(), 2);
+                assert!(matches!(fields[0], Expr::GlobalRef(_)));
+                assert!(matches!(fields[1], Expr::LocalRef(_)));
+            }
+            _ => panic!("expected struct literal"),
+        }
+    }
+
+    #[test]
+    fn test_closure_pattern_extract_fn_ptr() {
+        // Extract function pointer from closure struct
+        let expr = Parser::new("(extractvalue closure 0)").parse().unwrap();
+        assert!(matches!(expr, Expr::ExtractValue { indices, .. } if indices == vec![0]));
+    }
+
+    #[test]
+    fn test_closure_pattern_indirect_call() {
+        // Indirect call through function pointer
+        let expr = Parser::new("(indirect-call fn_ptr i64 env_ptr x)")
+            .parse()
+            .unwrap();
+        match expr {
+            Expr::IndirectCall { args, .. } => {
+                assert_eq!(args.len(), 2);
+            }
+            _ => panic!("expected indirect call"),
+        }
+    }
+
+    #[test]
+    fn test_atom_pattern_atomic_ops() {
+        // Atomic operations used to implement atom semantics
+        let load = Parser::new("(atomic-load seq_cst i64 ptr)")
+            .parse()
+            .unwrap();
+        assert!(matches!(load, Expr::AtomicLoad { .. }));
+
+        let store = Parser::new("(atomic-store seq_cst (i64 42) ptr)")
+            .parse()
+            .unwrap();
+        assert!(matches!(store, Expr::AtomicStore { .. }));
+    }
+
+    #[test]
+    fn test_protocol_pattern_direct_dispatch() {
+        // Protocol dispatch compiles to direct function call
+        // (greet person) → (call @__Greet_Person__greet person)
+        let expr = Parser::new("(call @__Greet_Person__greet person)")
+            .parse()
+            .unwrap();
+        match expr {
+            Expr::Call { name, args } => {
+                assert_eq!(name, "__Greet_Person__greet");
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("expected call"),
+        }
+    }
 }
