@@ -2,7 +2,11 @@
 
 **Tier:** P3
 **Category:** stdlib/math
-**Dependencies:** none
+**Dependencies:** trqhk (br/phi control flow)
+
+## Blocked By
+
+- **trqhk** - Requires proper `if` with br/phi. Tail recursion with `select` causes infinite recursion.
 
 ## Description
 

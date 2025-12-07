@@ -2,7 +2,11 @@
 
 **Tier:** P3
 **Category:** stdlib/math
-**Dependencies:** even?
+**Dependencies:** even?, trqhk (br/phi control flow)
+
+## Blocked By
+
+- **trqhk** - Requires proper `if` with br/phi. Recursion with `select` causes infinite recursion.
 
 ## Description
 
