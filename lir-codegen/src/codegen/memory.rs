@@ -4,6 +4,7 @@
 
 use inkwell::values::{BasicValueEnum, FunctionValue};
 use lir_core::ast::{Expr, ScalarType};
+use std::collections::HashMap;
 
 use super::{CodeGenError, Result};
 
@@ -152,8 +153,14 @@ impl<'ctx> super::CodeGen<'ctx> {
     }
 
     /// Compile rc-clone: increment refcount atomically
-    pub(crate) fn compile_rc_clone(&self, value: &Expr) -> Result<BasicValueEnum<'ctx>> {
-        let data_ptr = self.compile_expr(value)?.into_pointer_value();
+    pub(crate) fn compile_rc_clone(
+        &self,
+        value: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let data_ptr = self
+            .compile_expr_recursive(value, locals)?
+            .into_pointer_value();
         self.compile_rc_clone_ptr(data_ptr)
     }
 
@@ -185,8 +192,14 @@ impl<'ctx> super::CodeGen<'ctx> {
     }
 
     /// Compile rc-drop: decrement refcount, free if zero
-    pub(crate) fn compile_rc_drop(&self, value: &Expr) -> Result<BasicValueEnum<'ctx>> {
-        let data_ptr = self.compile_expr(value)?.into_pointer_value();
+    pub(crate) fn compile_rc_drop(
+        &self,
+        value: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let data_ptr = self
+            .compile_expr_recursive(value, locals)?
+            .into_pointer_value();
         self.compile_rc_drop_ptr(data_ptr)
     }
 
@@ -250,8 +263,14 @@ impl<'ctx> super::CodeGen<'ctx> {
     }
 
     /// Compile rc-count: read refcount
-    pub(crate) fn compile_rc_count(&self, value: &Expr) -> Result<BasicValueEnum<'ctx>> {
-        let data_ptr = self.compile_expr(value)?.into_pointer_value();
+    pub(crate) fn compile_rc_count(
+        &self,
+        value: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let data_ptr = self
+            .compile_expr_recursive(value, locals)?
+            .into_pointer_value();
         self.compile_rc_count_ptr(data_ptr)
     }
 

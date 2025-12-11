@@ -171,9 +171,9 @@ impl<'ctx> super::CodeGen<'ctx> {
 
             // Reference counting
             Expr::RcAlloc { elem_type } => self.compile_rc_alloc(elem_type),
-            Expr::RcClone { value } => self.compile_rc_clone(value),
-            Expr::RcDrop { value } => self.compile_rc_drop(value),
-            Expr::RcCount { value } => self.compile_rc_count(value),
+            Expr::RcClone { value } => self.compile_rc_clone(value, locals),
+            Expr::RcDrop { value } => self.compile_rc_drop(value, locals),
+            Expr::RcCount { value } => self.compile_rc_count(value, locals),
             Expr::RcPtr { value } => {
                 // Get pointer to RC data
                 let rc_ptr = self
