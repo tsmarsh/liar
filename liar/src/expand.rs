@@ -179,13 +179,6 @@ impl Expander {
                 self.expand_expr(obj)?;
             }
 
-            Expr::Match(scrutinee, arms) => {
-                self.expand_expr(scrutinee)?;
-                for arm in arms {
-                    self.expand_expr(&mut arm.body)?;
-                }
-            }
-
             Expr::Atom(value) => {
                 self.expand_expr(value)?;
             }
@@ -493,27 +486,6 @@ impl Expander {
                 let new_obj = self.substitute(obj, env, call_span)?;
                 Ok(Spanned::new(
                     Expr::Field(Box::new(new_obj), field.clone()),
-                    expr.span,
-                ))
-            }
-
-            Expr::Match(scrutinee, arms) => {
-                let new_scrutinee = self.substitute(scrutinee, env, call_span)?;
-                let new_arms: Result<Vec<_>> = arms
-                    .iter()
-                    .map(|arm| {
-                        // Pattern bindings shadow macro parameters
-                        let mut arm_env = env.clone();
-                        self.remove_pattern_bindings(&arm.pattern.node, &mut arm_env);
-                        let new_body = self.substitute(&arm.body, &arm_env, call_span)?;
-                        Ok(crate::ast::MatchArm {
-                            pattern: arm.pattern.clone(),
-                            body: new_body,
-                        })
-                    })
-                    .collect();
-                Ok(Spanned::new(
-                    Expr::Match(Box::new(new_scrutinee), new_arms?),
                     expr.span,
                 ))
             }
@@ -830,31 +802,6 @@ impl Expander {
                 expr.span,
                 format!("unsupported expression in quasiquote: {:?}", expr.node),
             )),
-        }
-    }
-
-    /// Remove pattern bindings from the environment (they shadow macro parameters)
-    #[allow(clippy::only_used_in_recursion)]
-    fn remove_pattern_bindings(
-        &self,
-        pattern: &crate::ast::Pattern,
-        env: &mut HashMap<String, Spanned<Expr>>,
-    ) {
-        match pattern {
-            crate::ast::Pattern::Var(name) => {
-                env.remove(name);
-            }
-            crate::ast::Pattern::Struct(_, fields) => {
-                for (_, pat) in fields {
-                    self.remove_pattern_bindings(pat, env);
-                }
-            }
-            crate::ast::Pattern::Tuple(patterns) => {
-                for pat in patterns {
-                    self.remove_pattern_bindings(pat, env);
-                }
-            }
-            crate::ast::Pattern::Wildcard | crate::ast::Pattern::Literal(_) => {}
         }
     }
 }

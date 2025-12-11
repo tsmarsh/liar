@@ -1,9 +1,9 @@
 //! Control flow and binding codegen
 //!
-//! Handles if, let, plet, do blocks, set!, match, and unsafe.
+//! Handles if, let, plet, do blocks, set!, and unsafe.
 
 use crate::ast::{Expr, LetBinding};
-use crate::error::{CompileError, Result};
+use crate::error::Result;
 use crate::span::Spanned;
 use lir_core::ast as lir;
 
@@ -115,14 +115,6 @@ pub fn generate_set(
         value: Box::new(value_expr),
         ptr: Box::new(lir::Expr::LocalRef(name.node.clone())),
     })
-}
-
-/// Generate code for match expression
-pub fn generate_match(expr: &Spanned<Expr>) -> Result<lir::Expr> {
-    Err(CompileError::codegen(
-        expr.span,
-        "match requires control flow codegen (not yet implemented)",
-    ))
 }
 
 /// Generate code for unsafe block (just generates the inner expression)

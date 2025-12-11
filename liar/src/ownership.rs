@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{Def, Defun, Expr, ExtendProtocol, Item, LetBinding, MatchArm, Program};
+use crate::ast::{Def, Defun, Expr, ExtendProtocol, Item, LetBinding, Program};
 use crate::error::{CompileError, Errors};
 use crate::resolve::BindingId;
 use crate::span::{Span, Spanned};
@@ -595,17 +595,6 @@ impl BorrowChecker {
                 self.check_expr(obj);
             }
 
-            Expr::Match(scrutinee, arms) => {
-                self.check_expr(scrutinee);
-                // If scrutinee is a variable, it might be moved
-                if let Expr::Var(name) = &scrutinee.node {
-                    self.move_value(name, scrutinee.span);
-                }
-                for arm in arms {
-                    self.check_match_arm(arm);
-                }
-            }
-
             Expr::Quote(_) => {
                 // Quoted symbols are always OK
             }
@@ -778,35 +767,6 @@ impl BorrowChecker {
 
         // Define the new binding
         self.define(&binding.name.node, binding.name.span);
-    }
-
-    fn check_match_arm(&mut self, arm: &MatchArm) {
-        self.push_scope();
-        // Pattern bindings are defined in this scope
-        self.define_pattern_bindings(&arm.pattern);
-        self.check_expr(&arm.body);
-        self.pop_scope();
-    }
-
-    fn define_pattern_bindings(&mut self, pattern: &Spanned<crate::ast::Pattern>) {
-        use crate::ast::Pattern;
-        match &pattern.node {
-            Pattern::Wildcard => {}
-            Pattern::Var(name) => {
-                self.define(name, pattern.span);
-            }
-            Pattern::Literal(_) => {}
-            Pattern::Struct(_, fields) => {
-                for (_, pat) in fields {
-                    self.define_pattern_bindings(&Spanned::new(pat.clone(), pattern.span));
-                }
-            }
-            Pattern::Tuple(patterns) => {
-                for pat in patterns {
-                    self.define_pattern_bindings(&Spanned::new(pat.clone(), pattern.span));
-                }
-            }
-        }
     }
 }
 

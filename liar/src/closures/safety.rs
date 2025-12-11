@@ -180,13 +180,6 @@ impl<'a> ThreadSafetyChecker<'a> {
                 self.check_expr(obj);
             }
 
-            Expr::Match(scrutinee, arms) => {
-                self.check_expr(scrutinee);
-                for arm in arms {
-                    self.check_expr(&arm.body);
-                }
-            }
-
             // Atom expressions
             Expr::Atom(value) => {
                 self.check_expr(value);

@@ -14,23 +14,25 @@ liar source → liar compiler → lIR → LLVM IR → native code
 
 liar is a working compiler with a functional REPL. The core language works, but the standard library is minimal and some planned features aren't yet implemented.
 
-**What works today:**
+**What works today (62 passing test scenarios):**
 - Arithmetic, comparisons, boolean logic
 - Functions with type inference
-- Let bindings (single-threaded and parallel)
+- Let bindings (sequential and parallel)
 - Atoms for thread-safe shared state
 - Closures with capture analysis
 - Structs and protocols
-- Pattern matching
-- Persistent vectors and maps (literals only)
-- SIMD vector literals
+- Macros with quasiquote
 - Ownership and borrow checking
 - REPL with incremental JIT
+
+**Partial/untested:**
+- Persistent vectors and maps (literals only, no operations)
+- SIMD vector literals
 
 **Not yet implemented:**
 - I/O (no `println` yet)
 - Collection operations (`map`, `filter`, `reduce`)
-- Macros
+- Recursive functions (need branch-based control flow)
 - Modules
 - Enums
 - Error propagation (`?` operator)
@@ -207,19 +209,6 @@ A 1:1 mapping to LLVM IR with parentheses:
 ;; SIMD vectors
 <<1 2 3 4>>           ; 4x i64
 <<1.0 2.0 3.0 4.0>>   ; 4x f64
-```
-
-### Pattern Matching
-
-```lisp
-(match x
-  (0 "zero")
-  (1 "one")
-  (_ "other"))
-
-;; With variable binding
-(match pair
-  ((Point a b) (+ a b)))
 ```
 
 ### Control Flow

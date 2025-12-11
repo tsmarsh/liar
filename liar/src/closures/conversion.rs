@@ -15,7 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::ast::{Def, Defun, Expr, ExtendProtocol, Item, LetBinding, MatchArm, Param, Program};
+use crate::ast::{Def, Defun, Expr, ExtendProtocol, Item, LetBinding, Param, Program};
 use crate::error::Result;
 use crate::span::{Span, Spanned};
 
@@ -78,12 +78,6 @@ fn find_callable_vars_rec(
         }
         Expr::Lambda(_, body) => {
             find_callable_vars_rec(&body.node, var_names, callable);
-        }
-        Expr::Match(scrutinee, arms) => {
-            find_callable_vars_rec(&scrutinee.node, var_names, callable);
-            for arm in arms {
-                find_callable_vars_rec(&arm.body.node, var_names, callable);
-            }
         }
         Expr::Field(obj, _) => {
             find_callable_vars_rec(&obj.node, var_names, callable);
@@ -405,21 +399,6 @@ impl ClosureConverter {
             Expr::Field(obj, field) => {
                 let new_obj = Box::new(self.convert_expr(*obj)?);
                 Expr::Field(new_obj, field)
-            }
-
-            Expr::Match(scrutinee, arms) => {
-                let new_scrutinee = Box::new(self.convert_expr(*scrutinee)?);
-                let new_arms: Result<Vec<_>> = arms
-                    .into_iter()
-                    .map(|arm| {
-                        let new_body = self.convert_expr(arm.body)?;
-                        Ok(MatchArm {
-                            pattern: arm.pattern,
-                            body: new_body,
-                        })
-                    })
-                    .collect();
-                Expr::Match(new_scrutinee, new_arms?)
             }
 
             // Atom expressions

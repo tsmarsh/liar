@@ -518,10 +518,6 @@ impl<'a> Parser<'a> {
                 let expr = self.parse_expr()?;
                 Ok(Expr::Deref(Box::new(expr)))
             }
-            TokenKind::Match => {
-                self.advance();
-                self.parse_match()
-            }
             TokenKind::Unsafe => {
                 self.advance();
                 let body = self.parse_expr()?;
@@ -721,60 +717,6 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         let field = self.parse_symbol()?;
         Ok(Expr::Field(Box::new(expr), field))
-    }
-
-    /// Parse match expression
-    fn parse_match(&mut self) -> Result<Expr> {
-        let scrutinee = self.parse_expr()?;
-        let mut arms = Vec::new();
-
-        while !self.check(TokenKind::RParen) {
-            self.expect(TokenKind::LParen)?;
-            let pattern = self.parse_pattern()?;
-            let body = self.parse_expr()?;
-            self.expect(TokenKind::RParen)?;
-            arms.push(MatchArm { pattern, body });
-        }
-
-        Ok(Expr::Match(Box::new(scrutinee), arms))
-    }
-
-    /// Parse a pattern
-    fn parse_pattern(&mut self) -> Result<Spanned<Pattern>> {
-        let start = self.current_span();
-
-        let pattern = match &self.peek().kind {
-            TokenKind::Symbol(s) if s == "_" => {
-                self.advance();
-                Pattern::Wildcard
-            }
-            TokenKind::Symbol(s) => {
-                let s = s.clone();
-                self.advance();
-                Pattern::Var(s)
-            }
-            TokenKind::Int(n) => {
-                let n = *n;
-                self.advance();
-                Pattern::Literal(Literal::Int(n))
-            }
-            TokenKind::True => {
-                self.advance();
-                Pattern::Literal(Literal::Bool(true))
-            }
-            TokenKind::False => {
-                self.advance();
-                Pattern::Literal(Literal::Bool(false))
-            }
-            TokenKind::Nil => {
-                self.advance();
-                Pattern::Literal(Literal::Nil)
-            }
-            _ => return Err(CompileError::parse(self.current_span(), "expected pattern")),
-        };
-
-        let span = start.merge(self.prev_span());
-        Ok(Spanned::new(pattern, span))
     }
 
     /// Parse function call

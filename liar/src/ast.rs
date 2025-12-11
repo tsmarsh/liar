@@ -175,8 +175,6 @@ pub enum Expr {
     Struct(String, Vec<(Spanned<String>, Spanned<Expr>)>),
     /// Field access: (. expr field)
     Field(Box<Spanned<Expr>>, Spanned<String>),
-    /// Match expression: (match expr (pattern body)...)
-    Match(Box<Spanned<Expr>>, Vec<MatchArm>),
     /// Quote (for atoms): 'symbol
     Quote(String),
     /// Unsafe block: (unsafe body)
@@ -289,36 +287,4 @@ pub struct LetBinding {
     pub name: Spanned<String>,
     pub ty: Option<Spanned<Type>>,
     pub value: Spanned<Expr>,
-}
-
-/// Match arm
-#[derive(Debug, Clone)]
-pub struct MatchArm {
-    pub pattern: Spanned<Pattern>,
-    pub body: Spanned<Expr>,
-}
-
-/// Pattern for match
-#[derive(Debug, Clone)]
-pub enum Pattern {
-    /// Wildcard: _
-    Wildcard,
-    /// Variable binding
-    Var(String),
-    /// Literal
-    Literal(Literal),
-    /// Struct destructure: (Struct field: var ...)
-    Struct(String, Vec<(String, Pattern)>),
-    /// Tuple destructure: (a b c)
-    Tuple(Vec<Pattern>),
-}
-
-/// Literal values (subset of Expr for patterns)
-#[derive(Debug, Clone)]
-pub enum Literal {
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    String(String),
-    Nil,
 }

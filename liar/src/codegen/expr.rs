@@ -23,8 +23,8 @@ use super::collections::{
 };
 use super::context::CodegenContext;
 use super::control::{
-    generate_deref, generate_do, generate_if, generate_let, generate_match, generate_plet,
-    generate_ref, generate_ref_mut, generate_set, generate_unsafe,
+    generate_deref, generate_do, generate_if, generate_let, generate_plet, generate_ref,
+    generate_ref_mut, generate_set, generate_unsafe,
 };
 use super::protocols::generate_protocol_call;
 use super::structs::{generate_field_access, generate_struct_constructor};
@@ -59,7 +59,6 @@ pub fn generate_expr(ctx: &mut CodegenContext, expr: &Spanned<Expr>) -> Result<l
         Expr::Let(bindings, body) => generate_let(ctx, bindings, body),
         Expr::Plet(bindings, body) => generate_plet(ctx, bindings, body),
         Expr::Do(exprs) => generate_do(ctx, exprs),
-        Expr::Match(_scrutinee, _arms) => generate_match(expr),
         Expr::Unsafe(inner) => generate_unsafe(ctx, inner),
 
         // Lambda (should be converted before codegen)

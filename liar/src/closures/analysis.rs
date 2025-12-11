@@ -4,9 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{
-    Def, Defun, Expr, ExtendProtocol, Item, LetBinding, MatchArm, Param, Pattern, Program,
-};
+use crate::ast::{Def, Defun, Expr, ExtendProtocol, Item, LetBinding, Param, Program};
 use crate::error::Result;
 use crate::resolve::BindingId;
 use crate::span::{Span, Spanned};
@@ -178,13 +176,6 @@ impl ClosureAnalyzer {
                 self.analyze_expr(obj);
             }
 
-            Expr::Match(scrutinee, arms) => {
-                self.analyze_expr(scrutinee);
-                for arm in arms {
-                    self.analyze_match_arm(arm);
-                }
-            }
-
             Expr::Quote(_) => {}
 
             // Atom expressions
@@ -322,33 +313,6 @@ impl ClosureAnalyzer {
     fn analyze_let_binding(&mut self, binding: &LetBinding) {
         self.analyze_expr(&binding.value);
         self.define(&binding.name.node);
-    }
-
-    fn analyze_match_arm(&mut self, arm: &MatchArm) {
-        self.push_scope();
-        self.define_pattern_bindings(&arm.pattern);
-        self.analyze_expr(&arm.body);
-        self.pop_scope();
-    }
-
-    fn define_pattern_bindings(&mut self, pattern: &Spanned<Pattern>) {
-        match &pattern.node {
-            Pattern::Wildcard => {}
-            Pattern::Var(name) => {
-                self.define(name);
-            }
-            Pattern::Literal(_) => {}
-            Pattern::Struct(_, fields) => {
-                for (_, pat) in fields {
-                    self.define_pattern_bindings(&Spanned::new(pat.clone(), pattern.span));
-                }
-            }
-            Pattern::Tuple(patterns) => {
-                for pat in patterns {
-                    self.define_pattern_bindings(&Spanned::new(pat.clone(), pattern.span));
-                }
-            }
-        }
     }
 
     /// Analyze a lambda to determine its captures
@@ -495,15 +459,6 @@ impl ClosureAnalyzer {
                 self.find_free_vars_lambda_inner(obj, local, free);
             }
 
-            Expr::Match(scrutinee, arms) => {
-                self.find_free_vars_lambda_inner(scrutinee, local, free);
-                for arm in arms {
-                    let mut arm_local = local.clone();
-                    Self::add_pattern_bindings(&arm.pattern, &mut arm_local);
-                    self.find_free_vars_lambda_inner(&arm.body, &mut arm_local, free);
-                }
-            }
-
             Expr::Quote(_) => {}
 
             // Atom expressions
@@ -633,26 +588,6 @@ impl ClosureAnalyzer {
             Expr::RcAlloc { fields, .. } => {
                 for (_, value) in fields {
                     self.find_free_vars_lambda_inner(value, local, free);
-                }
-            }
-        }
-    }
-
-    fn add_pattern_bindings(pattern: &Spanned<Pattern>, local: &mut HashSet<String>) {
-        match &pattern.node {
-            Pattern::Wildcard => {}
-            Pattern::Var(name) => {
-                local.insert(name.clone());
-            }
-            Pattern::Literal(_) => {}
-            Pattern::Struct(_, fields) => {
-                for (_, pat) in fields {
-                    Self::add_pattern_bindings(&Spanned::new(pat.clone(), pattern.span), local);
-                }
-            }
-            Pattern::Tuple(patterns) => {
-                for pat in patterns {
-                    Self::add_pattern_bindings(&Spanned::new(pat.clone(), pattern.span), local);
                 }
             }
         }

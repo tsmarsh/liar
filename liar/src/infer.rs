@@ -352,20 +352,6 @@ impl Inferencer {
                 self.fresh_var()
             }
 
-            Expr::Match(scrutinee, arms) => {
-                let scrutinee_ty = self.infer_expr(scrutinee, env);
-                let result_ty = self.fresh_var();
-
-                for arm in arms {
-                    let mut arm_env = env.child();
-                    self.bind_pattern(&arm.pattern, &scrutinee_ty, &mut arm_env);
-                    let body_ty = self.infer_expr(&arm.body, &arm_env);
-                    let _ = self.unify(&body_ty, &result_ty, arm.body.span);
-                }
-
-                self.apply(&result_ty)
-            }
-
             Expr::Quote(_) => Ty::Named("Symbol".to_string()),
 
             Expr::Unsafe(inner) => self.infer_expr(inner, env),
@@ -648,38 +634,6 @@ impl Inferencer {
             }
 
             _ => None,
-        }
-    }
-
-    /// Bind pattern variables to types
-    fn bind_pattern(
-        &mut self,
-        pattern: &Spanned<crate::ast::Pattern>,
-        expected: &Ty,
-        env: &mut TypeEnv,
-    ) {
-        use crate::ast::Pattern;
-        match &pattern.node {
-            Pattern::Wildcard => {}
-            Pattern::Var(name) => {
-                env.insert(name.clone(), expected.clone());
-            }
-            Pattern::Literal(_) => {
-                // Literals should match the scrutinee type
-            }
-            Pattern::Struct(_name, fields) => {
-                // TODO: Check struct type and bind field patterns
-                for (_, pat) in fields {
-                    let field_ty = self.fresh_var();
-                    self.bind_pattern(&Spanned::new(pat.clone(), pattern.span), &field_ty, env);
-                }
-            }
-            Pattern::Tuple(pats) => {
-                for pat in pats {
-                    let elem_ty = self.fresh_var();
-                    self.bind_pattern(&Spanned::new(pat.clone(), pattern.span), &elem_ty, env);
-                }
-            }
         }
     }
 

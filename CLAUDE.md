@@ -13,16 +13,20 @@ liar source → liar → lIR → lair → LLVM IR → native
 | `lair` | **Done** | lIR assembler | lIR source | LLVM IR / native |
 | `lir` | **Done** | Expression evaluator | lIR expression | Result |
 | `lir-repl` | **Done** | Interactive REPL | - | - |
-| `liar` | Planned | high-level compiler | liar source | lIR |
+| `liar` | **Done** | High-level compiler | liar source | lIR |
+| `liar-repl` | **Done** | Interactive REPL with JIT | - | - |
+| `liar-nrepl` | **Done** | nREPL server for IDE integration | - | - |
 
 ## The Two Layers
 
 | Layer | What it is | Status | File |
 |-------|------------|--------|------|
 | **lIR** | S-expression assembler for LLVM IR. 1:1 mapping, no sugar. | **Implemented** | [lIR.md](doc/lIR.md) |
-| **liar** | Borrow-checked Lisp with closures, atoms, threading. User-facing. | Planned | [LIAR.md](doc/LIAR.md) |
+| **liar** | Borrow-checked Lisp with closures, atoms, threading. User-facing. | **Implemented** | [LIAR.md](doc/LIAR.md) |
 
 ## Current Capabilities
+
+### lIR
 
 lIR is fully functional as an LLVM IR assembler:
 - All scalar and vector types (i1-i64, float, double, ptr, vectors)
@@ -33,6 +37,25 @@ lIR is fully functional as an LLVM IR assembler:
 - Structs (defstruct, field access via GEP)
 - FFI (external function declarations)
 - AOT compilation to native executables
+
+### liar
+
+liar is a working compiler (62 passing test scenarios):
+- Arithmetic, comparisons, boolean logic
+- Functions with type inference
+- Let bindings (sequential and parallel)
+- Atoms for thread-safe shared state
+- Closures with capture analysis
+- Structs and field access
+- Protocols and dispatch
+- Macros with quasiquote
+- Ownership and borrow checking
+- REPL with incremental JIT
+
+**Not yet implemented:**
+- I/O (`print`, `println`)
+- Collection operations (`map`, `filter`, `reduce`)
+- Modules
 
 ---
 

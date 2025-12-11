@@ -6,8 +6,7 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    Def, Defmacro, Defprotocol, Defstruct, Defun, Expr, ExtendProtocol, Item, LetBinding, MatchArm,
-    Pattern, Program,
+    Def, Defmacro, Defprotocol, Defstruct, Defun, Expr, ExtendProtocol, Item, LetBinding, Program,
 };
 use crate::error::{CompileError, Errors, Result};
 use crate::span::{Span, Spanned};
@@ -368,13 +367,6 @@ impl Resolver {
                 // Field names are resolved during type checking
             }
 
-            Expr::Match(scrutinee, arms) => {
-                self.resolve_expr(scrutinee);
-                for arm in arms {
-                    self.resolve_match_arm(arm);
-                }
-            }
-
             Expr::Quote(_) => {
                 // Quoted symbols don't need resolution
             }
@@ -521,35 +513,6 @@ impl Resolver {
 
         // Then define the name
         self.define(&binding.name.node, binding.name.span, BindingKind::Local);
-    }
-
-    fn resolve_match_arm(&mut self, arm: &MatchArm) {
-        self.push_scope();
-        self.resolve_pattern(&arm.pattern);
-        self.resolve_expr(&arm.body);
-        self.pop_scope();
-    }
-
-    fn resolve_pattern(&mut self, pattern: &Spanned<Pattern>) {
-        match &pattern.node {
-            Pattern::Wildcard => {}
-            Pattern::Var(name) => {
-                self.define(name, pattern.span, BindingKind::Local);
-            }
-            Pattern::Literal(_) => {}
-            Pattern::Struct(name, fields) => {
-                // Struct name should be defined
-                self.lookup(name, pattern.span);
-                for (_, pat) in fields {
-                    self.resolve_pattern(&Spanned::new(pat.clone(), pattern.span));
-                }
-            }
-            Pattern::Tuple(patterns) => {
-                for pat in patterns {
-                    self.resolve_pattern(&Spanned::new(pat.clone(), pattern.span));
-                }
-            }
-        }
     }
 }
 
