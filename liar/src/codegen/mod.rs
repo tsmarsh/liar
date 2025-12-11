@@ -164,6 +164,9 @@ fn generate_extern(ext: &Extern) -> Result<lir::ExternDecl> {
 fn generate_defun(ctx: &mut CodegenContext, defun: &Defun) -> Result<lir::FunctionDef> {
     let name = defun.name.node.clone();
 
+    // Initialize block management for this function
+    ctx.start_function();
+
     // Register struct types for parameters with struct type annotations
     // This is needed for closure conversion where __env has a named struct type
     for p in &defun.params {
@@ -206,19 +209,50 @@ fn generate_defun(ctx: &mut CodegenContext, defun: &Defun) -> Result<lir::Functi
         .map(|t| liar_type_to_return(&t.node))
         .unwrap_or_else(|| infer_liar_expr_type(ctx, &defun.body.node));
 
-    // Wrap in ret instruction
-    let ret_instr = lir::Expr::Ret(Some(Box::new(body_expr)));
+    // Check if any blocks were emitted (from if expressions)
+    if ctx.has_blocks() {
+        // Multi-block function: collect blocks and add final block with return
+        let mut blocks = ctx.take_blocks();
 
-    // Create single entry block
-    let entry_block = lir::BasicBlock {
-        label: "entry".to_string(),
-        instructions: vec![ret_instr],
-    };
+        // Take any pending phis from the current (final) block
+        let pending_phis = ctx.take_pending_phis();
 
-    Ok(lir::FunctionDef {
-        name,
-        return_type,
-        params,
-        blocks: vec![entry_block],
-    })
+        // Wrap the return with any pending phis
+        let final_instr = if pending_phis.is_empty() {
+            lir::Expr::Ret(Some(Box::new(body_expr)))
+        } else {
+            lir::Expr::Let {
+                bindings: pending_phis,
+                body: vec![lir::Expr::Ret(Some(Box::new(body_expr)))],
+            }
+        };
+
+        // Add the final block (merge block from last if, or entry if no if)
+        let final_block = lir::BasicBlock {
+            label: ctx.current_block().to_string(),
+            instructions: vec![final_instr],
+        };
+        blocks.push(final_block);
+
+        Ok(lir::FunctionDef {
+            name,
+            return_type,
+            params,
+            blocks,
+        })
+    } else {
+        // Single-block function (no if expressions)
+        let ret_instr = lir::Expr::Ret(Some(Box::new(body_expr)));
+        let entry_block = lir::BasicBlock {
+            label: "entry".to_string(),
+            instructions: vec![ret_instr],
+        };
+
+        Ok(lir::FunctionDef {
+            name,
+            return_type,
+            params,
+            blocks: vec![entry_block],
+        })
+    }
 }

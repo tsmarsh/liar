@@ -29,6 +29,18 @@ pub struct CodegenContext {
     pub protocol_impls: HashMap<(String, String), String>,
     /// Whether malloc declaration is needed
     pub needs_malloc: bool,
+
+    // Block management for multi-block functions (if with br/phi)
+    /// Completed basic blocks
+    blocks: Vec<lir::BasicBlock>,
+    /// Label of the current block being built
+    current_block_label: String,
+    /// Counter for generating unique block labels
+    block_counter: usize,
+    /// Pending phi bindings that should be emitted at the next block end
+    /// These are phi nodes from if expressions that must be placed at the start
+    /// of the current block before any other instructions
+    pending_phis: Vec<(String, Box<lir::Expr>)>,
 }
 
 impl Default for CodegenContext {
@@ -47,6 +59,10 @@ impl CodegenContext {
             protocol_methods: HashMap::new(),
             protocol_impls: HashMap::new(),
             needs_malloc: false,
+            blocks: Vec::new(),
+            current_block_label: "entry".to_string(),
+            block_counter: 0,
+            pending_phis: Vec::new(),
         }
     }
 
@@ -58,6 +74,82 @@ impl CodegenContext {
         self.protocol_methods.clear();
         self.protocol_impls.clear();
         self.needs_malloc = false;
+        self.blocks.clear();
+        self.current_block_label = "entry".to_string();
+        self.block_counter = 0;
+        self.pending_phis.clear();
+    }
+
+    // ========== Block Management ==========
+
+    /// Initialize for a new function - clears blocks and starts at "entry"
+    pub fn start_function(&mut self) {
+        self.blocks.clear();
+        self.current_block_label = "entry".to_string();
+        self.block_counter = 0;
+        self.pending_phis.clear();
+    }
+
+    /// Generate a unique block label with the given prefix
+    pub fn fresh_block(&mut self, prefix: &str) -> String {
+        self.block_counter += 1;
+        format!("{}_{}", prefix, self.block_counter)
+    }
+
+    /// Get the current block label
+    pub fn current_block(&self) -> &str {
+        &self.current_block_label
+    }
+
+    /// End the current block with a terminator and start a new block
+    /// Returns the completed block
+    /// If there are pending phi bindings, they are wrapped around the terminator
+    pub fn end_block(&mut self, terminator: lir::Expr) -> lir::BasicBlock {
+        // Take any pending phi bindings
+        let pending = std::mem::take(&mut self.pending_phis);
+
+        // If there are pending phis, wrap them around the terminator
+        let instr = if pending.is_empty() {
+            terminator
+        } else {
+            lir::Expr::Let {
+                bindings: pending,
+                body: vec![terminator],
+            }
+        };
+
+        let block = lir::BasicBlock {
+            label: self.current_block_label.clone(),
+            instructions: vec![instr],
+        };
+        self.blocks.push(block.clone());
+        block
+    }
+
+    /// Start a new block with the given label
+    pub fn start_block(&mut self, label: &str) {
+        self.current_block_label = label.to_string();
+    }
+
+    /// Add a phi binding to be emitted at the start of the current block
+    /// when the block is ended. Returns the variable name for the phi.
+    pub fn add_pending_phi(&mut self, var_name: String, phi_expr: lir::Expr) {
+        self.pending_phis.push((var_name, Box::new(phi_expr)));
+    }
+
+    /// Take pending phi bindings (for finalizing the last block)
+    pub fn take_pending_phis(&mut self) -> Vec<(String, Box<lir::Expr>)> {
+        std::mem::take(&mut self.pending_phis)
+    }
+
+    /// Take all completed blocks (for function finalization)
+    pub fn take_blocks(&mut self) -> Vec<lir::BasicBlock> {
+        std::mem::take(&mut self.blocks)
+    }
+
+    /// Check if any blocks have been emitted (indicates multi-block function)
+    pub fn has_blocks(&self) -> bool {
+        !self.blocks.is_empty()
     }
 
     /// Generate a fresh variable name with the given prefix

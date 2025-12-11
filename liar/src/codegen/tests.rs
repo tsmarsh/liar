@@ -39,8 +39,21 @@ fn test_let_binding() {
 #[test]
 fn test_if_expr() {
     let lir = compile("(defun max (a b) (if (> a b) a b))");
-    assert!(lir.contains("select"));
+    // Now uses br/phi for proper short-circuit evaluation
+    assert!(lir.contains("(br "), "expected conditional branch");
+    assert!(lir.contains("(phi i64"), "expected phi node");
     assert!(lir.contains("icmp sgt"));
+    assert!(lir.contains("(block then_"), "expected then block");
+    assert!(lir.contains("(block else_"), "expected else block");
+    assert!(lir.contains("(block merge_"), "expected merge block");
+}
+
+#[test]
+fn test_nested_if() {
+    let lir = compile("(defun sign (x) (if (< x 0) -1 (if (> x 0) 1 0)))");
+    eprintln!("Generated lIR for nested if:\n{}", lir);
+    // Should have multiple phi nodes for nested ifs
+    assert!(lir.contains("(phi i64"), "expected phi node");
 }
 
 #[test]

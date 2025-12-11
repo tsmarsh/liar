@@ -10,22 +10,150 @@ use lir_core::ast as lir;
 use super::context::CodegenContext;
 use super::expr::generate_expr;
 use super::structs::is_struct_constructor_call;
+use super::types::infer_return_type;
 
-/// Generate code for if expression (compiles to select)
+/// Flatten nested lets that might contain phi nodes.
+/// If expr is `Let { bindings: [(name, Phi)], body: [LocalRef(name)] }`,
+/// return the inner bindings and a reference to use. Otherwise wrap in a new binding.
+fn flatten_for_phi(
+    expr: lir::Expr,
+    var_name: String,
+) -> (Vec<(String, Box<lir::Expr>)>, lir::Expr) {
+    if let lir::Expr::Let { bindings, body } = &expr {
+        // Check if this is a phi-wrapper pattern: single binding that's a phi,
+        // and body is just a reference to that binding
+        if bindings.len() == 1 {
+            if let lir::Expr::Phi { .. } = bindings[0].1.as_ref() {
+                if body.len() == 1 {
+                    if let lir::Expr::LocalRef(ref_name) = &body[0] {
+                        if ref_name == &bindings[0].0 {
+                            // This is a phi wrapper - extract the binding
+                            let phi_name = bindings[0].0.clone();
+                            let phi_expr = bindings[0].1.clone();
+                            return (
+                                vec![(phi_name.clone(), phi_expr)],
+                                lir::Expr::LocalRef(phi_name),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Not a phi wrapper - create a normal binding
+    (
+        vec![(var_name.clone(), Box::new(expr))],
+        lir::Expr::LocalRef(var_name),
+    )
+}
+
+/// Generate code for if expression (compiles to br/phi for proper short-circuit evaluation)
 pub fn generate_if(
     ctx: &mut CodegenContext,
     cond: &Spanned<Expr>,
     then: &Spanned<Expr>,
     else_: &Spanned<Expr>,
 ) -> Result<lir::Expr> {
+    // Generate the condition expression
     let cond_expr = generate_expr(ctx, cond)?;
+
+    // Create unique labels for the basic blocks
+    let then_label = ctx.fresh_block("then");
+    let else_label = ctx.fresh_block("else");
+    let merge_label = ctx.fresh_block("merge");
+
+    // Variable names for the branch results
+    let cond_var = ctx.fresh_var("cond");
+    let then_var = ctx.fresh_var("then_val");
+    let else_var = ctx.fresh_var("else_val");
+    let result_var = ctx.fresh_var("if_result");
+
+    // End current block with conditional branch
+    // Flatten cond_expr in case it contains nested phi from inner if
+    let (cond_bindings, cond_ref) = flatten_for_phi(cond_expr, cond_var.clone());
+    let mut entry_bindings = cond_bindings;
+    // Add the actual condition check
+    let final_cond = if let lir::Expr::LocalRef(_) = &cond_ref {
+        cond_ref
+    } else {
+        entry_bindings.push((cond_var.clone(), Box::new(cond_ref)));
+        lir::Expr::LocalRef(cond_var)
+    };
+
+    ctx.end_block(lir::Expr::Let {
+        bindings: entry_bindings,
+        body: vec![lir::Expr::Br(lir::BranchTarget::Conditional {
+            cond: Box::new(final_cond),
+            true_label: then_label.clone(),
+            false_label: else_label.clone(),
+        })],
+    });
+
+    // Then block: evaluate then expression, branch to merge
+    ctx.start_block(&then_label);
     let then_expr = generate_expr(ctx, then)?;
+    // Infer phi type from then branch before flattening
+    let phi_type = match infer_return_type(ctx, &then_expr) {
+        lir::ReturnType::Scalar(s) => s,
+        _ => lir::ScalarType::I64, // Default for non-scalar types
+    };
+    // After generating then expr, we might be in a different block (if nested if)
+    let then_final_block = ctx.current_block().to_string();
+    let (then_bindings, then_ref) = flatten_for_phi(then_expr, then_var.clone());
+    // Get the variable name to use in phi
+    let then_phi_var = if let lir::Expr::LocalRef(name) = &then_ref {
+        name.clone()
+    } else {
+        then_var.clone()
+    };
+    ctx.end_block(lir::Expr::Let {
+        bindings: then_bindings,
+        body: vec![lir::Expr::Br(lir::BranchTarget::Unconditional(
+            merge_label.clone(),
+        ))],
+    });
+
+    // Else block: evaluate else expression, branch to merge
+    ctx.start_block(&else_label);
     let else_expr = generate_expr(ctx, else_)?;
-    Ok(lir::Expr::Select {
-        cond: Box::new(cond_expr),
-        true_val: Box::new(then_expr),
-        false_val: Box::new(else_expr),
-    })
+    // After generating else expr, we might be in a different block (if nested if)
+    let else_final_block = ctx.current_block().to_string();
+    let (else_bindings, else_ref) = flatten_for_phi(else_expr, else_var.clone());
+    // Get the variable name to use in phi
+    let else_phi_var = if let lir::Expr::LocalRef(name) = &else_ref {
+        name.clone()
+    } else {
+        else_var.clone()
+    };
+    ctx.end_block(lir::Expr::Let {
+        bindings: else_bindings,
+        body: vec![lir::Expr::Br(lir::BranchTarget::Unconditional(
+            merge_label.clone(),
+        ))],
+    });
+
+    // Start merge block - phi node selects the result
+    ctx.start_block(&merge_label);
+
+    // Add the phi as a pending binding - it will be emitted when this block is ended
+    // This ensures the phi stays in the correct merge block even if more if expressions follow
+    let phi_expr = lir::Expr::Phi {
+        ty: phi_type,
+        incoming: vec![
+            (
+                then_final_block,
+                Box::new(lir::Expr::LocalRef(then_phi_var)),
+            ),
+            (
+                else_final_block,
+                Box::new(lir::Expr::LocalRef(else_phi_var)),
+            ),
+        ],
+    };
+    ctx.add_pending_phi(result_var.clone(), phi_expr);
+
+    // Return just a reference to the phi variable
+    Ok(lir::Expr::LocalRef(result_var))
 }
 
 /// Check if an expression is a ClosureLit with a heap-allocated environment
