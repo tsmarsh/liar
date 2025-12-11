@@ -190,17 +190,16 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                 let ptr_val = self
                     .compile_expr_recursive(ptr, locals)?
                     .into_pointer_value();
-                let expected_val = self
-                    .compile_expr_recursive(expected, locals)?
-                    .into_int_value();
-                let new_val = self
-                    .compile_expr_recursive(new_value, locals)?
-                    .into_int_value();
+                let expected_val = self.compile_expr_recursive(expected, locals)?;
+                let new_val = self.compile_expr_recursive(new_value, locals)?;
 
-                let llvm_ordering = Self::atomic_ordering(ordering);
+                let success_ordering = Self::atomic_ordering(ordering);
+                // Failure ordering cannot be Release or AcqRel per LLVM spec
+                // Use Acquire for AcqRel/Release, otherwise same as success
+                let failure_ordering = Self::failure_ordering(ordering);
                 let result = self
                     .builder
-                    .build_cmpxchg(ptr_val, expected_val, new_val, llvm_ordering, llvm_ordering)
+                    .build_cmpxchg(ptr_val, expected_val, new_val, success_ordering, failure_ordering)
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
                 Ok(result.into())

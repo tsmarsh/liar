@@ -35,6 +35,19 @@ impl<'ctx> super::CodeGen<'ctx> {
         }
     }
 
+    /// Convert MemoryOrdering to LLVM failure ordering for cmpxchg
+    /// Per LLVM spec: failure ordering cannot be Release or AcqRel
+    pub(crate) fn failure_ordering(ordering: &MemoryOrdering) -> AtomicOrdering {
+        match ordering {
+            MemoryOrdering::Monotonic => AtomicOrdering::Monotonic,
+            MemoryOrdering::Acquire => AtomicOrdering::Acquire,
+            // Release/AcqRel not valid for failure - use Monotonic/Acquire respectively
+            MemoryOrdering::Release => AtomicOrdering::Monotonic,
+            MemoryOrdering::AcqRel => AtomicOrdering::Acquire,
+            MemoryOrdering::SeqCst => AtomicOrdering::SequentiallyConsistent,
+        }
+    }
+
     /// Convert AtomicRMWOp to LLVM AtomicRMWBinOp
     pub(crate) fn atomic_rmw_op(op: &AtomicRMWOp) -> AtomicRMWBinOp {
         match op {
