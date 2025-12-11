@@ -269,6 +269,39 @@ impl<'ctx> super::CodeGen<'ctx> {
                 Ok(call.try_as_basic_value().basic())
             }
 
+            Expr::TailCall { name, args } => {
+                let function = self.module.get_function(name).ok_or_else(|| {
+                    CodeGenError::CodeGen(format!("undefined function: {}", name))
+                })?;
+
+                let mut compiled_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                for arg in args {
+                    let val = self.compile_expr_recursive(arg, locals)?;
+                    compiled_args.push(val.into());
+                }
+
+                let call_site = self
+                    .builder
+                    .build_call(function, &compiled_args, "tailcall")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+                // Mark as tail call for optimization
+                call_site.set_tail_call(true);
+
+                // Tail call must be immediately followed by ret
+                if let Some(ret_val) = call_site.try_as_basic_value().basic() {
+                    self.builder
+                        .build_return(Some(&ret_val))
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                } else {
+                    self.builder
+                        .build_return(None)
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                }
+
+                Ok(None)
+            }
+
             Expr::Ret(val) => {
                 if let Some(val) = val {
                     // Handle phi specially in return position
