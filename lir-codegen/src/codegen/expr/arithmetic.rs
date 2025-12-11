@@ -143,6 +143,11 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                         .build_float_add(l, r, "fadd")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                         .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_float_add(l, r, "vfadd")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
                     _ => Err(CodeGenError::CodeGen("type mismatch in fadd".to_string())),
                 }
             }
@@ -154,6 +159,11 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                     (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
                         .builder
                         .build_float_sub(l, r, "fsub")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_float_sub(l, r, "vfsub")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                         .into()),
                     _ => Err(CodeGenError::CodeGen("type mismatch in fsub".to_string())),
@@ -169,6 +179,11 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                         .build_float_mul(l, r, "fmul")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                         .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_float_mul(l, r, "vfmul")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
                     _ => Err(CodeGenError::CodeGen("type mismatch in fmul".to_string())),
                 }
             }
@@ -182,6 +197,11 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                         .build_float_div(l, r, "fdiv")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                         .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_float_div(l, r, "vfdiv")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
                     _ => Err(CodeGenError::CodeGen("type mismatch in fdiv".to_string())),
                 }
             }
@@ -193,6 +213,11 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                     (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
                         .builder
                         .build_float_rem(l, r, "frem")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_float_rem(l, r, "vfrem")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                         .into()),
                     _ => Err(CodeGenError::CodeGen("type mismatch in frem".to_string())),

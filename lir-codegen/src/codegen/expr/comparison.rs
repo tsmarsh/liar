@@ -36,6 +36,11 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                         .build_int_compare(llvm_pred, l, r, "icmp")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                         .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_int_compare(llvm_pred, l, r, "vicmp")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
                     _ => Err(CodeGenError::CodeGen("type mismatch in icmp".to_string())),
                 }
             }
@@ -63,6 +68,11 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                     (BasicValueEnum::FloatValue(l), BasicValueEnum::FloatValue(r)) => Ok(self
                         .builder
                         .build_float_compare(llvm_pred, l, r, "fcmp")
+                        .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                        .into()),
+                    (BasicValueEnum::VectorValue(l), BasicValueEnum::VectorValue(r)) => Ok(self
+                        .builder
+                        .build_float_compare(llvm_pred, l, r, "vfcmp")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                         .into()),
                     _ => Err(CodeGenError::CodeGen("type mismatch in fcmp".to_string())),
