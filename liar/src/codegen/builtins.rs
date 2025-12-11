@@ -38,6 +38,9 @@ pub fn generate_builtin(
         Ok(())
     }
 
+    // Arguments to builtins are NOT in tail position - their result is used by the builtin
+    let was_tail = ctx.set_tail_position(false);
+
     let result = match op {
         // Arithmetic
         "+" => {
@@ -342,6 +345,9 @@ pub fn generate_builtin(
 
         _ => None,
     };
+
+    // Restore tail position
+    ctx.set_tail_position(was_tail);
 
     Ok(result)
 }

@@ -54,8 +54,16 @@ pub fn generate_if(
     then: &Spanned<Expr>,
     else_: &Spanned<Expr>,
 ) -> Result<lir::Expr> {
-    // Generate the condition expression
+    // Save tail position - branches inherit it, but condition does not
+    let was_tail = ctx.is_tail_position();
+    // Disable tail call emission inside branches - tailcall is a terminator
+    // and can't be used inside expressions that need to produce values for phi
+    let could_tailcall = ctx.set_can_emit_tailcall(false);
+
+    // Generate the condition expression (NOT in tail position)
+    ctx.set_tail_position(false);
     let cond_expr = generate_expr(ctx, cond)?;
+    ctx.set_tail_position(was_tail);
 
     // Create unique labels for the basic blocks
     let then_label = ctx.fresh_block("then");
@@ -152,6 +160,9 @@ pub fn generate_if(
     };
     ctx.add_pending_phi(result_var.clone(), phi_expr);
 
+    // Restore tail call capability
+    ctx.set_can_emit_tailcall(could_tailcall);
+
     // Return just a reference to the phi variable
     Ok(lir::Expr::LocalRef(result_var))
 }
@@ -201,6 +212,9 @@ pub fn generate_let(
     bindings: &[LetBinding],
     body: &Spanned<Expr>,
 ) -> Result<lir::Expr> {
+    // Save tail position - body inherits it, but bindings do not
+    let was_tail = ctx.is_tail_position();
+
     // First pass: register struct types for bindings that are struct constructor calls
     // Also track which bindings have heap-allocated closure environments
     let mut bindings_needing_cleanup: Vec<String> = Vec::new();
@@ -214,9 +228,11 @@ pub fn generate_let(
         }
     }
 
+    // Body IS in tail position (inherited)
     let body_expr = generate_expr(ctx, body)?;
 
     // If there are bindings needing cleanup, wrap the body to save result and cleanup
+    // NOTE: cleanup breaks tail position since result must be saved first
     let result_with_cleanup = if bindings_needing_cleanup.is_empty() {
         body_expr
     } else {
@@ -230,6 +246,8 @@ pub fn generate_let(
     };
 
     // Build let chain from inside out
+    // Binding values are NOT in tail position
+    ctx.set_tail_position(false);
     let mut result = result_with_cleanup;
     for binding in bindings.iter().rev() {
         let value = generate_expr(ctx, &binding.value)?;
@@ -238,6 +256,7 @@ pub fn generate_let(
             body: vec![result],
         };
     }
+    ctx.set_tail_position(was_tail);
     Ok(result)
 }
 
@@ -247,6 +266,9 @@ pub fn generate_plet(
     bindings: &[LetBinding],
     body: &Spanned<Expr>,
 ) -> Result<lir::Expr> {
+    // Save tail position - body inherits it, but bindings do not
+    let was_tail = ctx.is_tail_position();
+
     // First pass: register struct types for bindings that are struct constructor calls
     // Also track which bindings have heap-allocated closure environments
     let mut bindings_needing_cleanup: Vec<String> = Vec::new();
@@ -260,6 +282,7 @@ pub fn generate_plet(
         }
     }
 
+    // Body IS in tail position (inherited)
     let body_expr = generate_expr(ctx, body)?;
 
     // If there are bindings needing cleanup, wrap the body to save result and cleanup
@@ -275,6 +298,8 @@ pub fn generate_plet(
         }
     };
 
+    // Binding values are NOT in tail position
+    ctx.set_tail_position(false);
     let mut result = result_with_cleanup;
     for binding in bindings.iter().rev() {
         let value = generate_expr(ctx, &binding.value)?;
@@ -283,6 +308,7 @@ pub fn generate_plet(
             body: vec![result],
         };
     }
+    ctx.set_tail_position(was_tail);
     Ok(result)
 }
 
@@ -295,11 +321,19 @@ pub fn generate_do(ctx: &mut CodegenContext, exprs: &[Spanned<Expr>]) -> Result<
         });
     }
     if exprs.len() == 1 {
+        // Single expression inherits tail position
         return generate_expr(ctx, &exprs[0]);
     }
 
+    // Save tail position - only last expression inherits it
+    let was_tail = ctx.is_tail_position();
+
     // Generate as nested lets with dummy bindings
+    // Last expression IS in tail position (inherited)
     let mut result = generate_expr(ctx, exprs.last().unwrap())?;
+
+    // All other expressions are NOT in tail position
+    ctx.set_tail_position(false);
     for (i, e) in exprs.iter().rev().skip(1).enumerate() {
         let value = generate_expr(ctx, e)?;
         result = lir::Expr::Let {
@@ -307,6 +341,7 @@ pub fn generate_do(ctx: &mut CodegenContext, exprs: &[Spanned<Expr>]) -> Result<
             body: vec![result],
         };
     }
+    ctx.set_tail_position(was_tail);
     Ok(result)
 }
 

@@ -41,6 +41,12 @@ pub struct CodegenContext {
     /// These are phi nodes from if expressions that must be placed at the start
     /// of the current block before any other instructions
     pending_phis: Vec<(String, Box<lir::Expr>)>,
+    /// Whether the current expression is in tail position
+    /// When true, direct function calls should be generated as tail calls
+    in_tail_position: bool,
+    /// Whether tail calls can be emitted (false inside if branches)
+    /// Tail calls are terminators and can't be used inside expressions
+    can_emit_tailcall: bool,
 }
 
 impl Default for CodegenContext {
@@ -63,6 +69,8 @@ impl CodegenContext {
             current_block_label: "entry".to_string(),
             block_counter: 0,
             pending_phis: Vec::new(),
+            in_tail_position: false,
+            can_emit_tailcall: true,
         }
     }
 
@@ -78,6 +86,8 @@ impl CodegenContext {
         self.current_block_label = "entry".to_string();
         self.block_counter = 0;
         self.pending_phis.clear();
+        self.in_tail_position = false;
+        self.can_emit_tailcall = true;
     }
 
     // ========== Block Management ==========
@@ -88,6 +98,8 @@ impl CodegenContext {
         self.current_block_label = "entry".to_string();
         self.block_counter = 0;
         self.pending_phis.clear();
+        self.in_tail_position = false;
+        self.can_emit_tailcall = true;
     }
 
     /// Generate a unique block label with the given prefix
@@ -150,6 +162,39 @@ impl CodegenContext {
     /// Check if any blocks have been emitted (indicates multi-block function)
     pub fn has_blocks(&self) -> bool {
         !self.blocks.is_empty()
+    }
+
+    // ========== Tail Call Optimization ==========
+
+    /// Check if we're currently in tail position
+    pub fn is_tail_position(&self) -> bool {
+        self.in_tail_position
+    }
+
+    /// Set tail position and return the previous value
+    /// Use this to temporarily enter tail position:
+    /// ```ignore
+    /// let was_tail = ctx.set_tail_position(true);
+    /// // generate body in tail position
+    /// ctx.set_tail_position(was_tail);
+    /// ```
+    pub fn set_tail_position(&mut self, tail: bool) -> bool {
+        let old = self.in_tail_position;
+        self.in_tail_position = tail;
+        old
+    }
+
+    /// Check if tail calls can be emitted
+    /// Returns false inside if branches where tailcall would break phi nodes
+    pub fn can_emit_tailcall(&self) -> bool {
+        self.can_emit_tailcall
+    }
+
+    /// Set whether tail calls can be emitted and return the previous value
+    pub fn set_can_emit_tailcall(&mut self, can: bool) -> bool {
+        let old = self.can_emit_tailcall;
+        self.can_emit_tailcall = can;
+        old
     }
 
     /// Generate a fresh variable name with the given prefix

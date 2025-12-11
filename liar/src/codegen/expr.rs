@@ -178,14 +178,27 @@ fn generate_call(
         // Check if this is a known function (direct call)
         if ctx.lookup_func_return_type(name).is_some() {
             // Direct function call - prepend null for __env parameter
+            // Arguments are NOT in tail position
+            let was_tail = ctx.set_tail_position(false);
             let mut call_args = vec![lir::Expr::NullPtr];
             for arg in args {
                 call_args.push(generate_expr(ctx, arg)?);
             }
-            return Ok(lir::Expr::Call {
-                name: name.clone(),
-                args: call_args,
-            });
+            ctx.set_tail_position(was_tail);
+
+            // Use tail call if in tail position AND we can emit tail calls
+            // (tail calls are terminators and can't be used inside if branches)
+            if was_tail && ctx.can_emit_tailcall() {
+                return Ok(lir::Expr::TailCall {
+                    name: name.clone(),
+                    args: call_args,
+                });
+            } else {
+                return Ok(lir::Expr::Call {
+                    name: name.clone(),
+                    args: call_args,
+                });
+            }
         }
 
         // Otherwise, treat it as a closure variable

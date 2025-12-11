@@ -197,8 +197,10 @@ fn generate_defun(ctx: &mut CodegenContext, defun: &Defun) -> Result<lir::Functi
         })
         .collect();
 
-    // Generate body expression
+    // Generate body expression in tail position (for tail call optimization)
+    let was_tail = ctx.set_tail_position(true);
     let body_expr = generate_expr(ctx, &defun.body)?;
+    ctx.set_tail_position(was_tail);
 
     // Determine return type - use explicit if provided, otherwise infer from liar body
     // We use the original liar AST for inference since it preserves higher-level type info
@@ -209,6 +211,11 @@ fn generate_defun(ctx: &mut CodegenContext, defun: &Defun) -> Result<lir::Functi
         .map(|t| liar_type_to_return(&t.node))
         .unwrap_or_else(|| infer_liar_expr_type(ctx, &defun.body.node));
 
+    // Helper to check if an expression is a tail call (which is already a terminator)
+    fn is_tailcall(expr: &lir::Expr) -> bool {
+        matches!(expr, lir::Expr::TailCall { .. })
+    }
+
     // Check if any blocks were emitted (from if expressions)
     if ctx.has_blocks() {
         // Multi-block function: collect blocks and add final block with return
@@ -218,12 +225,21 @@ fn generate_defun(ctx: &mut CodegenContext, defun: &Defun) -> Result<lir::Functi
         let pending_phis = ctx.take_pending_phis();
 
         // Wrap the return with any pending phis
+        // Note: TailCall is a terminator, so don't wrap it in Ret
         let final_instr = if pending_phis.is_empty() {
-            lir::Expr::Ret(Some(Box::new(body_expr)))
+            if is_tailcall(&body_expr) {
+                body_expr
+            } else {
+                lir::Expr::Ret(Some(Box::new(body_expr)))
+            }
         } else {
             lir::Expr::Let {
                 bindings: pending_phis,
-                body: vec![lir::Expr::Ret(Some(Box::new(body_expr)))],
+                body: vec![if is_tailcall(&body_expr) {
+                    body_expr
+                } else {
+                    lir::Expr::Ret(Some(Box::new(body_expr)))
+                }],
             }
         };
 
@@ -242,7 +258,12 @@ fn generate_defun(ctx: &mut CodegenContext, defun: &Defun) -> Result<lir::Functi
         })
     } else {
         // Single-block function (no if expressions)
-        let ret_instr = lir::Expr::Ret(Some(Box::new(body_expr)));
+        // TailCall is a terminator, so don't wrap it in Ret
+        let ret_instr = if is_tailcall(&body_expr) {
+            body_expr
+        } else {
+            lir::Expr::Ret(Some(Box::new(body_expr)))
+        };
         let entry_block = lir::BasicBlock {
             label: "entry".to_string(),
             instructions: vec![ret_instr],
