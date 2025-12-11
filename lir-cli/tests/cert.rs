@@ -451,6 +451,26 @@ async fn then_parsing_succeeds(world: &mut LirWorld) {
     }
 }
 
+#[then("compilation succeeds")]
+async fn then_compilation_succeeds(world: &mut LirWorld) {
+    // Parse the expression as a function
+    let func = match try_parse_function(&world.expression) {
+        Some(f) => f,
+        None => panic!("PENDING: expected function definition for compilation check"),
+    };
+
+    // Create codegen context and try to compile
+    let context = Context::create();
+    let codegen = CodeGen::new(&context, "lir_test");
+
+    // Declare and compile the function
+    codegen.declare_function(&func);
+    match codegen.compile_function(&func) {
+        Ok(_) => {} // Success
+        Err(e) => panic!("Compilation failed: {:?}", e),
+    }
+}
+
 #[given(regex = r"^the struct definition (.+)$")]
 async fn given_struct_definition(world: &mut LirWorld, expr: String) {
     if let Some(def) = try_parse_struct(&expr) {

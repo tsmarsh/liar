@@ -199,7 +199,13 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                 let failure_ordering = Self::failure_ordering(ordering);
                 let result = self
                     .builder
-                    .build_cmpxchg(ptr_val, expected_val, new_val, success_ordering, failure_ordering)
+                    .build_cmpxchg(
+                        ptr_val,
+                        expected_val,
+                        new_val,
+                        success_ordering,
+                        failure_ordering,
+                    )
                     .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
                 Ok(result.into())
