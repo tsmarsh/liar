@@ -271,7 +271,20 @@ impl<'ctx> super::CodeGen<'ctx> {
 
             Expr::Ret(val) => {
                 if let Some(val) = val {
-                    let ret_val = self.compile_expr_recursive(val, locals)?;
+                    // Handle phi specially in return position
+                    let ret_val = if let Expr::Phi { ty, incoming } = val.as_ref() {
+                        let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                            CodeGenError::CodeGen("cannot create phi for void type".to_string())
+                        })?;
+                        let phi = self
+                            .builder
+                            .build_phi(llvm_ty, "ret_phi")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                        deferred_phis.push((phi, incoming.clone()));
+                        phi.as_basic_value()
+                    } else {
+                        self.compile_expr_recursive(val, locals)?
+                    };
                     self.builder
                         .build_return(Some(&ret_val))
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
@@ -312,9 +325,22 @@ impl<'ctx> super::CodeGen<'ctx> {
         blocks: &HashMap<String, inkwell::basic_block::BasicBlock<'ctx>>,
         deferred_phis: &mut DeferredPhis<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>> {
-        // Compile bindings
+        // Compile bindings - phi nodes need special handling
         for (name, init) in bindings {
-            let val = self.compile_expr_recursive(init, locals)?;
+            let val = if let Expr::Phi { ty, incoming } = init.as_ref() {
+                // Handle phi specially - create node now, defer incoming edges
+                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                    CodeGenError::CodeGen("cannot create phi for void type".to_string())
+                })?;
+                let phi = self
+                    .builder
+                    .build_phi(llvm_ty, name)
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                deferred_phis.push((phi, incoming.clone()));
+                phi.as_basic_value()
+            } else {
+                self.compile_expr_recursive(init, locals)?
+            };
             locals.insert(name.clone(), val);
         }
 
