@@ -19,6 +19,7 @@ use crate::ast::{Def, Defun, Expr, ExtendProtocol, Item, LetBinding, Param, Prog
 use crate::error::Result;
 use crate::span::{Span, Spanned};
 
+use super::escape::{EscapeInfo, EscapeStatus};
 use super::types::{Capture, CaptureInfo};
 
 /// Counter for generating unique lambda names
@@ -161,7 +162,7 @@ fn find_callable_vars_rec(
                 find_callable_vars_rec(&e.node, var_names, callable);
             }
         }
-        Expr::RcAlloc { fields, .. } => {
+        Expr::HeapEnvAlloc { fields, .. } | Expr::StackEnvAlloc { fields, .. } => {
             for (_, value) in fields {
                 find_callable_vars_rec(&value.node, var_names, callable);
             }
@@ -191,6 +192,8 @@ pub fn reset_lambda_counter() {
 pub struct ClosureConverter {
     /// Capture info from analysis phase
     capture_info: HashMap<Span, CaptureInfo>,
+    /// Escape info from escape analysis phase
+    escape_info: EscapeInfo,
     /// Generated top-level functions (lifted lambdas)
     generated_functions: Vec<Spanned<Item>>,
     /// Generated struct definitions (environment structs)
@@ -200,9 +203,10 @@ pub struct ClosureConverter {
 }
 
 impl ClosureConverter {
-    pub fn new(capture_info: HashMap<Span, CaptureInfo>) -> Self {
+    pub fn new(capture_info: HashMap<Span, CaptureInfo>, escape_info: EscapeInfo) -> Self {
         Self {
             capture_info,
+            escape_info,
             generated_functions: Vec::new(),
             generated_structs: Vec::new(),
             known_functions: HashSet::new(),
@@ -530,7 +534,7 @@ impl ClosureConverter {
                     env: new_env,
                 }
             }
-            Expr::RcAlloc {
+            Expr::HeapEnvAlloc {
                 struct_name,
                 fields,
             } => {
@@ -538,7 +542,20 @@ impl ClosureConverter {
                     .into_iter()
                     .map(|(n, v)| Ok((n, self.convert_expr(v)?)))
                     .collect();
-                Expr::RcAlloc {
+                Expr::HeapEnvAlloc {
+                    struct_name,
+                    fields: new_fields?,
+                }
+            }
+            Expr::StackEnvAlloc {
+                struct_name,
+                fields,
+            } => {
+                let new_fields: Result<Vec<_>> = fields
+                    .into_iter()
+                    .map(|(n, v)| Ok((n, self.convert_expr(v)?)))
+                    .collect();
+                Expr::StackEnvAlloc {
                     struct_name,
                     fields: new_fields?,
                 }
@@ -687,7 +704,7 @@ impl ClosureConverter {
 
         // Create the ClosureLit expression
         let env_expr = if let Some(env_struct_name) = env_struct_name_for_alloc {
-            // Create RcAlloc for the environment
+            // Create env allocation based on escape status
             let env_fields: Vec<(Spanned<String>, Spanned<Expr>)> = capture_info
                 .captures
                 .iter()
@@ -699,13 +716,28 @@ impl ClosureConverter {
                 })
                 .collect();
 
-            Some(Box::new(Spanned::new(
-                Expr::RcAlloc {
+            // Check if this closure escapes - use stack alloc if local, heap alloc if escapes
+            let escapes = self
+                .escape_info
+                .get(&span)
+                .copied()
+                .unwrap_or(EscapeStatus::Escapes); // Conservative default
+
+            let alloc_expr = if escapes == EscapeStatus::Local {
+                // Non-escaping closure - use stack allocation
+                Expr::StackEnvAlloc {
                     struct_name: env_struct_name,
                     fields: env_fields,
-                },
-                span,
-            )))
+                }
+            } else {
+                // Escaping closure - use heap allocation
+                Expr::HeapEnvAlloc {
+                    struct_name: env_struct_name,
+                    fields: env_fields,
+                }
+            };
+
+            Some(Box::new(Spanned::new(alloc_expr, span)))
         } else {
             None
         };
@@ -753,7 +785,11 @@ impl ClosureConverter {
 }
 
 /// Convert all lambdas in a program to lifted functions with explicit environments
-pub fn convert(program: Program, capture_info: HashMap<Span, CaptureInfo>) -> Result<Program> {
-    let converter = ClosureConverter::new(capture_info);
+pub fn convert(
+    program: Program,
+    capture_info: HashMap<Span, CaptureInfo>,
+    escape_info: EscapeInfo,
+) -> Result<Program> {
+    let converter = ClosureConverter::new(capture_info, escape_info);
     converter.convert(program)
 }

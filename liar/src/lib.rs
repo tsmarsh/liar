@@ -59,9 +59,13 @@ pub fn compile(source: &str) -> std::result::Result<String, Vec<CompileError>> {
     // Closure analysis - get capture info for each lambda
     let capture_info = closures::analyze(&program).map_err(|e| vec![e])?;
 
+    // Escape analysis - determine which closures can use stack allocation
+    let escape_info = closures::EscapeAnalyzer::new().analyze(&program);
+
     // Closure conversion - transform lambdas into lifted functions
     // Lambdas become ClosureLit nodes with explicit environment structs
-    let program = closures::convert(program, capture_info).map_err(|e| vec![e])?;
+    // Non-escaping closures use stack allocation, escaping closures use heap
+    let program = closures::convert(program, capture_info, escape_info).map_err(|e| vec![e])?;
 
     // Code generation
     codegen::generate_string(&program).map_err(|e| vec![e])

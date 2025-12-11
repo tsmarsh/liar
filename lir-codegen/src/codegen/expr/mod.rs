@@ -182,6 +182,20 @@ impl<'ctx> super::CodeGen<'ctx> {
                 Ok(rc_ptr.into())
             }
 
+            // Memory deallocation
+            Expr::Free { ptr } => {
+                let ptr_val = self
+                    .compile_expr_recursive(ptr, locals)?
+                    .into_pointer_value();
+                let free_fn = self.get_or_declare_free()?;
+                self.builder
+                    .build_call(free_fn, &[ptr_val.into()], "")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                // Free returns void, return null pointer as unit value
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().into())
+            }
+
             // Ownership operations
             Expr::AllocOwn { elem_type } => {
                 // Allocate memory for an owned value

@@ -546,6 +546,11 @@ pub enum Expr {
         value: Box<Expr>,
     },
 
+    // (free ptr) - deallocate heap memory (calls libc free)
+    Free {
+        ptr: Box<Expr>,
+    },
+
     // Atomic memory operations
     // (atomic-load ordering type ptr) - atomic load
     AtomicLoad {

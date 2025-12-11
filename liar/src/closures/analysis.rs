@@ -302,7 +302,7 @@ impl ClosureAnalyzer {
                     self.analyze_expr(e);
                 }
             }
-            Expr::RcAlloc { fields, .. } => {
+            Expr::HeapEnvAlloc { fields, .. } | Expr::StackEnvAlloc { fields, .. } => {
                 for (_, value) in fields {
                     self.analyze_expr(value);
                 }
@@ -585,7 +585,7 @@ impl ClosureAnalyzer {
                     self.find_free_vars_lambda_inner(e, local, free);
                 }
             }
-            Expr::RcAlloc { fields, .. } => {
+            Expr::HeapEnvAlloc { fields, .. } | Expr::StackEnvAlloc { fields, .. } => {
                 for (_, value) in fields {
                     self.find_free_vars_lambda_inner(value, local, free);
                 }

@@ -28,6 +28,45 @@ pub fn generate_if(
     })
 }
 
+/// Check if an expression is a ClosureLit with a heap-allocated environment
+fn has_heap_env(expr: &Expr) -> bool {
+    matches!(expr, Expr::ClosureLit { env: Some(_), .. })
+}
+
+/// Generate cleanup code for bindings with heap-allocated closure environments
+fn generate_cleanup(bindings_needing_cleanup: &[String]) -> lir::Expr {
+    // For each closure that needs cleanup, extract env_ptr (field 1) and free it
+    // We need to be careful: env_ptr might be null (for closures without captures)
+    // So we extract and free unconditionally - free(null) is safe
+    let mut cleanup_lets: Vec<(String, Box<lir::Expr>)> = Vec::new();
+
+    for (i, binding_name) in bindings_needing_cleanup.iter().enumerate() {
+        // Extract env_ptr from closure struct (field 1)
+        let env_ptr_name = format!("__cleanup_env_{}", i);
+        let extract_env = lir::Expr::ExtractValue {
+            aggregate: Box::new(lir::Expr::LocalRef(binding_name.clone())),
+            indices: vec![1], // env_ptr is field 1
+        };
+        cleanup_lets.push((env_ptr_name.clone(), Box::new(extract_env)));
+
+        // Free the env_ptr
+        let free_name = format!("__cleanup_free_{}", i);
+        let free_call = lir::Expr::Free {
+            ptr: Box::new(lir::Expr::LocalRef(env_ptr_name)),
+        };
+        cleanup_lets.push((free_name, Box::new(free_call)));
+    }
+
+    // Return unit (0) after cleanup
+    lir::Expr::Let {
+        bindings: cleanup_lets,
+        body: vec![lir::Expr::IntLit {
+            ty: lir::ScalarType::I64,
+            value: 0,
+        }],
+    }
+}
+
 /// Generate code for let bindings
 pub fn generate_let(
     ctx: &mut CodegenContext,
@@ -35,16 +74,35 @@ pub fn generate_let(
     body: &Spanned<Expr>,
 ) -> Result<lir::Expr> {
     // First pass: register struct types for bindings that are struct constructor calls
+    // Also track which bindings have heap-allocated closure environments
+    let mut bindings_needing_cleanup: Vec<String> = Vec::new();
+
     for binding in bindings.iter() {
         if let Some(struct_name) = is_struct_constructor_call(ctx, &binding.value.node) {
             ctx.register_var_struct_type(&binding.name.node, &struct_name);
+        }
+        if has_heap_env(&binding.value.node) {
+            bindings_needing_cleanup.push(binding.name.node.clone());
         }
     }
 
     let body_expr = generate_expr(ctx, body)?;
 
+    // If there are bindings needing cleanup, wrap the body to save result and cleanup
+    let result_with_cleanup = if bindings_needing_cleanup.is_empty() {
+        body_expr
+    } else {
+        // Save body result, run cleanup, return saved result
+        let result_var = ctx.fresh_var("let_result");
+        let cleanup = generate_cleanup(&bindings_needing_cleanup);
+        lir::Expr::Let {
+            bindings: vec![(result_var.clone(), Box::new(body_expr))],
+            body: vec![cleanup, lir::Expr::LocalRef(result_var)],
+        }
+    };
+
     // Build let chain from inside out
-    let mut result = body_expr;
+    let mut result = result_with_cleanup;
     for binding in bindings.iter().rev() {
         let value = generate_expr(ctx, &binding.value)?;
         result = lir::Expr::Let {
@@ -62,14 +120,34 @@ pub fn generate_plet(
     body: &Spanned<Expr>,
 ) -> Result<lir::Expr> {
     // First pass: register struct types for bindings that are struct constructor calls
+    // Also track which bindings have heap-allocated closure environments
+    let mut bindings_needing_cleanup: Vec<String> = Vec::new();
+
     for binding in bindings.iter() {
         if let Some(struct_name) = is_struct_constructor_call(ctx, &binding.value.node) {
             ctx.register_var_struct_type(&binding.name.node, &struct_name);
         }
+        if has_heap_env(&binding.value.node) {
+            bindings_needing_cleanup.push(binding.name.node.clone());
+        }
     }
 
     let body_expr = generate_expr(ctx, body)?;
-    let mut result = body_expr;
+
+    // If there are bindings needing cleanup, wrap the body to save result and cleanup
+    let result_with_cleanup = if bindings_needing_cleanup.is_empty() {
+        body_expr
+    } else {
+        // Save body result, run cleanup, return saved result
+        let result_var = ctx.fresh_var("plet_result");
+        let cleanup = generate_cleanup(&bindings_needing_cleanup);
+        lir::Expr::Let {
+            bindings: vec![(result_var.clone(), Box::new(body_expr))],
+            body: vec![cleanup, lir::Expr::LocalRef(result_var)],
+        }
+    };
+
+    let mut result = result_with_cleanup;
     for binding in bindings.iter().rev() {
         let value = generate_expr(ctx, &binding.value)?;
         result = lir::Expr::Let {

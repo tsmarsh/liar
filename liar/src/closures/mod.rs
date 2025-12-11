@@ -26,6 +26,7 @@
 
 mod analysis;
 mod conversion;
+mod escape;
 mod safety;
 mod types;
 
@@ -34,6 +35,9 @@ pub use types::{Capture, CaptureInfo, CaptureMode, ClosureColor};
 
 // Re-export the main analysis function
 pub use analysis::{analyze, ClosureAnalyzer};
+
+// Re-export escape analysis
+pub use escape::{EscapeAnalyzer, EscapeInfo, EscapeStatus};
 
 // Re-export safety checker
 pub use safety::ThreadSafetyChecker;
@@ -389,7 +393,8 @@ mod tests {
         let mut parser = Parser::new(source).expect("lexer failed");
         let program = parser.parse_program().expect("parser failed");
         let capture_info = ClosureAnalyzer::new().analyze(&program).unwrap();
-        ClosureConverter::new(capture_info)
+        let escape_info = EscapeAnalyzer::new().analyze(&program);
+        ClosureConverter::new(capture_info, escape_info)
             .convert(program)
             .expect("conversion failed")
     }
@@ -437,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_convert_lambda_with_capture() {
-        // A lambda with captures should generate an env struct and ClosureLit with RcAlloc
+        // A lambda with captures should generate an env struct and ClosureLit with HeapEnvAlloc
         let program = convert_source(
             r#"
             (defun constantly (v)

@@ -768,6 +768,17 @@ impl TypeChecker {
                 Ok(Type::Ptr)
             }
 
+            // Memory deallocation
+            Expr::Free { ptr } => {
+                // Check ptr is a pointer
+                let ptr_ty = self.check(ptr)?;
+                if !ptr_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Free returns void
+                Ok(Type::Scalar(ScalarType::Void))
+            }
+
             // Atomic memory operations
             Expr::AtomicLoad { ty, ptr, .. } => {
                 // Pointer must be a pointer type

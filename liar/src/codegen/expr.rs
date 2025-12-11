@@ -13,7 +13,8 @@ use super::atoms::{
 };
 use super::builtins::generate_builtin;
 use super::closures_codegen::{
-    generate_closure_call, generate_closure_call_expr, generate_closure_lit, generate_rc_alloc,
+    generate_closure_call, generate_closure_call_expr, generate_closure_lit,
+    generate_heap_env_alloc, generate_stack_env_alloc,
 };
 use super::collections::{
     generate_alter, generate_async, generate_await, generate_boxed, generate_byte_array,
@@ -137,10 +138,14 @@ pub fn generate_expr(ctx: &mut CodegenContext, expr: &Spanned<Expr>) -> Result<l
 
         // Closure conversion output
         Expr::ClosureLit { fn_name, env } => generate_closure_lit(ctx, fn_name, env),
-        Expr::RcAlloc {
+        Expr::HeapEnvAlloc {
             struct_name,
             fields,
-        } => generate_rc_alloc(ctx, struct_name, fields),
+        } => generate_heap_env_alloc(ctx, struct_name, fields),
+        Expr::StackEnvAlloc {
+            struct_name,
+            fields,
+        } => generate_stack_env_alloc(ctx, struct_name, fields),
     }
 }
 

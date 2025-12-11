@@ -271,7 +271,7 @@ impl Expander {
                     self.expand_expr(e)?;
                 }
             }
-            Expr::RcAlloc { fields, .. } => {
+            Expr::HeapEnvAlloc { fields, .. } | Expr::StackEnvAlloc { fields, .. } => {
                 for (_, value) in fields {
                     self.expand_expr(value)?;
                 }
@@ -663,7 +663,7 @@ impl Expander {
                     expr.span,
                 ))
             }
-            Expr::RcAlloc {
+            Expr::HeapEnvAlloc {
                 struct_name,
                 fields,
             } => {
@@ -674,7 +674,25 @@ impl Expander {
                     })
                     .collect();
                 Ok(Spanned::new(
-                    Expr::RcAlloc {
+                    Expr::HeapEnvAlloc {
+                        struct_name: struct_name.clone(),
+                        fields: new_fields?,
+                    },
+                    expr.span,
+                ))
+            }
+            Expr::StackEnvAlloc {
+                struct_name,
+                fields,
+            } => {
+                let new_fields: Result<Vec<_>> = fields
+                    .iter()
+                    .map(|(name, value)| {
+                        Ok((name.clone(), self.substitute(value, env, call_span)?))
+                    })
+                    .collect();
+                Ok(Spanned::new(
+                    Expr::StackEnvAlloc {
                         struct_name: struct_name.clone(),
                         fields: new_fields?,
                     },

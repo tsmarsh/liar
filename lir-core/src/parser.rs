@@ -313,6 +313,9 @@ impl<'a> Parser<'a> {
             "rc-count" => self.parse_rc_count(),
             "rc-ptr" => self.parse_rc_ptr(),
 
+            // Memory deallocation
+            "free" => self.parse_free(),
+
             // Atomic memory operations
             "atomic-load" => self.parse_atomic_load(),
             "atomic-store" => self.parse_atomic_store(),
@@ -1014,6 +1017,12 @@ impl<'a> Parser<'a> {
         Ok(Expr::RcPtr {
             value: Box::new(value),
         })
+    }
+
+    /// Parse free: (free ptr)
+    fn parse_free(&mut self) -> Result<Expr, ParseError> {
+        let ptr = self.parse_expr()?;
+        Ok(Expr::Free { ptr: Box::new(ptr) })
     }
 
     /// Parse memory ordering for atomic operations

@@ -374,6 +374,11 @@ impl BorrowChecker {
                 self.check_expr(value);
             }
 
+            // Memory deallocation
+            Expr::Free { ptr } => {
+                self.check_expr(ptr);
+            }
+
             // Atomic memory operations - check pointer expression
             Expr::AtomicLoad { ptr, .. } => {
                 self.check_expr(ptr);

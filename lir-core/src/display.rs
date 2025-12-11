@@ -234,6 +234,9 @@ impl Display for Expr {
             Expr::RcCount { value } => write!(f, "(rc-count {})", value),
             Expr::RcPtr { value } => write!(f, "(rc-ptr {})", value),
 
+            // Memory deallocation
+            Expr::Free { ptr } => write!(f, "(free {})", ptr),
+
             // Atomic operations
             Expr::AtomicLoad { ordering, ty, ptr } => {
                 write!(f, "(atomic-load {} {} {})", ordering, ty, ptr)

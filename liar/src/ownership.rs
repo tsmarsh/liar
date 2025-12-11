@@ -748,7 +748,7 @@ impl BorrowChecker {
                     self.check_expr(e);
                 }
             }
-            Expr::RcAlloc { fields, .. } => {
+            Expr::HeapEnvAlloc { fields, .. } | Expr::StackEnvAlloc { fields, .. } => {
                 for (_, value) in fields {
                     self.check_expr(value);
                 }

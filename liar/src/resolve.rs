@@ -497,7 +497,7 @@ impl Resolver {
                     self.resolve_expr(e);
                 }
             }
-            Expr::RcAlloc { fields, .. } => {
+            Expr::HeapEnvAlloc { fields, .. } | Expr::StackEnvAlloc { fields, .. } => {
                 for (_, value) in fields {
                     self.resolve_expr(value);
                 }

@@ -36,8 +36,8 @@ pub fn generate_closure_lit(
     }
 }
 
-/// Generate code for heap allocation (RcAlloc)
-pub fn generate_rc_alloc(
+/// Generate code for heap allocation of closure environment
+pub fn generate_heap_env_alloc(
     ctx: &mut CodegenContext,
     struct_name: &str,
     fields: &[(Spanned<String>, Spanned<Expr>)],
@@ -77,6 +77,68 @@ pub fn generate_rc_alloc(
 
     // Store field values into the struct
     let mut stores = vec![(env_alloc_name.clone(), Box::new(malloc_call))];
+    for (idx, (_, value)) in fields.iter().enumerate() {
+        let gep = lir::Expr::GetElementPtr {
+            ty: lir::GepType::Struct(struct_name.to_string()),
+            ptr: Box::new(lir::Expr::LocalRef(env_alloc_name.clone())),
+            indices: vec![
+                lir::Expr::IntLit {
+                    ty: lir::ScalarType::I64,
+                    value: 0,
+                },
+                lir::Expr::IntLit {
+                    ty: lir::ScalarType::I32,
+                    value: idx as i128,
+                },
+            ],
+            inbounds: true,
+        };
+        let store = lir::Expr::Store {
+            value: Box::new(generate_expr(ctx, value)?),
+            ptr: Box::new(gep),
+        };
+        stores.push((format!("_store{}", idx), Box::new(store)));
+    }
+
+    // Return the pointer to the allocated struct
+    Ok(lir::Expr::Let {
+        bindings: stores,
+        body: vec![lir::Expr::LocalRef(env_alloc_name)],
+    })
+}
+
+/// Generate code for stack allocation of closure environment (non-escaping closures)
+pub fn generate_stack_env_alloc(
+    ctx: &mut CodegenContext,
+    struct_name: &str,
+    fields: &[(Spanned<String>, Spanned<Expr>)],
+) -> Result<lir::Expr> {
+    // Stack-allocate environment struct using alloca and store field values
+    let env_alloc_name = ctx.fresh_var("stack_env");
+
+    // Calculate number of fields (each field is a pointer = 8 bytes)
+    let num_fields = if let Some(struct_info) = ctx.lookup_struct(struct_name) {
+        struct_info.fields.len()
+    } else {
+        fields.len()
+    };
+
+    // Use alloca to allocate space on the stack
+    // We allocate an array of pointers (ptr type)
+    let alloca_expr = lir::Expr::Alloca {
+        ty: lir::ParamType::Ptr,
+        count: if num_fields > 1 {
+            Some(Box::new(lir::Expr::IntLit {
+                ty: lir::ScalarType::I64,
+                value: num_fields as i128,
+            }))
+        } else {
+            None
+        },
+    };
+
+    // Store field values into the struct
+    let mut stores = vec![(env_alloc_name.clone(), Box::new(alloca_expr))];
     for (idx, (_, value)) in fields.iter().enumerate() {
         let gep = lir::Expr::GetElementPtr {
             ty: lir::GepType::Struct(struct_name.to_string()),
