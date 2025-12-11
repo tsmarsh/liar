@@ -23,15 +23,27 @@ pub fn generate_defstruct(defstruct: &Defstruct) -> Result<lir::StructDef> {
 }
 
 /// Check if an expression is a struct constructor call and return the struct name if so
+/// Also handles wrapped constructors like (share (Point 1 2))
 pub fn is_struct_constructor_call(ctx: &CodegenContext, expr: &Expr) -> Option<String> {
-    if let Expr::Call(func, _args) = expr {
-        if let Expr::Var(name) = &func.node {
-            if ctx.lookup_struct(name).is_some() {
-                return Some(name.clone());
+    match expr {
+        // Direct struct constructor: (Point 1 2)
+        Expr::Call(func, _args) => {
+            if let Expr::Var(name) = &func.node {
+                // Check if it's a struct constructor
+                if ctx.lookup_struct(name).is_some() {
+                    return Some(name.clone());
+                }
+                // Check if it's share/clone wrapping a struct constructor
+                if name == "share" || name == "clone" || name == "rc-new" {
+                    if let Some(inner) = _args.first() {
+                        return is_struct_constructor_call(ctx, &inner.node);
+                    }
+                }
             }
+            None
         }
+        _ => None,
     }
-    None
 }
 
 /// Generate code for struct constructor: (Point 10 20)

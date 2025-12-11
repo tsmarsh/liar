@@ -71,12 +71,62 @@ pub struct Resolver {
 /// List of builtin functions that are always in scope
 const BUILTINS: &[&str] = &[
     // Arithmetic
-    "+", "-", "*", "/", "rem", // Comparison
-    "=", "!=", "<", ">", "<=", ">=", // Boolean
-    "not", "and", "or", // I/O
-    "print", "println", // List operations
-    "cons", "car", "cdr", "list", "nil?", "empty?", // Type conversions
-    "int", "float", "string",
+    "+",
+    "-",
+    "*",
+    "/",
+    "rem",
+    // Comparison
+    "=",
+    "==",
+    "!=",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    // Boolean
+    "not",
+    "and",
+    "or",
+    // Bitwise operations
+    "bit-and",
+    "bit-or",
+    "bit-xor",
+    "bit-not",
+    "bit-shift-left",
+    "bit-shift-right",
+    "shl",
+    "shr",
+    "arithmetic-shift-right",
+    "ashr",
+    "popcount",
+    // Ownership/memory
+    "alloc",
+    "drop",
+    "move",
+    "share",
+    "clone",
+    "rc-new",
+    "rc-clone",
+    "rc-drop",
+    // Arrays
+    "array",
+    "make-array",
+    "array-get",
+    "aget",
+    "array-set",
+    "aset",
+    "array-len",
+    "alen",
+    // I/O (not yet implemented but reserved)
+    "print",
+    "println",
+    // Type conversions (reserved)
+    "int",
+    "float",
+    "string",
+    // Nil check
+    "nil?",
 ];
 
 impl Resolver {

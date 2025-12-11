@@ -343,6 +343,17 @@ pub fn generate_builtin(
         }
         "array-len" | "alen" => Some(lir::Expr::ArrayLen { size: 0 }),
 
+        // Nil check - compares pointer to null
+        "nil?" => {
+            check_unary(expr, "nil?", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            Some(lir::Expr::ICmp {
+                pred: lir::ICmpPred::Eq,
+                lhs: Box::new(a),
+                rhs: Box::new(lir::Expr::NullPtr),
+            })
+        }
+
         _ => None,
     };
 

@@ -41,6 +41,23 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                         .build_int_compare(llvm_pred, l, r, "vicmp")
                         .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
                         .into()),
+                    (BasicValueEnum::PointerValue(l), BasicValueEnum::PointerValue(r)) => {
+                        // Convert pointers to integers for comparison
+                        let ptr_ty = self.context.i64_type();
+                        let l_int = self
+                            .builder
+                            .build_ptr_to_int(l, ptr_ty, "ptr_to_int_l")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                        let r_int = self
+                            .builder
+                            .build_ptr_to_int(r, ptr_ty, "ptr_to_int_r")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+                        Ok(self
+                            .builder
+                            .build_int_compare(llvm_pred, l_int, r_int, "ptricmp")
+                            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                            .into())
+                    }
                     _ => Err(CodeGenError::CodeGen("type mismatch in icmp".to_string())),
                 }
             }
