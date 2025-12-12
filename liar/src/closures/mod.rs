@@ -536,4 +536,37 @@ mod tests {
         // Should have __env param (captures f, g) plus x
         assert!(!lambda.params.is_empty(), "Lambda should have params");
     }
+
+    #[test]
+    fn test_main_no_env_param() {
+        // Entry point 'main' should NOT get __env parameter
+        let program = convert_source(
+            r#"
+            (defun main () 42)
+            "#,
+        );
+
+        let main = find_defun(&program, "main").expect("Should have main function");
+        // main should have 0 params (no __env for entry points)
+        assert_eq!(
+            main.params.len(),
+            0,
+            "main should have no params (entry point)"
+        );
+    }
+
+    #[test]
+    fn test_non_main_gets_env_param() {
+        // Regular functions should still get __env parameter
+        let program = convert_source(
+            r#"
+            (defun foo () 42)
+            "#,
+        );
+
+        let foo = find_defun(&program, "foo").expect("Should have foo function");
+        // foo should have 1 param (__env)
+        assert_eq!(foo.params.len(), 1, "foo should have __env param");
+        assert_eq!(foo.params[0].name.node, "__env");
+    }
 }

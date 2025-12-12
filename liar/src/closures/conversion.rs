@@ -292,6 +292,11 @@ impl ClosureConverter {
         Ok(Spanned::new(node, span))
     }
 
+    /// Check if a function is an entry point (called by external code, not liar)
+    fn is_entry_point(name: &str) -> bool {
+        name == "main" || name.starts_with("__repl_eval_")
+    }
+
     fn convert_defun(&mut self, defun: Defun) -> Result<Defun> {
         // Track the enclosing function for scoped type lookups
         let prev_function = self.current_function.take();
@@ -302,17 +307,6 @@ impl ClosureConverter {
         let param_names: HashSet<String> =
             defun.params.iter().map(|p| p.name.node.clone()).collect();
         let callable_params = find_callable_vars(&defun.body.node, &param_names);
-
-        // Add __env as first parameter (uniform calling convention)
-        // All functions take an env parameter, even if they don't use it
-        let env_param = Param {
-            name: Spanned::new("__env".to_string(), defun.name.span),
-            ty: Some(Spanned::new(
-                crate::ast::Type::Named("ptr".to_string()),
-                defun.name.span,
-            )),
-            mutable: false,
-        };
 
         // Update parameter types for callable params that don't have explicit types
         let user_params: Vec<Param> = defun
@@ -332,9 +326,24 @@ impl ClosureConverter {
             })
             .collect();
 
-        // Combine: __env first, then user params
-        let mut new_params = vec![env_param];
-        new_params.extend(user_params);
+        // Entry points (main, __repl_eval_*) don't get __env parameter - they're called
+        // by external code (OS, JIT) that doesn't know about our calling convention.
+        // Regular functions get __env as first parameter for uniform closure support.
+        let new_params = if Self::is_entry_point(&defun.name.node) {
+            user_params
+        } else {
+            let env_param = Param {
+                name: Spanned::new("__env".to_string(), defun.name.span),
+                ty: Some(Spanned::new(
+                    crate::ast::Type::Named("ptr".to_string()),
+                    defun.name.span,
+                )),
+                mutable: false,
+            };
+            let mut params = vec![env_param];
+            params.extend(user_params);
+            params
+        };
 
         // Convert the body, which may contain lambdas
         let new_body = self.convert_expr(defun.body)?;
