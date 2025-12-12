@@ -299,6 +299,8 @@ impl<'a> Parser<'a> {
             "array-set" => self.parse_array_set(),
             "array-len" => self.parse_array_len(),
             "array-ptr" => self.parse_array_ptr(),
+            "heap-array" => self.parse_heap_array(),
+            "array-copy" => self.parse_array_copy(),
 
             // Ownership operations
             "alloc" => self.parse_alloc_own(),
@@ -896,6 +898,75 @@ impl<'a> Parser<'a> {
 
         Ok(Expr::ArrayPtr {
             array: Box::new(array),
+        })
+    }
+
+    /// Parse heap-array: (heap-array type size)
+    /// Example: (heap-array i64 32)
+    fn parse_heap_array(&mut self) -> Result<Expr, ParseError> {
+        // Parse element type
+        let elem_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "element type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse size
+        let size = match self.lexer.next_token_peeked()? {
+            Some(Token::Integer(n)) => n as u32,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "array size (integer)".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        Ok(Expr::HeapArray { elem_type, size })
+    }
+
+    /// Parse array-copy: (array-copy type size dest src)
+    /// Example: (array-copy i64 32 new_arr old_arr)
+    fn parse_array_copy(&mut self) -> Result<Expr, ParseError> {
+        // Parse element type
+        let elem_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "element type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse size
+        let size = match self.lexer.next_token_peeked()? {
+            Some(Token::Integer(n)) => n as u32,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "array size (integer)".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse dest and src expressions
+        let dest = self.parse_expr()?;
+        let src = self.parse_expr()?;
+
+        Ok(Expr::ArrayCopy {
+            elem_type,
+            size,
+            dest: Box::new(dest),
+            src: Box::new(src),
         })
     }
 

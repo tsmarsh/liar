@@ -259,6 +259,13 @@ impl<'ctx> super::CodeGen<'ctx> {
                     .const_int(*size as u64, false)
                     .into())
             }
+            Expr::HeapArray { elem_type, size } => self.compile_heap_array(elem_type, *size),
+            Expr::ArrayCopy {
+                elem_type,
+                size,
+                dest,
+                src,
+            } => self.compile_array_copy(elem_type, *size, dest, src, locals),
 
             // Struct operations
             Expr::StructLit(fields) => self.compile_struct_lit(fields, locals),
@@ -527,6 +534,75 @@ impl<'ctx> super::CodeGen<'ctx> {
 
         // Return dummy value
         Ok(self.context.i32_type().const_zero().into())
+    }
+
+    /// Compile heap array allocation via malloc
+    fn compile_heap_array(
+        &self,
+        elem_type: &ScalarType,
+        size: u32,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let llvm_ty = self.int_type(elem_type);
+        let elem_size = llvm_ty.size_of();
+        let total_size = self.context.i64_type().const_int(size as u64, false);
+        let byte_size = self
+            .builder
+            .build_int_mul(elem_size, total_size, "bytesize")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Call malloc
+        let malloc_fn = self.module.get_function("malloc").unwrap_or_else(|| {
+            let fn_type = self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .fn_type(&[self.context.i64_type().into()], false);
+            self.module.add_function("malloc", fn_type, None)
+        });
+
+        let call_site = self
+            .builder
+            .build_call(malloc_fn, &[byte_size.into()], "heaparray")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        let ptr = call_site
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| CodeGenError::CodeGen("malloc returned void".to_string()))?;
+
+        Ok(ptr)
+    }
+
+    /// Compile array copy via memcpy
+    fn compile_array_copy(
+        &self,
+        elem_type: &ScalarType,
+        size: u32,
+        dest: &Expr,
+        src: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let dest_ptr = self
+            .compile_expr_recursive(dest, locals)?
+            .into_pointer_value();
+        let src_ptr = self
+            .compile_expr_recursive(src, locals)?
+            .into_pointer_value();
+
+        let llvm_ty = self.int_type(elem_type);
+        let elem_size = llvm_ty.size_of();
+        let count = self.context.i64_type().const_int(size as u64, false);
+        let byte_size = self
+            .builder
+            .build_int_mul(elem_size, count, "copysize")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Use LLVM's memcpy intrinsic
+        self.builder
+            .build_memcpy(dest_ptr, 8, src_ptr, 8, byte_size)
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Return dest pointer
+        Ok(dest_ptr.into())
     }
 
     /// Compile struct literal

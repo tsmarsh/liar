@@ -226,6 +226,15 @@ impl Display for Expr {
             ),
             Expr::ArrayLen { size } => write!(f, "(array-len {})", size),
             Expr::ArrayPtr { array } => write!(f, "(array-ptr {})", array),
+            Expr::HeapArray { elem_type, size } => {
+                write!(f, "(heap-array {} {})", elem_type, size)
+            }
+            Expr::ArrayCopy {
+                elem_type,
+                size,
+                dest,
+                src,
+            } => write!(f, "(array-copy {} {} {} {})", elem_type, size, dest, src),
 
             // Heap-allocated struct with ownership
             Expr::HeapStruct {

@@ -480,6 +480,57 @@ pub fn generate_builtin(
         }
         "array-len" | "alen" => Some(lir::Expr::ArrayLen { size: 0 }),
 
+        // Heap array allocation
+        "heap-array" => {
+            check_unary(expr, "heap-array", args)?;
+            let size = match &args[0].node {
+                Expr::Int(n) => *n as u32,
+                _ => 0, // Dynamic size placeholder
+            };
+            Some(lir::Expr::HeapArray {
+                elem_type: lir::ScalarType::I64,
+                size,
+            })
+        }
+
+        // Array copy (for persistent data structures)
+        "array-copy" => {
+            if args.len() != 3 {
+                return Err(CompileError::codegen(
+                    expr.span,
+                    "array-copy requires 3 arguments (size, dest, src)",
+                ));
+            }
+            let size = match &args[0].node {
+                Expr::Int(n) => *n as u32,
+                _ => 0,
+            };
+            let dest = generate_expr(ctx, &args[1])?;
+            let src = generate_expr(ctx, &args[2])?;
+            Some(lir::Expr::ArrayCopy {
+                elem_type: lir::ScalarType::I64,
+                size,
+                dest: Box::new(dest),
+                src: Box::new(src),
+            })
+        }
+
+        // Note: array-of and array-set-copy should be implemented in liar
+        // using heap-array and array-copy primitives. Example:
+        //
+        // (defun array-of-3 (a b c)
+        //   (let ((arr (heap-array 3)))
+        //     (aset arr 0 a)
+        //     (aset arr 1 b)
+        //     (aset arr 2 c)
+        //     arr))
+        //
+        // (defun array-set-copy (size src idx val)
+        //   (let ((new (heap-array size)))
+        //     (array-copy size new src)
+        //     (aset new idx val)
+        //     new))
+
         // Nil check - compares pointer to null
         "nil?" => {
             check_unary(expr, "nil?", args)?;

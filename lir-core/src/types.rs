@@ -604,6 +604,20 @@ impl TypeChecker {
                 // Returns a pointer
                 Ok(Type::Ptr)
             }
+            Expr::HeapArray { .. } => {
+                // HeapArray returns a pointer to the heap-allocated array
+                Ok(Type::Ptr)
+            }
+            Expr::ArrayCopy { dest, src, .. } => {
+                // Check both dest and src are pointers
+                let dest_ty = self.check(dest)?;
+                let src_ty = self.check(src)?;
+                if !dest_ty.is_pointer() || !src_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Returns the dest pointer
+                Ok(Type::Ptr)
+            }
 
             // Struct literal
             Expr::StructLit(fields) => {

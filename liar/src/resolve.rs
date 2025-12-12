@@ -142,6 +142,9 @@ const BUILTINS: &[&str] = &[
     "aset",
     "array-len",
     "alen",
+    // Heap arrays for persistent data structures
+    "heap-array",
+    "array-copy",
     // I/O (not yet implemented but reserved)
     "print",
     "println",

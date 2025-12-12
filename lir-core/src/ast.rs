@@ -523,6 +523,18 @@ pub enum Expr {
     ArrayPtr {
         array: Box<Expr>,
     },
+    // (heap-array type size) - allocate array on heap via malloc
+    HeapArray {
+        elem_type: ScalarType,
+        size: u32,
+    },
+    // (array-copy type size dest src) - copy src array to dest (memcpy)
+    ArrayCopy {
+        elem_type: ScalarType,
+        size: u32,
+        dest: Box<Expr>,
+        src: Box<Expr>,
+    },
 
     // Heap-allocated struct with ownership semantics
     // (heap-struct StructName field1 field2 ...) - allocate struct on heap, return owned ptr

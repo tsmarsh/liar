@@ -34,3 +34,27 @@ Feature: Bounds-Checked Arrays
     Given the expression (define (test-i32-array i32) () (block entry (let ((arr (array-alloc i32 5))) (array-set i32 5 arr (i64 2) (i32 123)) (ret (array-get i32 5 arr (i64 2))))))
     When I call test-i32-array
     Then the result is (i32 123)
+
+  # Heap-allocated arrays
+
+  Scenario: Heap array allocation
+    Given the expression (define (test-heap-array i64) () (block entry (let ((arr (heap-array i64 10))) (store (i64 42) arr) (ret (load i64 arr)))))
+    When I call test-heap-array
+    Then the result is (i64 42)
+
+  Scenario: Heap array with indexed access
+    Given the expression (define (test-heap-indexed i64) () (block entry (let ((arr (heap-array i64 5))) (store (i64 99) (getelementptr i64 arr (i64 3))) (ret (load i64 (getelementptr i64 arr (i64 3)))))))
+    When I call test-heap-indexed
+    Then the result is (i64 99)
+
+  # Array copy
+
+  Scenario: Array copy between heap arrays
+    Given the expression (define (test-array-copy i64) () (block entry (let ((src (heap-array i64 3)) (dest (heap-array i64 3))) (store (i64 111) src) (store (i64 222) (getelementptr i64 src (i64 1))) (store (i64 333) (getelementptr i64 src (i64 2))) (array-copy i64 3 dest src) (ret (add (load i64 dest) (add (load i64 (getelementptr i64 dest (i64 1))) (load i64 (getelementptr i64 dest (i64 2)))))))))
+    When I call test-array-copy
+    Then the result is (i64 666)
+
+  Scenario: Array copy preserves source
+    Given the expression (define (test-copy-preserves i64) () (block entry (let ((src (heap-array i64 2)) (dest (heap-array i64 2))) (store (i64 50) src) (store (i64 60) (getelementptr i64 src (i64 1))) (array-copy i64 2 dest src) (ret (add (load i64 src) (load i64 (getelementptr i64 src (i64 1))))))))
+    When I call test-copy-preserves
+    Then the result is (i64 110)

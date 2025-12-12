@@ -344,6 +344,13 @@ impl BorrowChecker {
                 self.check_expr(array);
             }
 
+            Expr::HeapArray { .. } => {}
+
+            Expr::ArrayCopy { dest, src, .. } => {
+                self.check_expr(dest);
+                self.check_expr(src);
+            }
+
             Expr::StructLit(fields) => {
                 for field in fields {
                     self.check_expr(field);
