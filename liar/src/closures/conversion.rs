@@ -18,9 +18,37 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::ast::{Def, Defun, Expr, ExtendProtocol, Item, LetBinding, Param, Program};
 use crate::error::Result;
 use crate::span::{Span, Spanned};
+use crate::types::{Ty, TypeEnv};
 
 use super::escape::{EscapeInfo, EscapeStatus};
 use super::types::{Capture, CaptureInfo};
+
+/// Convert inference type (Ty) to AST type (Type)
+fn ty_to_ast_type(ty: &Ty) -> crate::ast::Type {
+    match ty {
+        Ty::I8 => crate::ast::Type::Named("i8".to_string()),
+        Ty::I16 => crate::ast::Type::Named("i16".to_string()),
+        Ty::I32 => crate::ast::Type::Named("i32".to_string()),
+        Ty::I64 => crate::ast::Type::Named("i64".to_string()),
+        Ty::Float => crate::ast::Type::Named("float".to_string()),
+        Ty::Double => crate::ast::Type::Named("double".to_string()),
+        Ty::Bool => crate::ast::Type::Named("i1".to_string()),
+        Ty::Char => crate::ast::Type::Named("i8".to_string()),
+        Ty::String => crate::ast::Type::Ptr,
+        Ty::Unit => crate::ast::Type::Unit,
+        Ty::Ptr => crate::ast::Type::Ptr,
+        Ty::Ref(inner) => crate::ast::Type::Ref(Box::new(ty_to_ast_type(inner))),
+        Ty::RefMut(inner) => crate::ast::Type::RefMut(Box::new(ty_to_ast_type(inner))),
+        Ty::Fn(params, ret) => crate::ast::Type::Fn(
+            params.iter().map(ty_to_ast_type).collect(),
+            Box::new(ty_to_ast_type(ret)),
+        ),
+        Ty::Tuple(elems) => crate::ast::Type::Tuple(elems.iter().map(ty_to_ast_type).collect()),
+        Ty::Named(name) => crate::ast::Type::Named(name.clone()),
+        Ty::Never => crate::ast::Type::Unit,
+        Ty::Var(_) | Ty::Error => crate::ast::Type::Named("i64".to_string()), // Default for unresolved
+    }
+}
 
 /// Counter for generating unique lambda names
 static LAMBDA_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -194,22 +222,32 @@ pub struct ClosureConverter {
     capture_info: HashMap<Span, CaptureInfo>,
     /// Escape info from escape analysis phase
     escape_info: EscapeInfo,
+    /// Type environment from type inference
+    type_env: TypeEnv,
     /// Generated top-level functions (lifted lambdas)
     generated_functions: Vec<Spanned<Item>>,
     /// Generated struct definitions (environment structs)
     generated_structs: Vec<Spanned<Item>>,
     /// Set of known function names (for detecting function-as-value usage)
     known_functions: HashSet<String>,
+    /// Current enclosing function name (for scoped type lookups)
+    current_function: Option<String>,
 }
 
 impl ClosureConverter {
-    pub fn new(capture_info: HashMap<Span, CaptureInfo>, escape_info: EscapeInfo) -> Self {
+    pub fn new(
+        capture_info: HashMap<Span, CaptureInfo>,
+        escape_info: EscapeInfo,
+        type_env: TypeEnv,
+    ) -> Self {
         Self {
             capture_info,
             escape_info,
+            type_env,
             generated_functions: Vec::new(),
             generated_structs: Vec::new(),
             known_functions: HashSet::new(),
+            current_function: None,
         }
     }
 
@@ -255,6 +293,10 @@ impl ClosureConverter {
     }
 
     fn convert_defun(&mut self, defun: Defun) -> Result<Defun> {
+        // Track the enclosing function for scoped type lookups
+        let prev_function = self.current_function.take();
+        self.current_function = Some(defun.name.node.clone());
+
         // First, find which parameters are used as callables in the body
         // This includes direct calls AND captures used as callables in lambdas
         let param_names: HashSet<String> =
@@ -296,6 +338,10 @@ impl ClosureConverter {
 
         // Convert the body, which may contain lambdas
         let new_body = self.convert_expr(defun.body)?;
+
+        // Restore previous function context
+        self.current_function = prev_function;
+
         Ok(Defun {
             name: defun.name,
             params: new_params,
@@ -621,11 +667,21 @@ impl ClosureConverter {
 
         // Build the lifted function
         let lifted_fn = if capture_info.captures.is_empty() {
-            // No captures - simple case
-            // Function signature: (params...) -> result
+            // No captures - but still need __env param for uniform calling convention
+            // All functions take env as first param (indirect-call passes it)
+            let mut lifted_params = vec![Param {
+                name: Spanned::new("__env".to_string(), span),
+                ty: Some(Spanned::new(
+                    crate::ast::Type::Named("ptr".to_string()),
+                    span,
+                )),
+                mutable: false,
+            }];
+            lifted_params.extend(params.clone());
+
             Defun {
                 name: Spanned::new(fn_name.clone(), span),
-                params: params.clone(),
+                params: lifted_params,
                 return_type: None,
                 body: converted_body,
             }
@@ -643,7 +699,7 @@ impl ClosureConverter {
             let callable_captures = find_callable_vars(&converted_body.node, &capture_names);
 
             // Create the environment struct definition
-            // Use Type::Closure for callable captures, i64 for others
+            // Use inferred types from type_env, or Closure for callable captures
             let env_fields: Vec<crate::ast::StructField> = capture_info
                 .captures
                 .iter()
@@ -652,8 +708,19 @@ impl ClosureConverter {
                         // This capture is called as a function - it's a closure struct
                         crate::ast::Type::Closure
                     } else {
-                        // Default to i64 for non-callable captures
-                        crate::ast::Type::Named("i64".to_string())
+                        // Look up the actual type from type inference
+                        // Try bare name first, then scoped name (funcname::varname)
+                        self.type_env
+                            .get(&cap.name)
+                            .or_else(|| {
+                                // Try scoped lookup: enclosing_function::varname
+                                self.current_function.as_ref().and_then(|func| {
+                                    let scoped_key = format!("{}::{}", func, cap.name);
+                                    self.type_env.get(&scoped_key)
+                                })
+                            })
+                            .map(ty_to_ast_type)
+                            .unwrap_or_else(|| crate::ast::Type::Named("i64".to_string()))
                     };
                     crate::ast::StructField {
                         name: Spanned::new(cap.name.clone(), cap.span),
@@ -789,7 +856,8 @@ pub fn convert(
     program: Program,
     capture_info: HashMap<Span, CaptureInfo>,
     escape_info: EscapeInfo,
+    type_env: TypeEnv,
 ) -> Result<Program> {
-    let converter = ClosureConverter::new(capture_info, escape_info);
+    let converter = ClosureConverter::new(capture_info, escape_info, type_env);
     converter.convert(program)
 }

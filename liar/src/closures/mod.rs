@@ -389,12 +389,14 @@ mod tests {
     // ==========================================================================
 
     fn convert_source(source: &str) -> Program {
+        use crate::types::TypeEnv;
         reset_lambda_counter();
         let mut parser = Parser::new(source).expect("lexer failed");
         let program = parser.parse_program().expect("parser failed");
         let capture_info = ClosureAnalyzer::new().analyze(&program).unwrap();
         let escape_info = EscapeAnalyzer::new().analyze(&program);
-        ClosureConverter::new(capture_info, escape_info)
+        let type_env = TypeEnv::new(); // Empty type env for tests
+        ClosureConverter::new(capture_info, escape_info, type_env)
             .convert(program)
             .expect("conversion failed")
     }

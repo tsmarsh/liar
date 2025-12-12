@@ -79,7 +79,7 @@ pub fn generate_extend_protocol(
 }
 
 /// Generate code for a protocol method call
-/// Uses static dispatch based on the known type of the first (self) argument
+/// Uses static dispatch if type is known at compile time, otherwise runtime dispatch
 pub fn generate_protocol_call(
     ctx: &mut CodegenContext,
     expr: &Spanned<Expr>,
@@ -96,38 +96,113 @@ pub fn generate_protocol_call(
         ));
     }
 
-    // The first argument is `self` - we need to determine its struct type
+    // The first argument is `self` - try to determine its struct type
     let self_arg = &args[0];
-    let type_name = infer_struct_type(ctx, self_arg).ok_or_else(|| {
-        CompileError::codegen(
-            self_arg.span,
+
+    // Generate arguments (we'll need them for either dispatch path)
+    let call_args: Result<Vec<lir::Expr>> = args.iter().map(|a| generate_expr(ctx, a)).collect();
+    let call_args = call_args?;
+
+    // Try static dispatch first
+    if let Some(type_name) = infer_struct_type(ctx, self_arg) {
+        // Look up the implementation function for this type
+        if let Some(impl_fn_name) = ctx.lookup_protocol_impl(&type_name, method_name).cloned() {
+            return Ok(lir::Expr::Call {
+                name: impl_fn_name,
+                args: call_args,
+            });
+        }
+    }
+
+    // Fall back to runtime dispatch
+    generate_runtime_dispatch(ctx, expr, method_name, call_args)
+}
+
+/// Generate runtime protocol dispatch based on type_id
+/// Loads type_id from field 0 of receiver, dispatches via nested selects
+/// NOTE: Caller must ensure receiver is not nil (will segfault on nil)
+fn generate_runtime_dispatch(
+    ctx: &mut CodegenContext,
+    expr: &Spanned<Expr>,
+    method_name: &str,
+    call_args: Vec<lir::Expr>,
+) -> Result<lir::Expr> {
+    // Get all implementations for this method
+    let impls = ctx.get_method_implementations(method_name);
+
+    if impls.is_empty() {
+        return Err(CompileError::codegen(
+            expr.span,
             format!(
-                "cannot determine type of receiver for protocol method '{}' - expected struct type",
+                "no implementations found for protocol method '{}'",
                 method_name
             ),
-        )
-    })?;
+        ));
+    }
 
-    // Look up the implementation function for this type
-    let impl_fn_name = ctx
-        .lookup_protocol_impl(&type_name, method_name)
-        .cloned()
-        .ok_or_else(|| {
-            CompileError::codegen(
-                expr.span,
-                format!(
-                    "no implementation of method '{}' for type '{}'",
-                    method_name, type_name
-                ),
-            )
-        })?;
+    // The first argument is the receiver (self) - bind it to avoid double evaluation
+    let receiver = call_args[0].clone();
+    let receiver_var = ctx.fresh_var("recv");
+    let type_id_var = ctx.fresh_var("type_id");
 
-    // Generate arguments
-    let call_args: Result<Vec<lir::Expr>> = args.iter().map(|a| generate_expr(ctx, a)).collect();
+    // Load type_id from field 0
+    let type_id_ptr = lir::Expr::GetElementPtr {
+        ty: lir::GepType::Scalar(lir::ScalarType::I64),
+        ptr: Box::new(lir::Expr::LocalRef(receiver_var.clone())),
+        indices: vec![lir::Expr::IntLit {
+            ty: lir::ScalarType::I64,
+            value: 0,
+        }],
+        inbounds: true,
+    };
 
-    Ok(lir::Expr::Call {
-        name: impl_fn_name,
-        args: call_args?,
+    let load_type_id = lir::Expr::Load {
+        ty: lir::ParamType::Scalar(lir::ScalarType::I64),
+        ptr: Box::new(type_id_ptr),
+    };
+
+    // Build dispatch chain: nested selects for each implementation
+    // Default to 0 for unknown types
+    let mut dispatch_expr = lir::Expr::IntLit {
+        ty: lir::ScalarType::I64,
+        value: 0,
+    };
+
+    for (type_name, type_id, impl_fn_name) in impls.iter().rev() {
+        let cond = lir::Expr::ICmp {
+            pred: lir::ICmpPred::Eq,
+            lhs: Box::new(lir::Expr::LocalRef(type_id_var.clone())),
+            rhs: Box::new(lir::Expr::IntLit {
+                ty: lir::ScalarType::I64,
+                value: *type_id as i128,
+            }),
+        };
+
+        // Build args with bound receiver
+        let mut bound_args = call_args.clone();
+        bound_args[0] = lir::Expr::LocalRef(receiver_var.clone());
+
+        let impl_call = lir::Expr::Call {
+            name: impl_fn_name.clone(),
+            args: bound_args,
+        };
+
+        dispatch_expr = lir::Expr::Select {
+            cond: Box::new(cond),
+            true_val: Box::new(impl_call),
+            false_val: Box::new(dispatch_expr),
+        };
+
+        let _ = type_name;
+    }
+
+    // Wrap in let to bind receiver and type_id
+    Ok(lir::Expr::Let {
+        bindings: vec![
+            (receiver_var, Box::new(receiver)),
+            (type_id_var, Box::new(load_type_id)),
+        ],
+        body: vec![dispatch_expr],
     })
 }
 

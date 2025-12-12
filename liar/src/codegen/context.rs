@@ -29,6 +29,10 @@ pub struct CodegenContext {
     pub protocol_impls: HashMap<(String, String), String>,
     /// Whether malloc declaration is needed
     pub needs_malloc: bool,
+    /// Type ID counter for runtime type dispatch
+    type_id_counter: i64,
+    /// Struct name to type ID mapping
+    struct_type_ids: HashMap<String, i64>,
 
     // Block management for multi-block functions (if with br/phi)
     /// Completed basic blocks
@@ -41,6 +45,9 @@ pub struct CodegenContext {
     /// These are phi nodes from if expressions that must be placed at the start
     /// of the current block before any other instructions
     pending_phis: Vec<(String, Box<lir::Expr>)>,
+    /// Entry bindings that must be emitted BEFORE any branches in the entry block
+    /// Used for closure env access - these bindings need to be available in all branches
+    entry_bindings: Vec<(String, Box<lir::Expr>)>,
     /// Whether the current expression is in tail position
     /// When true, direct function calls should be generated as tail calls
     in_tail_position: bool,
@@ -65,10 +72,13 @@ impl CodegenContext {
             protocol_methods: HashMap::new(),
             protocol_impls: HashMap::new(),
             needs_malloc: false,
+            type_id_counter: 1, // 0 reserved for nil
+            struct_type_ids: HashMap::new(),
             blocks: Vec::new(),
             current_block_label: "entry".to_string(),
             block_counter: 0,
             pending_phis: Vec::new(),
+            entry_bindings: Vec::new(),
             in_tail_position: false,
             can_emit_tailcall: true,
         }
@@ -82,10 +92,13 @@ impl CodegenContext {
         self.protocol_methods.clear();
         self.protocol_impls.clear();
         self.needs_malloc = false;
+        self.type_id_counter = 1;
+        self.struct_type_ids.clear();
         self.blocks.clear();
         self.current_block_label = "entry".to_string();
         self.block_counter = 0;
         self.pending_phis.clear();
+        self.entry_bindings.clear();
         self.in_tail_position = false;
         self.can_emit_tailcall = true;
     }
@@ -98,6 +111,7 @@ impl CodegenContext {
         self.current_block_label = "entry".to_string();
         self.block_counter = 0;
         self.pending_phis.clear();
+        self.entry_bindings.clear();
         self.in_tail_position = false;
         self.can_emit_tailcall = true;
     }
@@ -116,12 +130,13 @@ impl CodegenContext {
     /// End the current block with a terminator and start a new block
     /// Returns the completed block
     /// If there are pending phi bindings, they are wrapped around the terminator
+    /// If this is the entry block and there are entry bindings, they are emitted first
     pub fn end_block(&mut self, terminator: lir::Expr) -> lir::BasicBlock {
         // Take any pending phi bindings
         let pending = std::mem::take(&mut self.pending_phis);
 
         // If there are pending phis, wrap them around the terminator
-        let instr = if pending.is_empty() {
+        let mut instr = if pending.is_empty() {
             terminator
         } else {
             lir::Expr::Let {
@@ -129,6 +144,16 @@ impl CodegenContext {
                 body: vec![terminator],
             }
         };
+
+        // If this is the entry block and there are entry bindings, wrap those first
+        // Entry bindings are for captured variables that must be available in all branches
+        if self.current_block_label == "entry" && !self.entry_bindings.is_empty() {
+            let entry = std::mem::take(&mut self.entry_bindings);
+            instr = lir::Expr::Let {
+                bindings: entry,
+                body: vec![instr],
+            };
+        }
 
         let block = lir::BasicBlock {
             label: self.current_block_label.clone(),
@@ -152,6 +177,17 @@ impl CodegenContext {
     /// Take pending phi bindings (for finalizing the last block)
     pub fn take_pending_phis(&mut self) -> Vec<(String, Box<lir::Expr>)> {
         std::mem::take(&mut self.pending_phis)
+    }
+
+    /// Add an entry binding - these are emitted at the START of the entry block
+    /// before any branches. Used for closure captured variable extraction.
+    pub fn add_entry_binding(&mut self, name: String, value: lir::Expr) {
+        self.entry_bindings.push((name, Box::new(value)));
+    }
+
+    /// Take entry bindings (for single-block functions that don't use end_block)
+    pub fn take_entry_bindings(&mut self) -> Vec<(String, Box<lir::Expr>)> {
+        std::mem::take(&mut self.entry_bindings)
     }
 
     /// Take all completed blocks (for function finalization)
@@ -203,14 +239,37 @@ impl CodegenContext {
         format!("_{}_{}", prefix, n)
     }
 
-    /// Register a struct definition
+    /// Register a struct definition and assign it a type ID
     pub fn register_struct(&mut self, name: &str, info: StructInfo) {
         self.struct_defs.insert(name.to_string(), info);
+        // Assign a unique type ID (0 is reserved for nil)
+        let type_id = self.type_id_counter;
+        self.type_id_counter += 1;
+        self.struct_type_ids.insert(name.to_string(), type_id);
     }
 
     /// Look up a struct definition
     pub fn lookup_struct(&self, name: &str) -> Option<&StructInfo> {
         self.struct_defs.get(name)
+    }
+
+    /// Get the type ID for a struct (for runtime dispatch)
+    pub fn get_struct_type_id(&self, name: &str) -> Option<i64> {
+        self.struct_type_ids.get(name).copied()
+    }
+
+    /// Get all type implementations for a protocol method
+    /// Returns Vec of (type_name, type_id, impl_fn_name)
+    pub fn get_method_implementations(&self, method_name: &str) -> Vec<(String, i64, String)> {
+        let mut impls = Vec::new();
+        for ((type_name, method), impl_fn) in &self.protocol_impls {
+            if method == method_name {
+                if let Some(type_id) = self.struct_type_ids.get(type_name) {
+                    impls.push((type_name.clone(), *type_id, impl_fn.clone()));
+                }
+            }
+        }
+        impls
     }
 
     /// Register a variable's struct type
@@ -222,6 +281,23 @@ impl CodegenContext {
     /// Look up a variable's struct type
     pub fn lookup_var_struct_type(&self, var_name: &str) -> Option<&String> {
         self.var_struct_types.get(var_name)
+    }
+
+    /// Find which struct has a given field (for inferring struct type from field access)
+    /// Skips __type_id which is present in all structs
+    pub fn find_struct_with_field(&self, field_name: &str) -> Option<String> {
+        for (struct_name, info) in &self.struct_defs {
+            for (name, _ty) in &info.fields {
+                // Skip the internal type_id field
+                if name == "__type_id" {
+                    continue;
+                }
+                if name == field_name {
+                    return Some(struct_name.clone());
+                }
+            }
+        }
+        None
     }
 
     /// Register a protocol method

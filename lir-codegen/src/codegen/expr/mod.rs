@@ -169,6 +169,12 @@ impl<'ctx> super::CodeGen<'ctx> {
                 "tailcall requires block context".to_string(),
             )),
 
+            // Heap-allocated struct with ownership
+            Expr::HeapStruct {
+                struct_name,
+                fields,
+            } => self.compile_heap_struct(struct_name, fields, locals),
+
             // Reference counting
             Expr::RcAlloc { elem_type } => self.compile_rc_alloc(elem_type),
             Expr::RcClone { value } => self.compile_rc_clone(value, locals),

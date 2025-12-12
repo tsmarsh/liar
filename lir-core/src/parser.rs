@@ -306,6 +306,9 @@ impl<'a> Parser<'a> {
             "drop" => self.parse_drop(),
             "move" => self.parse_move(),
 
+            // Heap-allocated struct with ownership
+            "heap-struct" => self.parse_heap_struct(),
+
             // Reference counting operations
             "rc-alloc" => self.parse_rc_alloc(),
             "rc-clone" => self.parse_rc_clone(),
@@ -967,6 +970,32 @@ impl<'a> Parser<'a> {
         let value = self.parse_expr()?;
         Ok(Expr::Move {
             value: Box::new(value),
+        })
+    }
+
+    /// Parse heap-struct: (heap-struct StructName field1 field2 ...)
+    fn parse_heap_struct(&mut self) -> Result<Expr, ParseError> {
+        // Parse struct name
+        let struct_name = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => s,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "struct name".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse field values until we hit ')'
+        let mut fields = Vec::new();
+        while !matches!(self.lexer.peek()?, Some(Token::RParen)) {
+            fields.push(self.parse_expr()?);
+        }
+
+        Ok(Expr::HeapStruct {
+            struct_name,
+            fields,
         })
     }
 

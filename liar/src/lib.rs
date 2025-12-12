@@ -65,10 +65,12 @@ pub fn compile(source: &str) -> std::result::Result<String, Vec<CompileError>> {
     // Closure conversion - transform lambdas into lifted functions
     // Lambdas become ClosureLit nodes with explicit environment structs
     // Non-escaping closures use stack allocation, escaping closures use heap
-    let program = closures::convert(program, capture_info, escape_info).map_err(|e| vec![e])?;
+    // Pass type_env so closures use correct types for captured variables
+    let program = closures::convert(program, capture_info, escape_info, type_env.clone())
+        .map_err(|e| vec![e])?;
 
-    // Code generation
-    codegen::generate_string(&program).map_err(|e| vec![e])
+    // Code generation - pass type_env for struct type inference on parameters
+    codegen::generate_string(&program, &type_env).map_err(|e| vec![e])
 }
 
 /// Parse and compile a single expression (for REPL)

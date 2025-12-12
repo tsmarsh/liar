@@ -779,6 +779,16 @@ impl TypeChecker {
                 Ok(Type::Scalar(ScalarType::Void))
             }
 
+            // Heap-allocated struct - returns owned pointer
+            Expr::HeapStruct { fields, .. } => {
+                // Type check all field values
+                for field in fields {
+                    self.check(field)?;
+                }
+                // Returns a pointer to the heap-allocated struct
+                Ok(Type::Ptr)
+            }
+
             // Atomic memory operations
             Expr::AtomicLoad { ty, ptr, .. } => {
                 // Pointer must be a pointer type

@@ -21,6 +21,7 @@ mod tests;
 use crate::ast::{Defun, Extern, Item, Program};
 use crate::error::Result;
 use crate::span::Spanned;
+use crate::types::{Ty, TypeEnv};
 use lir_core::ast as lir;
 use lir_core::display::Module;
 
@@ -34,21 +35,23 @@ use types::{
 };
 
 /// Generate lIR module from a liar program
-pub fn generate(program: &Program) -> Result<Module> {
+pub fn generate(program: &Program, type_env: &TypeEnv) -> Result<Module> {
     let mut ctx = CodegenContext::new();
     reset_var_counter();
 
     // First pass: collect struct definitions
+    // All structs have a type_id as field 0 for runtime protocol dispatch
     for item in &program.items {
         if let Item::Defstruct(defstruct) = &item.node {
-            let fields: Vec<(String, lir::ParamType)> = defstruct
-                .fields
-                .iter()
-                .map(|f| {
-                    let ty = liar_type_to_lir_param(&f.ty.node);
-                    (f.name.node.clone(), ty)
-                })
-                .collect();
+            // Prepend __type_id field (i64) for runtime dispatch
+            let mut fields: Vec<(String, lir::ParamType)> = vec![(
+                "__type_id".to_string(),
+                lir::ParamType::Scalar(lir::ScalarType::I64),
+            )];
+            fields.extend(defstruct.fields.iter().map(|f| {
+                let ty = liar_type_to_lir_param(&f.ty.node);
+                (f.name.node.clone(), ty)
+            }));
             ctx.register_struct(&defstruct.name.node, StructInfo { fields });
         }
     }
@@ -81,7 +84,7 @@ pub fn generate(program: &Program) -> Result<Module> {
                 }
             }
             _ => {
-                if let Some(lir_item) = generate_item(&mut ctx, item)? {
+                if let Some(lir_item) = generate_item(&mut ctx, item, type_env)? {
                     items.push(lir_item);
                 }
             }
@@ -105,8 +108,8 @@ pub fn generate(program: &Program) -> Result<Module> {
 }
 
 /// Generate lIR string from a liar program (convenience wrapper)
-pub fn generate_string(program: &Program) -> Result<String> {
-    let module = generate(program)?;
+pub fn generate_string(program: &Program, type_env: &TypeEnv) -> Result<String> {
+    let module = generate(program, type_env)?;
     Ok(module.to_string())
 }
 
@@ -118,9 +121,15 @@ pub fn generate_expr_standalone(expr: &Spanned<crate::ast::Expr>) -> Result<Stri
 }
 
 /// Generate lIR for a single item
-fn generate_item(ctx: &mut CodegenContext, item: &Spanned<Item>) -> Result<Option<lir::Item>> {
+fn generate_item(
+    ctx: &mut CodegenContext,
+    item: &Spanned<Item>,
+    type_env: &TypeEnv,
+) -> Result<Option<lir::Item>> {
     match &item.node {
-        Item::Defun(defun) => Ok(Some(lir::Item::Function(generate_defun(ctx, defun)?))),
+        Item::Defun(defun) => Ok(Some(lir::Item::Function(generate_defun(
+            ctx, defun, type_env,
+        )?))),
         Item::Def(_def) => {
             // Global constants need special handling - skip for now
             Ok(None)
@@ -161,21 +170,34 @@ fn generate_extern(ext: &Extern) -> Result<lir::ExternDecl> {
 }
 
 /// Generate lIR for a function definition
-fn generate_defun(ctx: &mut CodegenContext, defun: &Defun) -> Result<lir::FunctionDef> {
+fn generate_defun(
+    ctx: &mut CodegenContext,
+    defun: &Defun,
+    type_env: &TypeEnv,
+) -> Result<lir::FunctionDef> {
     let name = defun.name.node.clone();
 
     // Initialize block management for this function
     ctx.start_function();
 
-    // Register struct types for parameters with struct type annotations
-    // This is needed for closure conversion where __env has a named struct type
+    // Register struct types for parameters
+    // First check explicit type annotations, then inferred types from type_env
     for p in &defun.params {
+        // Check explicit annotation first
         if let Some(ty) = &p.ty {
             if let crate::ast::Type::Named(struct_name) = &ty.node {
-                // Check if this type is a registered struct
                 if ctx.lookup_struct(struct_name).is_some() {
                     ctx.register_var_struct_type(&p.name.node, struct_name);
+                    continue;
                 }
+            }
+        }
+
+        // Check type_env for inferred struct types (scoped key: "funcname::paramname")
+        let scoped_key = format!("{}::{}", defun.name.node, p.name.node);
+        if let Some(Ty::Named(struct_name)) = type_env.get(&scoped_key) {
+            if ctx.lookup_struct(struct_name).is_some() {
+                ctx.register_var_struct_type(&p.name.node, struct_name);
             }
         }
     }
@@ -211,9 +233,14 @@ fn generate_defun(ctx: &mut CodegenContext, defun: &Defun) -> Result<lir::Functi
         .map(|t| liar_type_to_return(&t.node))
         .unwrap_or_else(|| infer_liar_expr_type(ctx, &defun.body.node));
 
-    // Helper to check if an expression is a tail call (which is already a terminator)
+    // Helper to check if an expression ends in a tail call (which is already a terminator)
+    // Recursively checks inside Let expressions since Let { ... body: [TailCall] } is also terminal
     fn is_tailcall(expr: &lir::Expr) -> bool {
-        matches!(expr, lir::Expr::TailCall { .. })
+        match expr {
+            lir::Expr::TailCall { .. } => true,
+            lir::Expr::Let { body, .. } => body.last().is_some_and(is_tailcall),
+            _ => false,
+        }
     }
 
     // Check if any blocks were emitted (from if expressions)
@@ -259,11 +286,22 @@ fn generate_defun(ctx: &mut CodegenContext, defun: &Defun) -> Result<lir::Functi
     } else {
         // Single-block function (no if expressions)
         // TailCall is a terminator, so don't wrap it in Ret
-        let ret_instr = if is_tailcall(&body_expr) {
+        let mut ret_instr = if is_tailcall(&body_expr) {
             body_expr
         } else {
             lir::Expr::Ret(Some(Box::new(body_expr)))
         };
+
+        // Take any entry bindings that weren't consumed by end_block
+        // (shouldn't normally happen, but handle gracefully)
+        let entry_bindings = ctx.take_entry_bindings();
+        if !entry_bindings.is_empty() {
+            ret_instr = lir::Expr::Let {
+                bindings: entry_bindings,
+                body: vec![ret_instr],
+            };
+        }
+
         let entry_block = lir::BasicBlock {
             label: "entry".to_string(),
             instructions: vec![ret_instr],

@@ -2,11 +2,13 @@
 
 use super::*;
 use crate::parser::Parser;
+use crate::types::TypeEnv;
 
 fn compile(source: &str) -> String {
     let mut parser = Parser::new(source).unwrap();
     let program = parser.parse_program().unwrap();
-    generate_string(&program).unwrap()
+    let type_env = TypeEnv::new(); // Empty type env for tests
+    generate_string(&program, &type_env).unwrap()
 }
 
 #[test]
@@ -103,9 +105,11 @@ fn test_rc_new() {
 
 #[test]
 fn test_share() {
-    let lir = compile("(defun make-shared () (share 42))");
-    assert!(lir.contains("rc-alloc"));
-    assert!(lir.contains("rc-ptr"));
+    // share now requires a struct constructor argument
+    let lir =
+        compile("(defstruct Point (x: i64 y: i64)) (defun make-shared () (share (Point 1 2)))");
+    assert!(lir.contains("heap-struct"));
+    assert!(lir.contains("Point"));
 }
 
 #[test]

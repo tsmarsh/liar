@@ -206,6 +206,18 @@ fn generate_cleanup(bindings_needing_cleanup: &[String]) -> lir::Expr {
     }
 }
 
+/// Check if an expression will generate multi-block code (if expression)
+fn will_generate_multiblock(expr: &Expr) -> bool {
+    match expr {
+        Expr::If(_, _, _) => true,
+        Expr::Let(_, body) | Expr::Plet(_, body) => will_generate_multiblock(&body.node),
+        Expr::Do(exprs) => exprs
+            .last()
+            .is_some_and(|e| will_generate_multiblock(&e.node)),
+        _ => false,
+    }
+}
+
 /// Generate code for let bindings
 pub fn generate_let(
     ctx: &mut CodegenContext,
@@ -228,6 +240,37 @@ pub fn generate_let(
         }
     }
 
+    // Check if body will create multi-block code (if expression)
+    // If so, we need to emit bindings BEFORE the body generates branches
+    let body_is_multiblock = will_generate_multiblock(&body.node);
+
+    if body_is_multiblock && ctx.current_block() == "entry" {
+        // Multi-block body: emit bindings as entry bindings FIRST
+        // These will be included in the entry block before any branches
+        ctx.set_tail_position(false);
+        for binding in bindings.iter() {
+            let value = generate_expr(ctx, &binding.value)?;
+            ctx.add_entry_binding(binding.name.node.clone(), value);
+        }
+        ctx.set_tail_position(was_tail);
+
+        // Now generate the body - branches will pick up entry bindings
+        let body_expr = generate_expr(ctx, body)?;
+
+        // Handle cleanup if needed
+        if bindings_needing_cleanup.is_empty() {
+            return Ok(body_expr);
+        } else {
+            let result_var = ctx.fresh_var("let_result");
+            let cleanup = generate_cleanup(&bindings_needing_cleanup);
+            return Ok(lir::Expr::Let {
+                bindings: vec![(result_var.clone(), Box::new(body_expr))],
+                body: vec![cleanup, lir::Expr::LocalRef(result_var)],
+            });
+        }
+    }
+
+    // Standard case: body doesn't create multi-block code
     // Body IS in tail position (inherited)
     let body_expr = generate_expr(ctx, body)?;
 

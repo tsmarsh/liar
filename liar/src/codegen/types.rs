@@ -39,10 +39,22 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
                     "not" | "and" | "or" => {
                         return lir::ReturnType::Scalar(lir::ScalarType::I1);
                     }
+                    // Builtins that return pointers
+                    "share" | "box" | "rc-new" | "cons" => {
+                        return lir::ReturnType::Ptr;
+                    }
+                    // nil? returns bool
+                    "nil?" => {
+                        return lir::ReturnType::Scalar(lir::ScalarType::I1);
+                    }
                     // Look up user-defined function return types
                     name => {
                         if let Some(ret_type) = ctx.lookup_func_return_type(name) {
                             return ret_type.clone();
+                        }
+                        // Check if it's a struct constructor
+                        if ctx.lookup_struct(name).is_some() {
+                            return lir::ReturnType::Ptr;
                         }
                     }
                 }

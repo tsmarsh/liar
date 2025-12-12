@@ -37,6 +37,7 @@ pub fn generate_closure_lit(
 }
 
 /// Generate code for heap allocation of closure environment
+/// Field 0 is __type_id, user fields start at index 1
 pub fn generate_heap_env_alloc(
     ctx: &mut CodegenContext,
     struct_name: &str,
@@ -48,8 +49,7 @@ pub fn generate_heap_env_alloc(
     // Mark that we need malloc declaration
     ctx.set_needs_malloc();
 
-    // Calculate size based on field types
-    // Look up struct info to get actual field sizes
+    // Calculate size based on field types (includes __type_id at field 0)
     let struct_size = if let Some(struct_info) = ctx.lookup_struct(struct_name) {
         struct_info
             .fields
@@ -62,8 +62,8 @@ pub fn generate_heap_env_alloc(
             })
             .sum()
     } else {
-        // Fallback: assume 8 bytes per field
-        fields.len() * 8
+        // Fallback: 8 bytes for type_id + 8 bytes per user field
+        (fields.len() + 1) * 8
     };
 
     // Call malloc to allocate the environment struct on the heap
@@ -75,8 +75,37 @@ pub fn generate_heap_env_alloc(
         }],
     };
 
-    // Store field values into the struct
     let mut stores = vec![(env_alloc_name.clone(), Box::new(malloc_call))];
+
+    // Store type_id at field 0
+    let type_id = ctx.get_struct_type_id(struct_name).unwrap_or(0);
+    let type_id_gep = lir::Expr::GetElementPtr {
+        ty: lir::GepType::Struct(struct_name.to_string()),
+        ptr: Box::new(lir::Expr::LocalRef(env_alloc_name.clone())),
+        indices: vec![
+            lir::Expr::IntLit {
+                ty: lir::ScalarType::I64,
+                value: 0,
+            },
+            lir::Expr::IntLit {
+                ty: lir::ScalarType::I32,
+                value: 0,
+            },
+        ],
+        inbounds: true,
+    };
+    stores.push((
+        "_store_type_id".to_string(),
+        Box::new(lir::Expr::Store {
+            value: Box::new(lir::Expr::IntLit {
+                ty: lir::ScalarType::I64,
+                value: type_id as i128,
+            }),
+            ptr: Box::new(type_id_gep),
+        }),
+    ));
+
+    // Store user field values at indices 1, 2, 3, ...
     for (idx, (_, value)) in fields.iter().enumerate() {
         let gep = lir::Expr::GetElementPtr {
             ty: lir::GepType::Struct(struct_name.to_string()),
@@ -88,7 +117,7 @@ pub fn generate_heap_env_alloc(
                 },
                 lir::Expr::IntLit {
                     ty: lir::ScalarType::I32,
-                    value: idx as i128,
+                    value: (idx + 1) as i128, // +1 to skip __type_id
                 },
             ],
             inbounds: true,
@@ -108,6 +137,7 @@ pub fn generate_heap_env_alloc(
 }
 
 /// Generate code for stack allocation of closure environment (non-escaping closures)
+/// Field 0 is __type_id, user fields start at index 1
 pub fn generate_stack_env_alloc(
     ctx: &mut CodegenContext,
     struct_name: &str,
@@ -116,15 +146,14 @@ pub fn generate_stack_env_alloc(
     // Stack-allocate environment struct using alloca and store field values
     let env_alloc_name = ctx.fresh_var("stack_env");
 
-    // Calculate number of fields (each field is a pointer = 8 bytes)
+    // Calculate number of fields (includes __type_id)
     let num_fields = if let Some(struct_info) = ctx.lookup_struct(struct_name) {
         struct_info.fields.len()
     } else {
-        fields.len()
+        fields.len() + 1 // +1 for __type_id
     };
 
     // Use alloca to allocate space on the stack
-    // We allocate an array of pointers (ptr type)
     let alloca_expr = lir::Expr::Alloca {
         ty: lir::ParamType::Ptr,
         count: if num_fields > 1 {
@@ -137,8 +166,37 @@ pub fn generate_stack_env_alloc(
         },
     };
 
-    // Store field values into the struct
     let mut stores = vec![(env_alloc_name.clone(), Box::new(alloca_expr))];
+
+    // Store type_id at field 0
+    let type_id = ctx.get_struct_type_id(struct_name).unwrap_or(0);
+    let type_id_gep = lir::Expr::GetElementPtr {
+        ty: lir::GepType::Struct(struct_name.to_string()),
+        ptr: Box::new(lir::Expr::LocalRef(env_alloc_name.clone())),
+        indices: vec![
+            lir::Expr::IntLit {
+                ty: lir::ScalarType::I64,
+                value: 0,
+            },
+            lir::Expr::IntLit {
+                ty: lir::ScalarType::I32,
+                value: 0,
+            },
+        ],
+        inbounds: true,
+    };
+    stores.push((
+        "_store_type_id".to_string(),
+        Box::new(lir::Expr::Store {
+            value: Box::new(lir::Expr::IntLit {
+                ty: lir::ScalarType::I64,
+                value: type_id as i128,
+            }),
+            ptr: Box::new(type_id_gep),
+        }),
+    ));
+
+    // Store user field values at indices 1, 2, 3, ...
     for (idx, (_, value)) in fields.iter().enumerate() {
         let gep = lir::Expr::GetElementPtr {
             ty: lir::GepType::Struct(struct_name.to_string()),
@@ -150,7 +208,7 @@ pub fn generate_stack_env_alloc(
                 },
                 lir::Expr::IntLit {
                     ty: lir::ScalarType::I32,
-                    value: idx as i128,
+                    value: (idx + 1) as i128, // +1 to skip __type_id
                 },
             ],
             inbounds: true,

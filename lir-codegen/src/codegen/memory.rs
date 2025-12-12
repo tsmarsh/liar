@@ -105,6 +105,70 @@ impl<'ctx> super::CodeGen<'ctx> {
         Ok(())
     }
 
+    /// Compile heap-struct: allocate struct on heap, store fields, return owned pointer
+    pub(crate) fn compile_heap_struct(
+        &self,
+        struct_name: &str,
+        fields: &[Expr],
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        // Look up the struct type
+        let struct_type = self.struct_types.get(struct_name).ok_or_else(|| {
+            CodeGenError::CodeGen(format!("unknown struct type: {}", struct_name))
+        })?;
+
+        // Calculate struct size (each field is 8 bytes for now - i64 or ptr)
+        let num_fields = fields.len();
+        let struct_size = (num_fields * 8) as u64;
+
+        // Get or declare malloc
+        let malloc_fn = self.get_or_declare_malloc()?;
+
+        let i64_type = self.context.i64_type();
+        let i32_type = self.context.i32_type();
+        let size_val = i64_type.const_int(struct_size, false);
+
+        // Call malloc
+        let call_site = self
+            .builder
+            .build_call(malloc_fn, &[size_val.into()], "heap_struct")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        let struct_ptr = call_site
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| CodeGenError::CodeGen("malloc returned void".to_string()))?
+            .into_pointer_value();
+
+        // Store each field value
+        for (i, field_expr) in fields.iter().enumerate() {
+            let field_val = self.compile_expr_recursive(field_expr, locals)?;
+
+            // GEP to field offset
+            let field_ptr = unsafe {
+                self.builder
+                    .build_gep(
+                        *struct_type,
+                        struct_ptr,
+                        &[
+                            i32_type.const_int(0, false),
+                            i32_type.const_int(i as u64, false),
+                        ],
+                        &format!("field_{}", i),
+                    )
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+            };
+
+            // Store the value
+            self.builder
+                .build_store(field_ptr, field_val)
+                .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+        }
+
+        // Return the struct pointer (caller owns it)
+        Ok(struct_ptr.into())
+    }
+
     /// Compile rc-alloc: allocate with refcount header
     pub(crate) fn compile_rc_alloc(&self, elem_type: &ScalarType) -> Result<BasicValueEnum<'ctx>> {
         // Get or declare malloc

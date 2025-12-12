@@ -524,7 +524,15 @@ pub enum Expr {
         array: Box<Expr>,
     },
 
-    // Reference counting operations
+    // Heap-allocated struct with ownership semantics
+    // (heap-struct StructName field1 field2 ...) - allocate struct on heap, return owned ptr
+    // lIR handles malloc, field initialization, and tracks ownership for cleanup
+    HeapStruct {
+        struct_name: String,
+        fields: Vec<Expr>,
+    },
+
+    // Reference counting operations (legacy - prefer HeapStruct with ownership)
     // (rc-alloc T) - allocate with refcount 1, returns rc T
     RcAlloc {
         elem_type: ScalarType,

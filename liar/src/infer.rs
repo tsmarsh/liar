@@ -346,9 +346,22 @@ impl Inferencer {
                 Ty::Named(name.clone())
             }
 
-            Expr::Field(obj, _field) => {
-                let _ = self.infer_expr(obj, env);
-                // TODO: Look up field type from struct definition
+            Expr::Field(obj, field) => {
+                let _obj_ty = self.infer_expr(obj, env);
+
+                // Look up field type from struct definitions
+                // Note: We don't unify the object type with the struct type because
+                // field access on opaque ptr types (from share) must be allowed.
+                // This trades some type safety for flexibility with generic pointer code.
+                for type_def in env.types.values() {
+                    for (field_name, field_ty) in &type_def.fields {
+                        if field_name == &field.node {
+                            return field_ty.clone();
+                        }
+                    }
+                }
+
+                // Field not found in any struct - return fresh var
                 self.fresh_var()
             }
 
@@ -700,6 +713,15 @@ impl Inferencer {
         } else {
             body_ty
         };
+
+        // Store resolved parameter types with scoped keys for codegen to use
+        // This allows field access to know struct types for function parameters
+        let func_name = &defun.name.node;
+        for (param, param_ty) in defun.params.iter().zip(param_tys.iter()) {
+            let resolved_ty = self.apply(param_ty);
+            let scoped_key = format!("{}::{}", func_name, param.name.node);
+            env.insert(scoped_key, resolved_ty);
+        }
 
         let fn_ty = Ty::Fn(param_tys, Box::new(ret_ty));
 

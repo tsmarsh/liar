@@ -379,6 +379,13 @@ impl BorrowChecker {
                 self.check_expr(ptr);
             }
 
+            // Heap-allocated struct - check field expressions
+            Expr::HeapStruct { fields, .. } => {
+                for field in fields {
+                    self.check_expr(field);
+                }
+            }
+
             // Atomic memory operations - check pointer expression
             Expr::AtomicLoad { ptr, .. } => {
                 self.check_expr(ptr);

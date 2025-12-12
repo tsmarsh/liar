@@ -227,6 +227,18 @@ impl Display for Expr {
             Expr::ArrayLen { size } => write!(f, "(array-len {})", size),
             Expr::ArrayPtr { array } => write!(f, "(array-ptr {})", array),
 
+            // Heap-allocated struct with ownership
+            Expr::HeapStruct {
+                struct_name,
+                fields,
+            } => {
+                write!(f, "(heap-struct {}", struct_name)?;
+                for field in fields {
+                    write!(f, " {}", field)?;
+                }
+                write!(f, ")")
+            }
+
             // Reference counting
             Expr::RcAlloc { elem_type } => write!(f, "(rc-alloc {})", elem_type),
             Expr::RcClone { value } => write!(f, "(rc-clone {})", value),

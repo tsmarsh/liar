@@ -12,13 +12,17 @@ use super::expr::generate_expr;
 use super::types::liar_type_to_lir_param;
 
 /// Generate lIR for a struct definition
+/// All structs have __type_id (i64) as field 0 for runtime protocol dispatch
 pub fn generate_defstruct(defstruct: &Defstruct) -> Result<lir::StructDef> {
     let name = defstruct.name.node.clone();
-    let fields: Vec<lir::ParamType> = defstruct
-        .fields
-        .iter()
-        .map(|f| liar_type_to_lir_param(&f.ty.node))
-        .collect();
+    // Prepend type_id field
+    let mut fields: Vec<lir::ParamType> = vec![lir::ParamType::Scalar(lir::ScalarType::I64)];
+    fields.extend(
+        defstruct
+            .fields
+            .iter()
+            .map(|f| liar_type_to_lir_param(&f.ty.node)),
+    );
     Ok(lir::StructDef { name, fields })
 }
 
@@ -48,6 +52,7 @@ pub fn is_struct_constructor_call(ctx: &CodegenContext, expr: &Expr) -> Option<S
 
 /// Generate code for struct constructor: (Point 10 20)
 /// Allocates space on stack and stores each field value
+/// Field 0 is always __type_id (i64), user fields start at index 1
 pub fn generate_struct_constructor(
     ctx: &mut CodegenContext,
     _expr: &Spanned<Expr>,
@@ -55,22 +60,127 @@ pub fn generate_struct_constructor(
     struct_info: &StructInfo,
     args: &[Spanned<Expr>],
 ) -> Result<lir::Expr> {
-    // Generate field values
+    // Generate field values from user args
     let field_values: Result<Vec<lir::Expr>> = args.iter().map(|a| generate_expr(ctx, a)).collect();
     let field_values = field_values?;
 
     // Create a struct pointer variable name
     let ptr_name = ctx.fresh_var("struct");
-    let num_fields = struct_info.fields.len();
+    let num_fields = struct_info.fields.len(); // includes __type_id
+
+    // Get type ID for this struct
+    let type_id = ctx.get_struct_type_id(struct_name).unwrap_or(0);
 
     // Build the struct construction:
     // (let ((ptr (alloca i64 (i32 num_fields))))
-    //   (store field0 (getelementptr %struct.Point ptr (i32 0) (i32 0)))
-    //   (store field1 (getelementptr %struct.Point ptr (i32 0) (i32 1)))
+    //   (store type_id (getelementptr %struct.Point ptr (i32 0) (i32 0)))
+    //   (store field0 (getelementptr %struct.Point ptr (i32 0) (i32 1)))
+    //   (store field1 (getelementptr %struct.Point ptr (i32 0) (i32 2)))
     //   ptr)
 
-    // Generate field stores
     let mut body_exprs = Vec::new();
+
+    // Store type_id at field 0
+    let type_id_gep = lir::Expr::GetElementPtr {
+        ty: lir::GepType::Struct(struct_name.to_string()),
+        ptr: Box::new(lir::Expr::LocalRef(ptr_name.clone())),
+        indices: vec![
+            lir::Expr::IntLit {
+                ty: lir::ScalarType::I32,
+                value: 0,
+            },
+            lir::Expr::IntLit {
+                ty: lir::ScalarType::I32,
+                value: 0,
+            },
+        ],
+        inbounds: true,
+    };
+    body_exprs.push(lir::Expr::Store {
+        value: Box::new(lir::Expr::IntLit {
+            ty: lir::ScalarType::I64,
+            value: type_id as i128,
+        }),
+        ptr: Box::new(type_id_gep),
+    });
+
+    // Store user field values at indices 1..N
+    // Skip __type_id (first field in struct_info.fields)
+    let user_fields = struct_info.fields.iter().skip(1);
+    for (i, ((_field_name, field_ty), value)) in
+        user_fields.zip(field_values.into_iter()).enumerate()
+    {
+        // GEP to get field pointer (index i+1 because field 0 is type_id)
+        let gep = lir::Expr::GetElementPtr {
+            ty: lir::GepType::Struct(struct_name.to_string()),
+            ptr: Box::new(lir::Expr::LocalRef(ptr_name.clone())),
+            indices: vec![
+                lir::Expr::IntLit {
+                    ty: lir::ScalarType::I32,
+                    value: 0,
+                },
+                lir::Expr::IntLit {
+                    ty: lir::ScalarType::I32,
+                    value: (i + 1) as i128,
+                },
+            ],
+            inbounds: true,
+        };
+
+        // Wrap value in typed literal if needed (only for scalar types)
+        let typed_value = match (&value, field_ty) {
+            (lir::Expr::IntLit { value: v, .. }, lir::ParamType::Scalar(scalar_ty)) => {
+                lir::Expr::IntLit {
+                    ty: scalar_ty.clone(),
+                    value: *v,
+                }
+            }
+            _ => value,
+        };
+
+        // Store value at field pointer
+        let store = lir::Expr::Store {
+            value: Box::new(typed_value),
+            ptr: Box::new(gep),
+        };
+        body_exprs.push(store);
+    }
+
+    // Return the struct pointer
+    body_exprs.push(lir::Expr::LocalRef(ptr_name.clone()));
+
+    // Wrap in let with alloca for the struct
+    Ok(lir::Expr::Let {
+        bindings: vec![(
+            ptr_name,
+            Box::new(lir::Expr::Alloca {
+                ty: lir::ParamType::Scalar(lir::ScalarType::I64),
+                count: Some(Box::new(lir::Expr::IntLit {
+                    ty: lir::ScalarType::I32,
+                    value: num_fields as i128,
+                })),
+            }),
+        )],
+        body: body_exprs,
+    })
+}
+
+/// Generate struct fields into a pre-allocated pointer (for heap allocation via share)
+/// Returns a sequence of store expressions, not a let binding
+#[allow(dead_code)]
+pub fn generate_struct_into_ptr(
+    ctx: &mut CodegenContext,
+    struct_name: &str,
+    struct_info: &StructInfo,
+    args: &[Spanned<Expr>],
+    dest_ptr: lir::Expr,
+) -> Result<Vec<lir::Expr>> {
+    // Generate field values
+    let field_values: Result<Vec<lir::Expr>> = args.iter().map(|a| generate_expr(ctx, a)).collect();
+    let field_values = field_values?;
+
+    // Generate field stores into the destination pointer
+    let mut stores = Vec::new();
     for (i, ((_field_name, field_ty), value)) in struct_info
         .fields
         .iter()
@@ -80,7 +190,7 @@ pub fn generate_struct_constructor(
         // GEP to get field pointer
         let gep = lir::Expr::GetElementPtr {
             ty: lir::GepType::Struct(struct_name.to_string()),
-            ptr: Box::new(lir::Expr::LocalRef(ptr_name.clone())),
+            ptr: Box::new(dest_ptr.clone()),
             indices: vec![
                 lir::Expr::IntLit {
                     ty: lir::ScalarType::I32,
@@ -110,27 +220,10 @@ pub fn generate_struct_constructor(
             value: Box::new(typed_value),
             ptr: Box::new(gep),
         };
-        body_exprs.push(store);
+        stores.push(store);
     }
 
-    // Return the struct pointer
-    body_exprs.push(lir::Expr::LocalRef(ptr_name.clone()));
-
-    // Wrap in let with alloca for the struct
-    // Allocate enough space for all fields (use i64 as the element type, with count = num_fields)
-    Ok(lir::Expr::Let {
-        bindings: vec![(
-            ptr_name,
-            Box::new(lir::Expr::Alloca {
-                ty: lir::ParamType::Scalar(lir::ScalarType::I64),
-                count: Some(Box::new(lir::Expr::IntLit {
-                    ty: lir::ScalarType::I32,
-                    value: num_fields as i128,
-                })),
-            }),
-        )],
-        body: body_exprs,
-    })
+    Ok(stores)
 }
 
 /// Generate code for field access: (. obj field)
@@ -143,21 +236,35 @@ pub fn generate_field_access(
     // Get the struct pointer expression
     let obj_expr = generate_expr(ctx, obj)?;
 
-    // Determine the struct type - the object should be a variable bound to a struct
+    // Determine the struct type
+    // First try: lookup from variable type tracking
+    // Second try: infer from which struct has this field (for ptr-typed variables)
     let struct_name = if let Expr::Var(var_name) = &obj.node {
-        ctx.lookup_var_struct_type(var_name)
-            .cloned()
-            .ok_or_else(|| {
+        if let Some(name) = ctx.lookup_var_struct_type(var_name) {
+            name.clone()
+        } else {
+            // Infer struct type from field name
+            ctx.find_struct_with_field(&field.node).ok_or_else(|| {
                 CompileError::codegen(
                     expr.span,
-                    format!("cannot determine struct type for variable '{}'", var_name),
+                    format!(
+                        "cannot determine struct type for variable '{}' (no struct has field '{}')",
+                        var_name, field.node
+                    ),
                 )
             })?
+        }
     } else {
-        return Err(CompileError::codegen(
-            expr.span,
-            "field access requires a variable (complex expressions not yet supported)",
-        ));
+        // For non-variable expressions, try to infer from field
+        ctx.find_struct_with_field(&field.node).ok_or_else(|| {
+            CompileError::codegen(
+                expr.span,
+                format!(
+                    "cannot determine struct type (no struct has field '{}')",
+                    field.node
+                ),
+            )
+        })?
     };
 
     // Look up the struct definition to find the field index

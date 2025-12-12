@@ -265,28 +265,44 @@ pub fn generate_builtin(
             Some(lir::Expr::RcDrop { value: Box::new(a) })
         }
 
-        // Share and clone
+        // Share - heap allocate struct and return owned pointer
+        // (share (StructName field1 field2 ...)) -> (heap-struct StructName type_id field1 field2 ...)
+        // The type_id is stored as the first field for runtime protocol dispatch
         "share" => {
             check_unary(expr, "share", args)?;
-            let value = generate_expr(ctx, &args[0])?;
-            let rc_var = ctx.fresh_var("rc");
-            Some(lir::Expr::Let {
-                bindings: vec![(
-                    rc_var.clone(),
-                    Box::new(lir::Expr::RcAlloc {
-                        elem_type: lir::ScalarType::I64,
-                    }),
-                )],
-                body: vec![
-                    lir::Expr::Store {
-                        value: Box::new(value),
-                        ptr: Box::new(lir::Expr::RcPtr {
-                            value: Box::new(lir::Expr::LocalRef(rc_var.clone())),
-                        }),
-                    },
-                    lir::Expr::LocalRef(rc_var),
-                ],
-            })
+            let inner = &args[0];
+
+            // Check if wrapping a struct constructor
+            if let crate::ast::Expr::Call(func, struct_args) = &inner.node {
+                if let crate::ast::Expr::Var(struct_name) = &func.node {
+                    if ctx.lookup_struct(struct_name).is_some() {
+                        // Get the type ID for this struct
+                        let type_id = ctx.get_struct_type_id(struct_name).unwrap_or(0);
+
+                        // Generate field values, with type_id as the first field
+                        let mut field_exprs = vec![lir::Expr::IntLit {
+                            ty: lir::ScalarType::I64,
+                            value: type_id as i128,
+                        }];
+                        for arg in struct_args {
+                            field_exprs.push(generate_expr(ctx, arg)?);
+                        }
+
+                        ctx.set_needs_malloc();
+                        return Ok(Some(lir::Expr::HeapStruct {
+                            struct_name: struct_name.clone(),
+                            fields: field_exprs,
+                        }));
+                    }
+                }
+            }
+
+            // Not a struct constructor - error for now
+            // (Could support primitives later if needed)
+            return Err(CompileError::codegen(
+                expr.span,
+                "share requires a struct constructor argument, e.g., (share (Point 1 2))",
+            ));
         }
         "clone" => {
             check_unary(expr, "clone", args)?;

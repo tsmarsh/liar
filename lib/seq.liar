@@ -1,0 +1,192 @@
+;; liar Sequence Library
+;;
+;; Core protocols and implementations for sequential data structures
+
+;;; ============================================================
+;;; Protocols
+;;; ============================================================
+
+;; Seq - sequential access (lists, lazy seqs)
+(defprotocol Seq
+  (first [self])      ; returns the head element
+  (rest [self]))      ; returns the tail (Seq or nil)
+
+;; Collection - basic collection operations
+(defprotocol Collection
+  (conj [self x]))    ; returns new collection with x added
+
+;;; ============================================================
+;;; Cons - the fundamental list building block
+;;; ============================================================
+
+(defstruct Cons (head: i64 tail: ptr))
+
+(extend-protocol Seq Cons
+  (first [self] (. self head))
+  (rest [self] (. self tail)))
+
+(extend-protocol Collection Cons
+  (conj [self x] (share (Cons x self))))
+
+;;; ============================================================
+;;; List constructors
+;;; ============================================================
+
+;; cons - construct a new list node
+(defun cons (head tail: ptr)
+  (share (Cons head tail)))
+
+;; list - construct a list from elements
+(defun list1 (a)
+  (cons a nil))
+
+(defun list2 (a b)
+  (cons a (cons b nil)))
+
+(defun list3 (a b c)
+  (cons a (cons b (cons c nil))))
+
+(defun list4 (a b c d)
+  (cons a (cons b (cons c (cons d nil)))))
+
+(defun list5 (a b c d e)
+  (cons a (cons b (cons c (cons d (cons e nil))))))
+
+;;; ============================================================
+;;; Sequence operations (work on any Seq)
+;;; ============================================================
+
+;; count - number of elements in a sequence
+(defun count (seq: ptr)
+  (if (nil? seq)
+      0
+      (+ 1 (count (rest seq)))))
+
+;; nth - get element at index (0-based)
+(defun nth (seq: ptr n)
+  (if (nil? seq)
+      0  ; out of bounds returns 0
+      (if (= n 0)
+          (first seq)
+          (nth (rest seq) (- n 1)))))
+
+;; last - get last element
+(defun last (seq: ptr)
+  (if (nil? seq)
+      0
+      (if (nil? (rest seq))
+          (first seq)
+          (last (rest seq)))))
+
+;;; ============================================================
+;;; Higher-order sequence functions
+;;; ============================================================
+
+;; map - apply f to each element, return new list
+(defun map (f seq: ptr)
+  (if (nil? seq)
+      nil
+      (cons (f (first seq)) (map f (rest seq)))))
+
+;; filter - keep elements where pred returns non-zero
+(defun filter (pred seq: ptr)
+  (if (nil? seq)
+      nil
+      (if (pred (first seq))
+          (cons (first seq) (filter pred (rest seq)))
+          (filter pred (rest seq)))))
+
+;; reduce - fold left with accumulator
+(defun reduce (f init seq: ptr)
+  (if (nil? seq)
+      init
+      (reduce f (f init (first seq)) (rest seq))))
+
+;; for-each - apply f to each element for side effects
+(defun for-each (f seq: ptr)
+  (if (nil? seq)
+      0
+      (let ((_ (f (first seq))))
+        (for-each f (rest seq)))))
+
+;;; ============================================================
+;;; List transformations
+;;; ============================================================
+
+;; reverse - reverse a list
+(defun reverse (seq: ptr)
+  (reduce (fn (acc x) (cons x acc)) nil seq))
+
+;; append - concatenate two lists
+(defun append (seq1: ptr seq2: ptr)
+  (if (nil? seq1)
+      seq2
+      (cons (first seq1) (append (rest seq1) seq2))))
+
+;; take - first n elements
+(defun take (n seq: ptr)
+  (if (= n 0)
+      nil
+      (if (nil? seq)
+          nil
+          (cons (first seq) (take (- n 1) (rest seq))))))
+
+;; drop - skip first n elements
+(defun drop (n seq: ptr)
+  (if (= n 0)
+      seq
+      (if (nil? seq)
+          nil
+          (drop (- n 1) (rest seq)))))
+
+;;; ============================================================
+;;; Predicates on sequences
+;;; ============================================================
+
+;; any - true if pred is true for any element
+(defun any (pred seq: ptr)
+  (if (nil? seq)
+      0  ; false
+      (if (pred (first seq))
+          1  ; true
+          (any pred (rest seq)))))
+
+;; all - true if pred is true for all elements
+(defun all (pred seq: ptr)
+  (if (nil? seq)
+      1  ; true (vacuous)
+      (if (pred (first seq))
+          (all pred (rest seq))
+          0)))  ; false
+
+;; member - true if x is in seq
+(defun member (x seq: ptr)
+  (if (nil? seq)
+      0
+      (if (= x (first seq))
+          1
+          (member x (rest seq)))))
+
+;;; ============================================================
+;;; Numeric reductions
+;;; ============================================================
+
+;; sum - sum of all elements
+(defun sum (seq: ptr)
+  (reduce (fn (acc x) (+ acc x)) 0 seq))
+
+;; product - product of all elements
+(defun product (seq: ptr)
+  (reduce (fn (acc x) (* acc x)) 1 seq))
+
+;; minimum - smallest element
+(defun minimum (seq: ptr)
+  (if (nil? seq)
+      0
+      (reduce (fn (acc x) (if (< x acc) x acc)) (first seq) (rest seq))))
+
+;; maximum - largest element
+(defun maximum (seq: ptr)
+  (if (nil? seq)
+      0
+      (reduce (fn (acc x) (if (> x acc) x acc)) (first seq) (rest seq))))
