@@ -74,6 +74,38 @@ pub fn generate_builtin(
             Some(lir::Expr::SRem(Box::new(a), Box::new(b)))
         }
 
+        // Float arithmetic
+        "+." | "fadd" => {
+            check_binary(expr, "+.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FAdd(Box::new(a), Box::new(b)))
+        }
+        "-." | "fsub" => {
+            check_binary(expr, "-.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FSub(Box::new(a), Box::new(b)))
+        }
+        "*." | "fmul" => {
+            check_binary(expr, "*.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FMul(Box::new(a), Box::new(b)))
+        }
+        "/." | "fdiv" => {
+            check_binary(expr, "/.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FDiv(Box::new(a), Box::new(b)))
+        }
+        "%." | "frem" => {
+            check_binary(expr, "%.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FRem(Box::new(a), Box::new(b)))
+        }
+
         // Comparison
         "=" | "==" => {
             check_binary(expr, "=", args)?;
@@ -131,6 +163,68 @@ pub fn generate_builtin(
             let b = generate_expr(ctx, &args[1])?;
             Some(lir::Expr::ICmp {
                 pred: lir::ICmpPred::Sge,
+                lhs: Box::new(a),
+                rhs: Box::new(b),
+            })
+        }
+
+        // Float comparison (ordered - false if either is NaN)
+        "=." | "f=" => {
+            check_binary(expr, "=.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FCmp {
+                pred: lir::FCmpPred::Oeq,
+                lhs: Box::new(a),
+                rhs: Box::new(b),
+            })
+        }
+        "!=." | "f!=" => {
+            check_binary(expr, "!=.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FCmp {
+                pred: lir::FCmpPred::One,
+                lhs: Box::new(a),
+                rhs: Box::new(b),
+            })
+        }
+        "<." | "f<" => {
+            check_binary(expr, "<.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FCmp {
+                pred: lir::FCmpPred::Olt,
+                lhs: Box::new(a),
+                rhs: Box::new(b),
+            })
+        }
+        ">." | "f>" => {
+            check_binary(expr, ">.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FCmp {
+                pred: lir::FCmpPred::Ogt,
+                lhs: Box::new(a),
+                rhs: Box::new(b),
+            })
+        }
+        "<=." | "f<=" => {
+            check_binary(expr, "<=.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FCmp {
+                pred: lir::FCmpPred::Ole,
+                lhs: Box::new(a),
+                rhs: Box::new(b),
+            })
+        }
+        ">=." | "f>=" => {
+            check_binary(expr, ">=.", args)?;
+            let a = generate_expr(ctx, &args[0])?;
+            let b = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FCmp {
+                pred: lir::FCmpPred::Oge,
                 lhs: Box::new(a),
                 rhs: Box::new(b),
             })

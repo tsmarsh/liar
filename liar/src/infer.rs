@@ -687,6 +687,15 @@ impl Inferencer {
     fn infer_defun(&mut self, defun: &Defun, env: &mut TypeEnv) -> Ty {
         let mut child_env = env.child();
 
+        // Look up the function's declared type from pass 2 to get the return type variable.
+        // This is critical: we must unify the body type with this variable so that
+        // call sites processed before this function get the propagated type info.
+        let declared_ret_ty = if let Some(Ty::Fn(_, ret)) = env.get(&defun.name.node) {
+            (**ret).clone()
+        } else {
+            self.fresh_var()
+        };
+
         // Add parameters to environment
         let param_tys: Vec<Ty> = defun
             .params
@@ -705,13 +714,18 @@ impl Inferencer {
         // Infer body type
         let body_ty = self.infer_expr(&defun.body, &child_env);
 
+        // Unify body type with declared return type from pass 2.
+        // This propagates the concrete type through the substitution map
+        // to any call sites that were processed earlier.
+        let _ = self.unify(&body_ty, &declared_ret_ty, defun.body.span);
+
         // Check return type annotation if present
         let ret_ty = if let Some(ret_ann) = &defun.return_type {
             let expected = Self::ast_type_to_ty(&ret_ann.node);
             let _ = self.unify(&body_ty, &expected, defun.body.span);
             expected
         } else {
-            body_ty
+            self.apply(&declared_ret_ty)
         };
 
         // Store resolved parameter types with scoped keys for codegen to use
@@ -881,5 +895,58 @@ mod tests {
         let env = infer_source("(defun foo () (let ((x 1)) x))").unwrap();
         let fn_ty = env.get("foo").unwrap();
         assert!(matches!(fn_ty, Ty::Fn(_, ret) if **ret == Ty::I64));
+    }
+
+    #[test]
+    fn test_infer_cross_function_return_type() {
+        // Test that return types propagate across function calls
+        // This is critical for protocol dispatch on function return values
+        let env = infer_source(
+            r#"
+            (defstruct Point (x: i64 y: i64))
+            (defun make-point (x y) (Point x y))
+            (defun use-point ()
+              (let ((p (make-point 1 2)))
+                (. p x)))
+            "#,
+        )
+        .unwrap();
+
+        // make-point should return Point
+        let make_point_ty = env.get("make-point").unwrap();
+        if let Ty::Fn(_, ret) = make_point_ty {
+            assert_eq!(**ret, Ty::Named("Point".to_string()));
+        } else {
+            panic!("expected function type for make-point");
+        }
+
+        // use-point should return i64 (from accessing .x)
+        let use_point_ty = env.get("use-point").unwrap();
+        if let Ty::Fn(_, ret) = use_point_ty {
+            assert_eq!(**ret, Ty::I64);
+        } else {
+            panic!("expected function type for use-point");
+        }
+    }
+
+    #[test]
+    fn test_infer_forward_reference_return_type() {
+        // Test that forward references work: A calls B, B defined later
+        let env = infer_source(
+            r#"
+            (defun caller ()
+              (let ((x (callee)))
+                (+ x 1)))
+            (defun callee () 42)
+            "#,
+        )
+        .unwrap();
+
+        // Both should return i64
+        let caller_ty = env.get("caller").unwrap();
+        assert!(matches!(caller_ty, Ty::Fn(_, ret) if **ret == Ty::I64));
+
+        let callee_ty = env.get("callee").unwrap();
+        assert!(matches!(callee_ty, Ty::Fn(_, ret) if **ret == Ty::I64));
     }
 }

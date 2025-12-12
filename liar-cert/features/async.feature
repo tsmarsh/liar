@@ -34,3 +34,12 @@ Feature: Async Primitives
     Given the definition (defun test () (let ((f (ComputeFuture 10 32))) (poll f 0)))
     When I evaluate (test)
     Then the result is 42
+
+  Scenario: Protocol dispatch on function return value
+    Given the definition (defprotocol Pollable (poll [self waker]))
+    Given the definition (defstruct ImmediateFuture (value: i64))
+    Given the definition (extend-protocol Pollable ImmediateFuture (poll [self waker] (. self value)))
+    Given the definition (defun make-future (v) (ImmediateFuture v))
+    Given the definition (defun test () (let ((f (make-future 42))) (poll f 0)))
+    When I evaluate (test)
+    Then the result is 42

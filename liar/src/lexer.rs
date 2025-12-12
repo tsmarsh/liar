@@ -540,7 +540,7 @@ fn is_symbol_start(c: char) -> bool {
 }
 
 fn is_symbol_continue(c: char) -> bool {
-    is_symbol_start(c) || c.is_ascii_digit()
+    is_symbol_start(c) || c.is_ascii_digit() || c == '.'
 }
 
 #[cfg(test)]

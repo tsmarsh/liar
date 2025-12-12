@@ -70,13 +70,24 @@ pub struct Resolver {
 
 /// List of builtin functions that are always in scope
 const BUILTINS: &[&str] = &[
-    // Arithmetic
+    // Arithmetic (integer)
     "+",
     "-",
     "*",
     "/",
     "rem",
-    // Comparison
+    // Arithmetic (float)
+    "+.",
+    "-.",
+    "*.",
+    "/.",
+    "%.",
+    "fadd",
+    "fsub",
+    "fmul",
+    "fdiv",
+    "frem",
+    // Comparison (integer)
     "=",
     "==",
     "!=",
@@ -84,6 +95,19 @@ const BUILTINS: &[&str] = &[
     ">",
     "<=",
     ">=",
+    // Comparison (float)
+    "=.",
+    "!=.",
+    "<.",
+    ">.",
+    "<=.",
+    ">=.",
+    "f=",
+    "f!=",
+    "f<",
+    "f>",
+    "f<=",
+    "f>=",
     // Boolean
     "not",
     "and",
