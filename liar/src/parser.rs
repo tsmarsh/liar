@@ -12,6 +12,8 @@ pub struct Parser<'a> {
     #[allow(dead_code)]
     source: &'a str,
     eof_token: Token,
+    /// Counter for generating unique destructuring temp variable names
+    destr_counter: u64,
 }
 
 impl<'a> Parser<'a> {
@@ -23,6 +25,7 @@ impl<'a> Parser<'a> {
             pos: 0,
             source,
             eof_token: Token::new(TokenKind::Eof, Span::default()),
+            destr_counter: 0,
         })
     }
 
@@ -656,19 +659,27 @@ impl<'a> Parser<'a> {
 
         while !self.check(TokenKind::RParen) {
             self.expect(TokenKind::LParen)?;
-            let name = self.parse_symbol()?;
 
-            let ty = if self.check(TokenKind::Colon) {
-                self.advance();
-                Some(self.parse_type()?)
+            // Check for destructuring pattern: ((StructName field1 field2 ...) value)
+            if self.check(TokenKind::LParen) {
+                let destr_bindings = self.parse_destructuring_binding()?;
+                bindings.extend(destr_bindings);
             } else {
-                None
-            };
+                // Regular binding: (name value) or (name: type value)
+                let name = self.parse_symbol()?;
 
-            let value = self.parse_expr()?;
-            self.expect(TokenKind::RParen)?;
+                let ty = if self.check(TokenKind::Colon) {
+                    self.advance();
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
 
-            bindings.push(LetBinding { name, ty, value });
+                let value = self.parse_expr()?;
+                self.expect(TokenKind::RParen)?;
+
+                bindings.push(LetBinding { name, ty, value });
+            }
         }
 
         self.expect(TokenKind::RParen)?;
@@ -679,6 +690,58 @@ impl<'a> Parser<'a> {
         } else {
             Ok(Expr::Let(bindings, Box::new(body)))
         }
+    }
+
+    /// Parse a destructuring binding pattern and desugar it
+    /// Input: ((StructName field1 field2 ...) value)
+    /// Output: bindings for temp var and field accesses
+    fn parse_destructuring_binding(&mut self) -> Result<Vec<LetBinding>> {
+        let span = self.current_span();
+
+        // Parse the pattern: (StructName field1 field2 ...)
+        self.expect(TokenKind::LParen)?;
+
+        // First symbol is the struct name (not used in desugaring, just for documentation)
+        let _struct_name = self.parse_symbol()?;
+
+        // Remaining symbols are field names
+        let mut field_names = Vec::new();
+        while !self.check(TokenKind::RParen) {
+            field_names.push(self.parse_symbol()?);
+        }
+        self.expect(TokenKind::RParen)?;
+
+        // Parse the value expression
+        let value = self.parse_expr()?;
+        self.expect(TokenKind::RParen)?;
+
+        // Generate temp variable name
+        let temp_name = format!("__destr_{}", self.destr_counter);
+        self.destr_counter += 1;
+
+        let mut result = Vec::new();
+
+        // First binding: temp = value
+        result.push(LetBinding {
+            name: Spanned::new(temp_name.clone(), span),
+            ty: None,
+            value,
+        });
+
+        // Field bindings: fieldN = (. temp fieldN)
+        for field in field_names {
+            let field_access = Expr::Field(
+                Box::new(Spanned::new(Expr::Var(temp_name.clone()), span)),
+                field.clone(),
+            );
+            result.push(LetBinding {
+                name: field,
+                ty: None,
+                value: Spanned::new(field_access, span),
+            });
+        }
+
+        Ok(result)
     }
 
     /// Parse lambda
@@ -1385,6 +1448,43 @@ mod tests {
                 assert!(!ext.varargs);
             }
             _ => panic!("expected extern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_destructuring_let() {
+        let mut parser = Parser::new("(let (((Point x y) p)) (+ x y))").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Let(bindings, _body) => {
+                // Destructuring expands to: __destr_0 = p, x = (. __destr_0 x), y = (. __destr_0 y)
+                assert_eq!(bindings.len(), 3);
+                assert!(bindings[0].name.node.starts_with("__destr_"));
+                assert_eq!(bindings[1].name.node, "x");
+                assert_eq!(bindings[2].name.node, "y");
+                // Check that x and y are field accesses
+                assert!(matches!(bindings[1].value.node, Expr::Field(..)));
+                assert!(matches!(bindings[2].value.node, Expr::Field(..)));
+            }
+            _ => panic!("expected let"),
+        }
+    }
+
+    #[test]
+    fn test_parse_mixed_destructuring_let() {
+        let mut parser = Parser::new("(let ((a 1) ((Point x y) p) (b 2)) body)").unwrap();
+        let expr = parser.parse_expr().unwrap();
+        match expr.node {
+            Expr::Let(bindings, _body) => {
+                // a = 1, __destr_0 = p, x = field, y = field, b = 2
+                assert_eq!(bindings.len(), 5);
+                assert_eq!(bindings[0].name.node, "a");
+                assert!(bindings[1].name.node.starts_with("__destr_"));
+                assert_eq!(bindings[2].name.node, "x");
+                assert_eq!(bindings[3].name.node, "y");
+                assert_eq!(bindings[4].name.node, "b");
+            }
+            _ => panic!("expected let"),
         }
     }
 }
