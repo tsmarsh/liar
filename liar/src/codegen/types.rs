@@ -3,9 +3,30 @@
 //! Functions to convert liar types to lIR types.
 
 use crate::ast::{Defun, Expr, Type};
+use crate::span::Spanned;
 use lir_core::ast as lir;
 
 use super::context::CodegenContext;
+
+/// Infer return type for type conversion operations based on first argument (target type)
+fn infer_conversion_return_type(args: &[Spanned<Expr>]) -> lir::ReturnType {
+    if let Some(first_arg) = args.first() {
+        if let Expr::Var(type_name) = &first_arg.node {
+            return match type_name.as_str() {
+                "i1" => lir::ReturnType::Scalar(lir::ScalarType::I1),
+                "i8" => lir::ReturnType::Scalar(lir::ScalarType::I8),
+                "i16" => lir::ReturnType::Scalar(lir::ScalarType::I16),
+                "i32" => lir::ReturnType::Scalar(lir::ScalarType::I32),
+                "i64" => lir::ReturnType::Scalar(lir::ScalarType::I64),
+                "float" => lir::ReturnType::Scalar(lir::ScalarType::Float),
+                "double" => lir::ReturnType::Scalar(lir::ScalarType::Double),
+                _ => lir::ReturnType::Scalar(lir::ScalarType::I64),
+            };
+        }
+    }
+    // Default if we can't determine the type
+    lir::ReturnType::Scalar(lir::ScalarType::I64)
+}
 
 /// Infer the return type of a liar function definition
 pub fn infer_function_return_type(ctx: &CodegenContext, defun: &Defun) -> lir::ReturnType {
@@ -48,6 +69,11 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
                     // Boolean ops return i1
                     "not" | "and" | "or" => {
                         return lir::ReturnType::Scalar(lir::ScalarType::I1);
+                    }
+                    // Type conversions - return type based on first argument
+                    "trunc" | "zext" | "sext" | "fptrunc" | "fpext" | "fptosi" | "fptoui"
+                    | "sitofp" | "uitofp" => {
+                        return infer_conversion_return_type(_args);
                     }
                     // Builtins that return pointers
                     "share" | "box" | "rc-new" | "cons" => {

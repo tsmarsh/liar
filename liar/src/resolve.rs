@@ -145,12 +145,31 @@ const BUILTINS: &[&str] = &[
     // I/O (not yet implemented but reserved)
     "print",
     "println",
-    // Type conversions (reserved)
+    // Type conversions
     "int",
     "float",
     "string",
+    // Integer width conversions
+    "trunc",
+    "zext",
+    "sext",
+    // Float precision conversions
+    "fptrunc",
+    "fpext",
+    // Float <-> int conversions
+    "fptosi",
+    "fptoui",
+    "sitofp",
+    "uitofp",
     // Nil check
     "nil?",
+    // Type names (used as arguments to conversion functions)
+    "i1",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "double",
 ];
 
 impl Resolver {

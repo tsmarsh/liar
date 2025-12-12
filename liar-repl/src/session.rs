@@ -376,7 +376,7 @@ mod tests {
 
         // Define multiple functions
         assert!(matches!(
-            session.eval("(defun double (x) (* x 2))"),
+            session.eval("(defun twice (x) (* x 2))"),
             EvalResult::Defined(_)
         ));
         assert!(matches!(
@@ -385,7 +385,7 @@ mod tests {
         ));
 
         // Call them
-        match session.eval("(double 5)") {
+        match session.eval("(twice 5)") {
             EvalResult::Value(v) => assert_eq!(format_value(&v), "10"),
             other => panic!("expected Value, got {:?}", other),
         }

@@ -10,6 +10,33 @@ use lir_core::ast as lir;
 use super::context::CodegenContext;
 use super::expr::generate_expr;
 
+/// Parse a scalar type from an expression (should be a symbol like i8, i64, float, double)
+fn parse_scalar_type(expr: &Spanned<Expr>, type_expr: &Spanned<Expr>) -> Result<lir::ScalarType> {
+    if let Expr::Var(name) = &type_expr.node {
+        match name.as_str() {
+            "i1" => Ok(lir::ScalarType::I1),
+            "i8" => Ok(lir::ScalarType::I8),
+            "i16" => Ok(lir::ScalarType::I16),
+            "i32" => Ok(lir::ScalarType::I32),
+            "i64" => Ok(lir::ScalarType::I64),
+            "float" => Ok(lir::ScalarType::Float),
+            "double" => Ok(lir::ScalarType::Double),
+            _ => Err(CompileError::codegen(
+                type_expr.span,
+                format!(
+                    "unknown type '{}', expected i1/i8/i16/i32/i64/float/double",
+                    name
+                ),
+            )),
+        }
+    } else {
+        Err(CompileError::codegen(
+            expr.span,
+            "type conversion requires a type name as first argument (e.g., i64, double)",
+        ))
+    }
+}
+
 /// Generate code for builtin operations
 /// Returns Some(expr) if the operation is a builtin, None otherwise
 pub fn generate_builtin(
@@ -461,6 +488,93 @@ pub fn generate_builtin(
                 pred: lir::ICmpPred::Eq,
                 lhs: Box::new(a),
                 rhs: Box::new(lir::Expr::NullPtr),
+            })
+        }
+
+        // Integer width conversions
+        "trunc" => {
+            check_binary(expr, "trunc", args)?;
+            let ty = parse_scalar_type(expr, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::Trunc {
+                ty,
+                value: Box::new(value),
+            })
+        }
+        "zext" => {
+            check_binary(expr, "zext", args)?;
+            let ty = parse_scalar_type(expr, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::ZExt {
+                ty,
+                value: Box::new(value),
+            })
+        }
+        "sext" => {
+            check_binary(expr, "sext", args)?;
+            let ty = parse_scalar_type(expr, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::SExt {
+                ty,
+                value: Box::new(value),
+            })
+        }
+
+        // Float precision conversions
+        "fptrunc" => {
+            check_binary(expr, "fptrunc", args)?;
+            let ty = parse_scalar_type(expr, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FPTrunc {
+                ty,
+                value: Box::new(value),
+            })
+        }
+        "fpext" => {
+            check_binary(expr, "fpext", args)?;
+            let ty = parse_scalar_type(expr, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FPExt {
+                ty,
+                value: Box::new(value),
+            })
+        }
+
+        // Float <-> int conversions
+        "fptosi" => {
+            check_binary(expr, "fptosi", args)?;
+            let ty = parse_scalar_type(expr, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FPToSI {
+                ty,
+                value: Box::new(value),
+            })
+        }
+        "fptoui" => {
+            check_binary(expr, "fptoui", args)?;
+            let ty = parse_scalar_type(expr, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::FPToUI {
+                ty,
+                value: Box::new(value),
+            })
+        }
+        "sitofp" => {
+            check_binary(expr, "sitofp", args)?;
+            let ty = parse_scalar_type(expr, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::SIToFP {
+                ty,
+                value: Box::new(value),
+            })
+        }
+        "uitofp" => {
+            check_binary(expr, "uitofp", args)?;
+            let ty = parse_scalar_type(expr, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::UIToFP {
+                ty,
+                value: Box::new(value),
             })
         }
 

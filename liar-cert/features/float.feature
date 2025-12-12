@@ -65,7 +65,7 @@ Feature: Float Arithmetic
     Then the float result is 5.0
 
   Scenario: Float passed to function
-    Given the definition (defun double (x: double) (+. x x))
-    Given the definition (defun test () (double 3.5))
+    Given the definition (defun twice (x: double) (+. x x))
+    Given the definition (defun test () (twice 3.5))
     When I evaluate (test)
     Then the float result is 7.0
