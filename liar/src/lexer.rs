@@ -536,7 +536,11 @@ impl<'a> Lexer<'a> {
 }
 
 fn is_symbol_start(c: char) -> bool {
-    c.is_alphabetic() || matches!(c, '_' | '+' | '-' | '*' | '/' | '=' | '<' | '>' | '!' | '?')
+    c.is_alphabetic()
+        || matches!(
+            c,
+            '_' | '+' | '-' | '*' | '/' | '%' | '=' | '<' | '>' | '!' | '?'
+        )
 }
 
 fn is_symbol_continue(c: char) -> bool {

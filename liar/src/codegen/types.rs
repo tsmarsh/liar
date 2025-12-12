@@ -31,9 +31,19 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
         Expr::Call(func, _args) => {
             if let Expr::Var(op) = &func.node {
                 match op.as_str() {
-                    // Comparisons return i1
+                    // Integer comparisons return i1
                     "=" | "==" | "!=" | "<" | ">" | "<=" | ">=" => {
                         return lir::ReturnType::Scalar(lir::ScalarType::I1);
+                    }
+                    // Float comparisons return i1
+                    "=." | "!=." | "<." | ">." | "<=." | ">=." | "f=" | "f!=" | "f<" | "f>"
+                    | "f<=" | "f>=" => {
+                        return lir::ReturnType::Scalar(lir::ScalarType::I1);
+                    }
+                    // Float arithmetic returns double
+                    "+." | "-." | "*." | "/." | "%." | "fadd" | "fsub" | "fmul" | "fdiv"
+                    | "frem" => {
+                        return lir::ReturnType::Scalar(lir::ScalarType::Double);
                     }
                     // Boolean ops return i1
                     "not" | "and" | "or" => {

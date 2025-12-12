@@ -109,6 +109,29 @@ async fn then_result_is_bool(world: &mut LiarWorld, expected: String) {
     assert_eq!(actual, expected, "Expected {} but got {}", expected, actual);
 }
 
+#[then(regex = "^the float result is (-?\\d+\\.\\d+)$")]
+async fn then_float_result_is(world: &mut LiarWorld, expected: String) {
+    if let Some(ref err) = world.error {
+        panic!("PENDING: {}", err);
+    }
+
+    let result = world.result.as_ref().expect("No result");
+    let actual = format_value(result);
+
+    // Parse both as f64 for comparison to handle formatting differences
+    let expected_f: f64 = expected.parse().expect("Invalid expected float");
+    let actual_f: f64 = actual
+        .parse()
+        .unwrap_or_else(|_| panic!("Invalid actual float: {}", actual));
+
+    assert!(
+        (expected_f - actual_f).abs() < 1e-10,
+        "Expected {} but got {}",
+        expected,
+        actual
+    );
+}
+
 #[tokio::main]
 async fn main() {
     LiarWorld::run("features").await;
