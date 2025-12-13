@@ -12,6 +12,14 @@ path = "src/lib.rs"
 name = "liarc"
 path = "src/bin/main.rs"
 
+[features]
+default = []
+jit-macros = ["lir-codegen", "inkwell"]
+
 [dependencies]
 lir-core = { path = "../lir-core" }
 thiserror = "1.0"
+
+# Optional dependencies for JIT-powered macro evaluation
+lir-codegen = { path = "../lir-codegen", optional = true }
+inkwell = { version = "0.7.0", features = ["llvm21-1"], optional = true }

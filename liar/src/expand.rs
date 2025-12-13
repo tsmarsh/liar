@@ -5,17 +5,43 @@
 //! 1. Collects macro definitions
 //! 2. Evaluates macro calls at compile time
 //! 3. Removes macro definitions from the program (they don't generate code)
+//!
+//! With the `jit-macros` feature enabled, macros can call user-defined functions
+//! that were defined earlier in the source file.
 
 use std::collections::HashMap;
+
+#[cfg(feature = "jit-macros")]
+use std::cell::RefCell;
 
 use crate::ast::{Defstruct, Expr, Item, Program};
 use crate::error::{CompileError, Result};
 use crate::eval::{Env, Evaluator, MacroDef, StructInfo, Value};
 use crate::span::{Span, Spanned};
 
+#[cfg(feature = "jit-macros")]
+use crate::macro_jit::{value_to_source, MacroJit};
+#[cfg(feature = "jit-macros")]
+use inkwell::context::Context;
+
 /// Convenience function to expand macros in a program
 pub fn expand(program: &mut Program) -> Result<()> {
-    Expander::new().expand_program(program)
+    Expander::new().expand_program(program, None)
+}
+
+/// Expand macros with access to source (enables JIT when feature is enabled)
+#[cfg(not(feature = "jit-macros"))]
+pub fn expand_with_source(program: &mut Program, _source: &str) -> Result<()> {
+    Expander::new().expand_program(program, None)
+}
+
+/// Expand macros with access to source (JIT-enabled version)
+#[cfg(feature = "jit-macros")]
+pub fn expand_with_source(program: &mut Program, source: &str) -> Result<()> {
+    // Create LLVM context that lives for the duration of expansion
+    let context = Context::create();
+    let mut expander = Expander::new();
+    expander.expand_program_with_jit(program, source, &context)
 }
 
 /// Macro expander
@@ -36,6 +62,16 @@ impl Expander {
             macros: HashMap::new(),
             evaluator: Evaluator::new(),
         }
+    }
+
+    /// Access the evaluator for manual evaluation
+    pub fn evaluator(&self) -> &Evaluator {
+        &self.evaluator
+    }
+
+    /// Mutable access to the evaluator
+    pub fn evaluator_mut(&mut self) -> &mut Evaluator {
+        &mut self.evaluator
     }
 
     /// Collect macro definitions from the program
@@ -69,14 +105,71 @@ impl Expander {
             .register_struct(defstruct.name.node.clone(), StructInfo { fields });
     }
 
-    /// Expand all macros in a program
-    pub fn expand_program(&mut self, program: &mut Program) -> Result<()> {
+    /// Expand all macros in a program (non-JIT version)
+    #[allow(unused_variables)]
+    pub fn expand_program(&mut self, program: &mut Program, source: Option<&str>) -> Result<()> {
         // First, collect all macro definitions
         self.collect_macros(program);
 
         // Expand macros in all items
         for item in &mut program.items {
             self.expand_item(item)?;
+        }
+
+        // Remove macro definitions from the program (they don't generate code)
+        program
+            .items
+            .retain(|item| !matches!(item.node, Item::Defmacro(_)));
+
+        Ok(())
+    }
+
+    /// Expand all macros with JIT support for calling user-defined functions
+    #[cfg(feature = "jit-macros")]
+    pub fn expand_program_with_jit(
+        &mut self,
+        program: &mut Program,
+        source: &str,
+        context: &Context,
+    ) -> Result<()> {
+        // First, collect all macro definitions
+        self.collect_macros(program);
+
+        // Register structs
+        for item in &program.items {
+            if let Item::Defstruct(defstruct) = &item.node {
+                self.register_struct(defstruct);
+            }
+        }
+
+        // Create JIT and add all defuns
+        let mut jit = MacroJit::new(context).map_err(|e| {
+            CompileError::macro_error(Span::default(), format!("JIT init failed: {}", e))
+        })?;
+
+        // Add all defuns to JIT (they need to be available before macro expansion)
+        for item in &program.items {
+            if let Item::Defun(defun) = &item.node {
+                let defun_source = &source[item.span.start..item.span.end];
+                if let Err(e) = jit.add_definition(defun_source) {
+                    // Log but don't fail - some functions may have dependencies not yet available
+                    eprintln!(
+                        "Warning: JIT compilation of '{}' failed: {}",
+                        defun.name.node, e
+                    );
+                }
+            }
+        }
+
+        // Clone macros for use in expansion (to avoid borrow conflicts)
+        let macros = self.macros.clone();
+
+        // Create JIT-aware evaluator wrapper
+        let jit_eval = JitEvaluator::new(&self.evaluator, &mut jit, macros);
+
+        // Expand macros in all items using JIT-aware evaluation
+        for item in &mut program.items {
+            expand_item_with_jit(item, &jit_eval)?;
         }
 
         // Remove macro definitions from the program (they don't generate code)
@@ -402,6 +495,334 @@ impl Expander {
     }
 }
 
+/// Expand an item with JIT support (free function to avoid borrow conflicts)
+#[cfg(feature = "jit-macros")]
+fn expand_item_with_jit(item: &mut Spanned<Item>, jit_eval: &JitEvaluator) -> Result<()> {
+    match &mut item.node {
+        Item::Defun(defun) => {
+            expand_expr_with_jit(&mut defun.body, jit_eval)?;
+        }
+        Item::Def(def) => {
+            expand_expr_with_jit(&mut def.value, jit_eval)?;
+        }
+        Item::Defmacro(_) | Item::Defstruct(_) | Item::Defprotocol(_) | Item::Extern(_) => {}
+        Item::ExtendProtocol(extend) => {
+            for method in &mut extend.implementations {
+                expand_expr_with_jit(&mut method.body, jit_eval)?;
+            }
+        }
+        Item::ExtendProtocolDefault(extend) => {
+            for method in &mut extend.implementations {
+                expand_expr_with_jit(&mut method.body, jit_eval)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Expand expressions with JIT-aware macro evaluation (free function)
+#[cfg(feature = "jit-macros")]
+fn expand_expr_with_jit(expr: &mut Spanned<Expr>, jit_eval: &JitEvaluator) -> Result<()> {
+    // Check if this is a macro call
+    if let Expr::Call(func, args) = &expr.node {
+        if let Expr::Var(name) = &func.node {
+            if let Some(macro_def) = jit_eval.macros.get(name).cloned() {
+                // This is a macro call - evaluate it with JIT support
+                let expanded = expand_macro_call_with_jit(&macro_def, args, expr.span, jit_eval)?;
+                *expr = expanded;
+                // Recursively expand the result
+                return expand_expr_with_jit(expr, jit_eval);
+            }
+        }
+    }
+
+    // Not a macro call, recursively expand sub-expressions
+    expand_subexprs_with_jit(expr, jit_eval)
+}
+
+/// Recursively expand sub-expressions (free function)
+#[cfg(feature = "jit-macros")]
+fn expand_subexprs_with_jit(expr: &mut Spanned<Expr>, jit_eval: &JitEvaluator) -> Result<()> {
+    match &mut expr.node {
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::Nil
+        | Expr::Var(_)
+        | Expr::Keyword(_)
+        | Expr::Quote(_)
+        | Expr::ByteArray(_)
+        | Expr::Regex { .. }
+        | Expr::Gensym(_) => {}
+
+        Expr::Call(func, args) => {
+            expand_expr_with_jit(func, jit_eval)?;
+            for arg in args {
+                expand_expr_with_jit(arg, jit_eval)?;
+            }
+        }
+
+        Expr::Lambda(_, body) => {
+            expand_expr_with_jit(body, jit_eval)?;
+        }
+
+        Expr::Let(bindings, body) | Expr::Plet(bindings, body) => {
+            for binding in bindings {
+                expand_expr_with_jit(&mut binding.value, jit_eval)?;
+            }
+            expand_expr_with_jit(body, jit_eval)?;
+        }
+
+        Expr::If(cond, then_br, else_br) => {
+            expand_expr_with_jit(cond, jit_eval)?;
+            expand_expr_with_jit(then_br, jit_eval)?;
+            expand_expr_with_jit(else_br, jit_eval)?;
+        }
+
+        Expr::Do(exprs) => {
+            for e in exprs {
+                expand_expr_with_jit(e, jit_eval)?;
+            }
+        }
+
+        Expr::Quasiquote(inner) | Expr::Unquote(inner) | Expr::UnquoteSplicing(inner) => {
+            expand_expr_with_jit(inner, jit_eval)?;
+        }
+
+        Expr::Set(_, value) => {
+            expand_expr_with_jit(value, jit_eval)?;
+        }
+
+        Expr::Ref(inner) | Expr::RefMut(inner) | Expr::Deref(inner) => {
+            expand_expr_with_jit(inner, jit_eval)?;
+        }
+
+        Expr::Struct(_, fields) => {
+            for (_, value) in fields {
+                expand_expr_with_jit(value, jit_eval)?;
+            }
+        }
+
+        Expr::Field(obj, _) => {
+            expand_expr_with_jit(obj, jit_eval)?;
+        }
+
+        Expr::Unsafe(inner)
+        | Expr::Atom(inner)
+        | Expr::AtomDeref(inner)
+        | Expr::Iter(inner)
+        | Expr::Collect(inner)
+        | Expr::Boxed(inner)
+        | Expr::Wrapping(inner)
+        | Expr::Async(inner)
+        | Expr::Await(inner) => {
+            expand_expr_with_jit(inner, jit_eval)?;
+        }
+
+        Expr::Swap(atom, func) | Expr::Reset(atom, func) => {
+            expand_expr_with_jit(atom, jit_eval)?;
+            expand_expr_with_jit(func, jit_eval)?;
+        }
+
+        Expr::CompareAndSet { atom, old, new } => {
+            expand_expr_with_jit(atom, jit_eval)?;
+            expand_expr_with_jit(old, jit_eval)?;
+            expand_expr_with_jit(new, jit_eval)?;
+        }
+
+        Expr::Vector(items) | Expr::ConvVector(items) | Expr::SimdVector(items) => {
+            for item in items {
+                expand_expr_with_jit(item, jit_eval)?;
+            }
+        }
+
+        Expr::Map(pairs) | Expr::ConvMap(pairs) => {
+            for (k, v) in pairs {
+                expand_expr_with_jit(k, jit_eval)?;
+                expand_expr_with_jit(v, jit_eval)?;
+            }
+        }
+
+        Expr::Dosync(exprs) => {
+            for e in exprs {
+                expand_expr_with_jit(e, jit_eval)?;
+            }
+        }
+
+        Expr::RefSetStm(ref_expr, value) => {
+            expand_expr_with_jit(ref_expr, jit_eval)?;
+            expand_expr_with_jit(value, jit_eval)?;
+        }
+
+        Expr::Alter {
+            ref_expr,
+            fn_expr,
+            args,
+        }
+        | Expr::Commute {
+            ref_expr,
+            fn_expr,
+            args,
+        } => {
+            expand_expr_with_jit(ref_expr, jit_eval)?;
+            expand_expr_with_jit(fn_expr, jit_eval)?;
+            for arg in args {
+                expand_expr_with_jit(arg, jit_eval)?;
+            }
+        }
+
+        // Closure conversion expressions (generated later)
+        Expr::ClosureLit { .. } | Expr::HeapEnvAlloc { .. } | Expr::StackEnvAlloc { .. } => {}
+    }
+    Ok(())
+}
+
+/// Expand a macro call using JIT for function resolution (free function)
+#[cfg(feature = "jit-macros")]
+fn expand_macro_call_with_jit(
+    macro_def: &MacroDef,
+    args: &[Spanned<Expr>],
+    span: Span,
+    jit_eval: &JitEvaluator,
+) -> Result<Spanned<Expr>> {
+    if args.len() != macro_def.params.len() {
+        return Err(CompileError::macro_error(
+            span,
+            format!(
+                "macro expects {} arguments, got {}",
+                macro_def.params.len(),
+                args.len()
+            ),
+        ));
+    }
+
+    // Build environment with macro arguments as values
+    let mut env = Env::new();
+    for (param, arg) in macro_def.params.iter().zip(args.iter()) {
+        env.bind(param.clone(), Value::Expr(arg.clone()));
+    }
+
+    // Evaluate the macro body with JIT support
+    let result = jit_eval.eval(&env, &macro_def.body)?;
+
+    // Convert the result back to an expression
+    Ok(result.to_expr(span))
+}
+
+/// JIT-aware evaluator wrapper
+///
+/// Wraps the base Evaluator and MacroJit to provide function resolution
+/// via JIT compilation for user-defined functions.
+#[cfg(feature = "jit-macros")]
+struct JitEvaluator<'a, 'ctx> {
+    evaluator: &'a Evaluator,
+    jit: RefCell<&'a mut MacroJit<'ctx>>,
+    macros: HashMap<String, MacroDef>,
+}
+
+#[cfg(feature = "jit-macros")]
+impl<'a, 'ctx> JitEvaluator<'a, 'ctx> {
+    fn new(
+        evaluator: &'a Evaluator,
+        jit: &'a mut MacroJit<'ctx>,
+        macros: HashMap<String, MacroDef>,
+    ) -> Self {
+        Self {
+            evaluator,
+            jit: RefCell::new(jit),
+            macros,
+        }
+    }
+
+    /// Evaluate an expression, falling back to JIT for unknown function calls
+    fn eval(&self, env: &Env, expr: &Spanned<Expr>) -> Result<Value> {
+        self.eval_inner(env, expr)
+    }
+
+    fn eval_inner(&self, env: &Env, expr: &Spanned<Expr>) -> Result<Value> {
+        match &expr.node {
+            // Function call - try JIT for unknown functions
+            Expr::Call(func, args) => {
+                if let Expr::Var(name) = &func.node {
+                    // Check builtins first (delegated to base evaluator)
+                    // Then check JIT
+                    if !self.is_builtin(name)
+                        && !self.evaluator.has_macro(name)
+                        && !self.macros.contains_key(name)
+                    {
+                        let jit = self.jit.borrow();
+                        if jit.has_function(name) {
+                            drop(jit);
+                            // Evaluate arguments
+                            let arg_vals: Result<Vec<Value>> =
+                                args.iter().map(|a| self.eval_inner(env, a)).collect();
+                            let arg_vals = arg_vals?;
+
+                            // Build expression string with marshalled arguments
+                            let arg_strs: Vec<String> =
+                                arg_vals.iter().map(value_to_source).collect();
+                            let expr_str = format!("({} {})", name, arg_strs.join(" "));
+
+                            // Evaluate via JIT
+                            let mut jit = self.jit.borrow_mut();
+                            return jit.eval_expr(&expr_str, expr.span);
+                        }
+                    }
+                }
+                // Fall through to base evaluator
+                self.evaluator.eval(env, expr)
+            }
+            // For other expressions, delegate to base evaluator
+            _ => self.evaluator.eval(env, expr),
+        }
+    }
+
+    /// Check if a name is a builtin function
+    fn is_builtin(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "+" | "-"
+                | "*"
+                | "/"
+                | "="
+                | "<"
+                | ">"
+                | "<="
+                | ">="
+                | "not"
+                | "and"
+                | "or"
+                | "list"
+                | "cons"
+                | "first"
+                | "rest"
+                | "nil?"
+                | "empty?"
+                | "length"
+                | "count"
+                | "append"
+                | "reverse"
+                | "map"
+                | "filter"
+                | "reduce"
+                | "str"
+                | "symbol"
+                | "keyword"
+                | "symbol?"
+                | "keyword?"
+                | "list?"
+                | "int?"
+                | "struct-fields"
+                | "struct-field-type"
+                | "struct?"
+                | "make-field-access"
+                | "make-struct-call"
+                | "gensym"
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,7 +832,7 @@ mod tests {
         let mut parser = Parser::new(source)?;
         let mut program = parser.parse_program()?;
         let mut expander = Expander::new();
-        expander.expand_program(&mut program)?;
+        expander.expand_program(&mut program, Some(source))?;
         Ok(program)
     }
 
@@ -619,5 +1040,33 @@ mod tests {
         let body = get_test_body(&program);
         // Should expand to (+ (+ 3 3) (+ 3 3))
         assert!(matches!(body, Expr::Call(_, _)));
+    }
+
+    /// Test that macros can call user-defined functions (when JIT is available)
+    #[test]
+    #[cfg(feature = "jit-macros")]
+    fn test_macro_calls_user_function() {
+        // This test requires JIT to be enabled to actually call the user function
+        let source = r#"
+            (defun triple (x) (* x 3))
+            (defmacro times-three (n)
+              (triple n))
+            (defun test () (times-three 7))
+        "#;
+
+        // Parse and expand with JIT support
+        let mut parser = Parser::new(source).unwrap();
+        let mut program = parser.parse_program().unwrap();
+
+        // Use the JIT-aware expansion
+        let context = inkwell::context::Context::create();
+        let mut expander = Expander::new();
+        expander
+            .expand_program_with_jit(&mut program, source, &context)
+            .unwrap();
+
+        let body = get_test_body(&program);
+        // Should expand to 21 (7 * 3)
+        assert!(matches!(body, Expr::Int(21)));
     }
 }

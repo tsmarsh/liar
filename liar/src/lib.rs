@@ -34,18 +34,47 @@ pub mod resolve;
 pub mod span;
 pub mod types;
 
+#[cfg(feature = "jit-macros")]
+pub mod macro_jit;
+
 use error::{CompileError, Result};
 use parser::Parser;
 use types::TypeEnv;
 
 /// Compile liar source to lIR string
 pub fn compile(source: &str) -> std::result::Result<String, Vec<CompileError>> {
+    compile_inner(source, false)
+}
+
+/// Compile liar source with optional JIT macro support
+///
+/// When `use_jit` is true and the jit-macros feature is enabled, macros can
+/// call user-defined functions that were defined earlier in the source file.
+#[cfg(feature = "jit-macros")]
+pub fn compile_with_jit(source: &str) -> std::result::Result<String, Vec<CompileError>> {
+    compile_inner(source, true)
+}
+
+fn compile_inner(source: &str, use_jit: bool) -> std::result::Result<String, Vec<CompileError>> {
     // Parse
     let mut parser = Parser::new(source).map_err(|e| vec![e])?;
     let mut program = parser.parse_program().map_err(|e| vec![e])?;
 
     // Expand macros
-    expand::expand(&mut program).map_err(|e| vec![e])?;
+    // Note: We only use JIT for top-level compilation to avoid infinite recursion
+    // (macro_jit uses compile() internally, so it must not trigger JIT again)
+    #[cfg(feature = "jit-macros")]
+    if use_jit {
+        expand::expand_with_source(&mut program, source).map_err(|e| vec![e])?;
+    } else {
+        expand::expand(&mut program).map_err(|e| vec![e])?;
+    }
+
+    #[cfg(not(feature = "jit-macros"))]
+    {
+        let _ = use_jit; // suppress unused warning
+        expand::expand(&mut program).map_err(|e| vec![e])?;
+    }
 
     // Resolve names
     resolve::resolve(&program).map_err(|e| vec![e])?;
