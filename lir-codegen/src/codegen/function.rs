@@ -234,7 +234,7 @@ impl<'ctx> super::CodeGen<'ctx> {
 
             // Phi - create the node but defer incoming edges
             Expr::Phi { ty, incoming } => {
-                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                let llvm_ty = self.param_type_to_basic_type(ty).ok_or_else(|| {
                     CodeGenError::CodeGen("cannot create phi for void type".to_string())
                 })?;
 
@@ -306,7 +306,7 @@ impl<'ctx> super::CodeGen<'ctx> {
                 if let Some(val) = val {
                     // Handle phi specially in return position
                     let ret_val = if let Expr::Phi { ty, incoming } = val.as_ref() {
-                        let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                        let llvm_ty = self.param_type_to_basic_type(ty).ok_or_else(|| {
                             CodeGenError::CodeGen("cannot create phi for void type".to_string())
                         })?;
                         let phi = self
@@ -362,7 +362,7 @@ impl<'ctx> super::CodeGen<'ctx> {
         for (name, init) in bindings {
             let val = if let Expr::Phi { ty, incoming } = init.as_ref() {
                 // Handle phi specially - create node now, defer incoming edges
-                let llvm_ty = self.scalar_to_basic_type(ty).ok_or_else(|| {
+                let llvm_ty = self.param_type_to_basic_type(ty).ok_or_else(|| {
                     CodeGenError::CodeGen("cannot create phi for void type".to_string())
                 })?;
                 let phi = self

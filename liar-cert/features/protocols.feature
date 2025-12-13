@@ -25,3 +25,45 @@ Feature: Protocol Dispatch
     Given the definition (defun test () (let ((s (Single 1)) (p (Pair 2 3))) (+ (count s) (count p))))
     When I evaluate (test)
     Then the result is 3
+
+  # MutVector tests
+
+  Scenario: MutVector conj and nth via protocols
+    Given the definition (defprotocol Collection (conj [self x]) (pop [self]))
+    Given the definition (defprotocol Indexable (nth [self idx]))
+    Given the definition (defstruct MutVector (data: ptr))
+    Given the definition (defun mv-get-len (data: ptr) (aget data 0))
+    Given the definition (defun mv-set-len! (data: ptr len) (aset data 0 len))
+    Given the definition (defun mv-data-idx (idx) (+ idx 2))
+    Given the definition (defun mut-vector () -> ptr (let ((cap 8) (data (heap-array (+ cap 2))) (s0 (aset data 0 0)) (s1 (aset data 1 cap))) (share (MutVector data))))
+    Given the definition (extend-protocol Indexable MutVector (nth [self idx] (aget (. self data) (mv-data-idx idx))))
+    Given the definition (extend-protocol Collection MutVector (conj [self x] (let ((data (. self data)) (len (mv-get-len data)) (s1 (aset data (mv-data-idx len) x)) (s2 (mv-set-len! data (+ len 1)))) self)) (pop [self] (let ((data (. self data)) (len (mv-get-len data))) (if (= len 0) 0 (let ((last-idx (- len 1)) (val (aget data (mv-data-idx last-idx))) (s (mv-set-len! data last-idx))) val)))))
+    Given the definition (defun test () (let ((v (mut-vector))) (let ((v (conj v 10))) (let ((v (conj v 20))) (let ((v (conj v 30))) (+ (nth v 0) (+ (nth v 1) (nth v 2))))))))
+    When I evaluate (test)
+    Then the result is 60
+
+  Scenario: MutVector count via Countable protocol
+    Given the definition (defprotocol Countable (count [self]))
+    Given the definition (defprotocol Collection (conj [self x]) (pop [self]))
+    Given the definition (defstruct MutVector (data: ptr))
+    Given the definition (defun mv-get-len (data: ptr) (aget data 0))
+    Given the definition (defun mv-set-len! (data: ptr len) (aset data 0 len))
+    Given the definition (defun mv-data-idx (idx) (+ idx 2))
+    Given the definition (defun mut-vector () -> ptr (let ((cap 8) (data (heap-array (+ cap 2))) (s0 (aset data 0 0)) (s1 (aset data 1 cap))) (share (MutVector data))))
+    Given the definition (extend-protocol Countable MutVector (count [self] (mv-get-len (. self data))))
+    Given the definition (extend-protocol Collection MutVector (conj [self x] (let ((data (. self data)) (len (mv-get-len data)) (s1 (aset data (mv-data-idx len) x)) (s2 (mv-set-len! data (+ len 1)))) self)) (pop [self] (let ((data (. self data)) (len (mv-get-len data))) (if (= len 0) 0 (let ((last-idx (- len 1)) (val (aget data (mv-data-idx last-idx))) (s (mv-set-len! data last-idx))) val)))))
+    Given the definition (defun test () (let ((v (mut-vector))) (let ((v (conj v 10))) (let ((v (conj v 20))) (count v)))))
+    When I evaluate (test)
+    Then the result is 2
+
+  Scenario: MutVector pop returns last element
+    Given the definition (defprotocol Collection (conj [self x]) (pop [self]))
+    Given the definition (defstruct MutVector (data: ptr))
+    Given the definition (defun mv-get-len (data: ptr) (aget data 0))
+    Given the definition (defun mv-set-len! (data: ptr len) (aset data 0 len))
+    Given the definition (defun mv-data-idx (idx) (+ idx 2))
+    Given the definition (defun mut-vector () -> ptr (let ((cap 8) (data (heap-array (+ cap 2))) (s0 (aset data 0 0)) (s1 (aset data 1 cap))) (share (MutVector data))))
+    Given the definition (extend-protocol Collection MutVector (conj [self x] (let ((data (. self data)) (len (mv-get-len data)) (s1 (aset data (mv-data-idx len) x)) (s2 (mv-set-len! data (+ len 1)))) self)) (pop [self] (let ((data (. self data)) (len (mv-get-len data))) (if (= len 0) 0 (let ((last-idx (- len 1)) (val (aget data (mv-data-idx last-idx))) (s (mv-set-len! data last-idx))) val)))))
+    Given the definition (defun test () (let ((v (mut-vector))) (let ((v (conj v 100))) (let ((v (conj v 200))) (pop v)))))
+    When I evaluate (test)
+    Then the result is 200

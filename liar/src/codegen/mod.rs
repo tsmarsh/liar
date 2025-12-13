@@ -242,6 +242,20 @@ fn generate_defun(
         })
         .collect();
 
+    // Register parameter types for phi inference
+    for param in &params {
+        let return_type = match &param.ty {
+            lir::ParamType::Ptr
+            | lir::ParamType::Own(_)
+            | lir::ParamType::Ref(_)
+            | lir::ParamType::RefMut(_)
+            | lir::ParamType::Rc(_) => lir::ReturnType::Ptr,
+            lir::ParamType::Scalar(s) => lir::ReturnType::Scalar(s.clone()),
+            lir::ParamType::AnonStruct(fields) => lir::ReturnType::AnonStruct(fields.clone()),
+        };
+        ctx.register_var_type(&param.name, return_type);
+    }
+
     // Generate body expression in tail position (for tail call optimization)
     let was_tail = ctx.set_tail_position(true);
     let body_expr = generate_expr(ctx, &defun.body)?;

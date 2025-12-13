@@ -483,14 +483,29 @@ pub fn generate_builtin(
         // Heap array allocation
         "heap-array" => {
             check_unary(expr, "heap-array", args)?;
-            let size = match &args[0].node {
-                Expr::Int(n) => *n as u32,
-                _ => 0, // Dynamic size placeholder
-            };
-            Some(lir::Expr::HeapArray {
-                elem_type: lir::ScalarType::I64,
-                size,
-            })
+            // Check if we have a literal size
+            if let Expr::Int(n) = &args[0].node {
+                Some(lir::Expr::HeapArray {
+                    elem_type: lir::ScalarType::I64,
+                    size: *n as u32,
+                })
+            } else {
+                // Dynamic size - generate malloc call
+                ctx.set_needs_malloc();
+                let size_expr = generate_expr(ctx, &args[0])?;
+                // Multiply by 8 (size of i64) for byte size
+                let byte_size = lir::Expr::Mul(
+                    Box::new(size_expr),
+                    Box::new(lir::Expr::IntLit {
+                        ty: lir::ScalarType::I64,
+                        value: 8,
+                    }),
+                );
+                Some(lir::Expr::Call {
+                    name: "malloc".to_string(),
+                    args: vec![byte_size],
+                })
+            }
         }
 
         // Array copy (for persistent data structures)

@@ -483,7 +483,15 @@ impl TypeChecker {
 
             Expr::Phi { ty, incoming } => {
                 // Check all incoming values have the expected type
-                let expected = Type::Scalar(ty.clone());
+                let expected = match ty {
+                    ParamType::Scalar(s) => Type::Scalar(s.clone()),
+                    ParamType::Ptr
+                    | ParamType::Own(_)
+                    | ParamType::Ref(_)
+                    | ParamType::RefMut(_)
+                    | ParamType::Rc(_)
+                    | ParamType::AnonStruct(_) => Type::Ptr,
+                };
                 for (_, value) in incoming {
                     let value_ty = self.check(value)?;
                     if value_ty != expected {

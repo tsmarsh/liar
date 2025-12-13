@@ -115,8 +115,16 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
             }
         }
 
-        // Variable - we don't track variable types, default to i64
-        Expr::Var(_) => lir::ReturnType::Scalar(lir::ScalarType::I64),
+        // Variable - look up registered type, special case for 'self'
+        Expr::Var(name) => {
+            if let Some(ty) = ctx.lookup_var_type(name) {
+                ty.clone()
+            } else if name == "self" {
+                lir::ReturnType::Ptr
+            } else {
+                lir::ReturnType::Scalar(lir::ScalarType::I64)
+            }
+        }
 
         // Lambda returns a closure struct { fn_ptr: ptr, env_ptr: ptr }
         Expr::Lambda(_, _) => {
@@ -275,8 +283,16 @@ pub fn infer_return_type(ctx: &CodegenContext, expr: &lir::Expr) -> lir::ReturnT
             .cloned()
             .unwrap_or(lir::ReturnType::Scalar(lir::ScalarType::I64)),
 
-        // Local ref - we don't track types, default to i64
-        lir::Expr::LocalRef(_) => lir::ReturnType::Scalar(lir::ScalarType::I64),
+        // Local ref - look up registered variable type, special case for 'self'
+        lir::Expr::LocalRef(name) => {
+            if let Some(ty) = ctx.lookup_var_type(name) {
+                ty.clone()
+            } else if name == "self" {
+                lir::ReturnType::Ptr
+            } else {
+                lir::ReturnType::Scalar(lir::ScalarType::I64)
+            }
+        }
 
         // Struct literal - infer types from fields (for closure returns)
         lir::Expr::StructLit(fields) => {

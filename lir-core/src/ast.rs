@@ -471,7 +471,7 @@ pub enum Expr {
     // Control flow
     Br(BranchTarget),
     Phi {
-        ty: ScalarType,
+        ty: ParamType,
         incoming: Vec<(String, Box<Expr>)>, // (block_label, value)
     },
 

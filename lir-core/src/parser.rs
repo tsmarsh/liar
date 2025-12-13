@@ -617,9 +617,9 @@ impl<'a> Parser<'a> {
 
     /// Parse phi: (phi type (label1 val1) (label2 val2) ...)
     fn parse_phi(&mut self) -> Result<Expr, ParseError> {
-        // Parse the type
+        // Parse the type (can be scalar or ptr)
         let ty = match self.lexer.next_token_peeked()? {
-            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(Token::Ident(ref s)) => self.param_type_from_name(s)?,
             Some(tok) => {
                 return Err(ParseError::Expected {
                     expected: "type".to_string(),

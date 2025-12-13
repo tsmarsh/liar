@@ -25,6 +25,8 @@ pub struct CodegenContext {
     pub struct_defs: HashMap<String, StructInfo>,
     /// Variable to struct type mapping (for field access)
     pub var_struct_types: HashMap<String, String>,
+    /// Variable types for phi inference
+    var_types: HashMap<String, lir::ReturnType>,
     /// Protocol method to protocol name mapping
     pub protocol_methods: HashMap<String, String>,
     /// Protocol implementations: (type_name, method_name) -> impl_fn_name
@@ -74,6 +76,7 @@ impl CodegenContext {
             extern_funcs: std::collections::HashSet::new(),
             struct_defs: HashMap::new(),
             var_struct_types: HashMap::new(),
+            var_types: HashMap::new(),
             protocol_methods: HashMap::new(),
             protocol_impls: HashMap::new(),
             needs_malloc: false,
@@ -96,6 +99,7 @@ impl CodegenContext {
         self.extern_funcs.clear();
         self.struct_defs.clear();
         self.var_struct_types.clear();
+        self.var_types.clear();
         self.protocol_methods.clear();
         self.protocol_impls.clear();
         self.needs_malloc = false;
@@ -111,6 +115,18 @@ impl CodegenContext {
         self.can_emit_tailcall = true;
     }
 
+    // ========== Variable Type Tracking ==========
+
+    /// Register a variable's type for phi inference
+    pub fn register_var_type(&mut self, var_name: &str, ty: lir::ReturnType) {
+        self.var_types.insert(var_name.to_string(), ty);
+    }
+
+    /// Look up a variable's type
+    pub fn lookup_var_type(&self, var_name: &str) -> Option<&lir::ReturnType> {
+        self.var_types.get(var_name)
+    }
+
     // ========== Block Management ==========
 
     /// Initialize for a new function - clears blocks and starts at "entry"
@@ -120,6 +136,7 @@ impl CodegenContext {
         self.block_counter = 0;
         self.pending_phis.clear();
         self.entry_bindings.clear();
+        self.var_types.clear();
         self.in_tail_position = false;
         self.can_emit_tailcall = true;
     }

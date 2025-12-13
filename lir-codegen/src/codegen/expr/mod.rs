@@ -532,8 +532,8 @@ impl<'ctx> super::CodeGen<'ctx> {
             .build_store(elem_ptr, val)
             .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
-        // Return dummy value
-        Ok(self.context.i32_type().const_zero().into())
+        // Return the value that was set (as i64)
+        Ok(self.context.i64_type().const_zero().into())
     }
 
     /// Compile heap array allocation via malloc

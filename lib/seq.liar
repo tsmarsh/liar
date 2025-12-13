@@ -11,9 +11,18 @@
   (first [self])      ; returns the head element
   (rest [self]))      ; returns the tail (Seq or nil)
 
+;; Countable - collections with a count
+(defprotocol Countable
+  (count [self]))     ; returns number of elements
+
+;; Indexable - random access by index
+(defprotocol Indexable
+  (nth [self idx]))   ; returns element at index (0-based)
+
 ;; Collection - basic collection operations
 (defprotocol Collection
-  (conj [self x]))    ; returns new collection with x added
+  (conj [self x])     ; returns collection with x added
+  (pop [self]))
 
 ;;; ============================================================
 ;;; Cons - the fundamental list building block
@@ -25,8 +34,64 @@
   (first [self] (. self head))
   (rest [self] (. self tail)))
 
+(extend-protocol Countable Cons
+  (count [self]
+    (+ 1 (count-seq (. self tail)))))
+
+(extend-protocol Indexable Cons
+  (nth [self idx]
+    (if (= idx 0)
+        (. self head)
+        (nth-seq (. self tail) (- idx 1)))))
+
 (extend-protocol Collection Cons
-  (conj [self x] (share (Cons x self))))
+  (conj [self x] (share (Cons x self)))
+  (pop [self] (. self tail)))
+
+;;; ============================================================
+;;; MutVector - a mutable, growable vector
+;;; ============================================================
+
+(defstruct MutVector (data: ptr))
+
+;; Internal helpers for MutVector
+;; data layout: [len, cap, elem0, elem1, ...]
+(defun mv-get-len (data: ptr) (aget data 0))
+(defun mv-set-len! (data: ptr len) (aset data 0 len))
+(defun mv-data-idx (idx) (+ idx 2))
+
+;; Constructor - creates an empty mutable vector
+(defun mut-vector () -> ptr
+  (let ((cap 8)
+        (data (heap-array (+ cap 2)))
+        (s0 (aset data 0 0))
+        (s1 (aset data 1 cap)))
+    (share (MutVector data))))
+
+(extend-protocol Countable MutVector
+  (count [self]
+    (mv-get-len (. self data))))
+
+(extend-protocol Indexable MutVector
+  (nth [self idx]
+    (aget (. self data) (mv-data-idx idx))))
+
+(extend-protocol Collection MutVector
+  (conj [self x]
+    (let ((data (. self data))
+          (len (mv-get-len data))
+          (s1 (aset data (mv-data-idx len) x))
+          (s2 (mv-set-len! data (+ len 1))))
+      self))
+  (pop [self]
+    (let ((data (. self data))
+          (len (mv-get-len data)))
+      (if (= len 0)
+          0
+          (let ((last-idx (- len 1))
+                (val (aget data (mv-data-idx last-idx)))
+                (s (mv-set-len! data last-idx)))
+            val)))))
 
 ;;; ============================================================
 ;;; List constructors
@@ -56,19 +121,17 @@
 ;;; Sequence operations (work on any Seq)
 ;;; ============================================================
 
-;; count - number of elements in a sequence
-(defun count (seq: ptr)
+;; count-seq - helper that handles nil, dispatches to Countable
+(defun count-seq (seq: ptr)
   (if (nil? seq)
       0
-      (+ 1 (count (rest seq)))))
+      (count seq)))
 
-;; nth - get element at index (0-based)
-(defun nth (seq: ptr n)
+;; nth-seq - helper that handles nil, dispatches to Indexable
+(defun nth-seq (seq: ptr n)
   (if (nil? seq)
       0  ; out of bounds returns 0
-      (if (= n 0)
-          (first seq)
-          (nth (rest seq) (- n 1)))))
+      (nth seq n)))
 
 ;; last - get last element
 (defun last (seq: ptr)

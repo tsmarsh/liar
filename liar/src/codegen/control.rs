@@ -102,8 +102,9 @@ pub fn generate_if(
     let then_expr = generate_expr(ctx, then)?;
     // Infer phi type from then branch before flattening
     let phi_type = match infer_return_type(ctx, &then_expr) {
-        lir::ReturnType::Scalar(s) => s,
-        _ => lir::ScalarType::I64, // Default for non-scalar types
+        lir::ReturnType::Scalar(s) => lir::ParamType::Scalar(s),
+        lir::ReturnType::Ptr => lir::ParamType::Ptr,
+        lir::ReturnType::AnonStruct(fields) => lir::ParamType::AnonStruct(fields),
     };
     // After generating then expr, we might be in a different block (if nested if)
     let then_final_block = ctx.current_block().to_string();
