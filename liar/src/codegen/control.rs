@@ -245,17 +245,23 @@ pub fn generate_let(
     // If so, we need to emit bindings BEFORE the body generates branches
     let body_is_multiblock = will_generate_multiblock(&body.node);
 
-    if body_is_multiblock && ctx.current_block() == "entry" {
-        // Multi-block body: emit bindings as entry bindings FIRST
-        // These will be included in the entry block before any branches
+    if body_is_multiblock {
+        // Multi-block body: emit bindings BEFORE branches are generated
+        // Use entry bindings for entry block, block bindings for other blocks
+        let in_entry = ctx.current_block() == "entry";
+
         ctx.set_tail_position(false);
         for binding in bindings.iter() {
             let value = generate_expr(ctx, &binding.value)?;
-            ctx.add_entry_binding(binding.name.node.clone(), value);
+            if in_entry {
+                ctx.add_entry_binding(binding.name.node.clone(), value);
+            } else {
+                ctx.add_block_binding(binding.name.node.clone(), value);
+            }
         }
         ctx.set_tail_position(was_tail);
 
-        // Now generate the body - branches will pick up entry bindings
+        // Now generate the body - branches will pick up the bindings
         let body_expr = generate_expr(ctx, body)?;
 
         // Handle cleanup if needed

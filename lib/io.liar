@@ -2,9 +2,6 @@
 ;;
 ;; Provides file I/O operations built on libc.
 ;; For bootstrap, we use blocking operations.
-;;
-;; Note: Some functions are factored into helpers to work around
-;; a codegen bug with nested let/if/do constructs.
 
 ;;; ============================================
 ;;; libc FFI declarations
@@ -77,26 +74,6 @@
 ;;; High-Level Conveniences
 ;;; ============================================
 
-;; Helper: read file content into buffer and close
-(defun slurp-read (fd buf: ptr size) -> ptr
-  (let ((_ (lseek fd 0 0)))
-    (let ((_ (read fd buf size)))
-      (let ((_ (store-byte (ptr+ buf size) 0)))
-        (let ((_ (close fd)))
-          buf)))))
-
-;; Helper: close fd and return nil
-(defun slurp-error (fd) -> ptr
-  (let ((_ (close fd)))
-    nil))
-
-;; Helper: allocate buffer and read
-(defun slurp-alloc (fd size) -> ptr
-  (let ((buf (malloc (+ size 1))))
-    (if (nil? buf)
-        (slurp-error fd)
-        (slurp-read fd buf size))))
-
 ;; Read entire file as null-terminated string. Returns ptr or nil.
 ;; Caller is responsible for freeing the returned buffer.
 (defun slurp (path) -> ptr
@@ -104,13 +81,14 @@
     (if (< fd 0)
         nil
         (let ((size (file-size fd)))
-          (slurp-alloc fd size)))))
-
-;; Helper: write contents to fd and close
-(defun spit-write (fd contents: ptr len) -> i64
-  (let ((written (write fd contents len)))
-    (let ((_ (close fd)))
-      written)))
+          (let ((buf (malloc (+ size 1))))
+            (if (nil? buf)
+                (let ((_ (close fd))) nil)
+                (let ((_ (lseek fd 0 0)))
+                  (let ((_ (read fd buf size)))
+                    (let ((_ (store-byte (ptr+ buf size) 0)))
+                      (let ((_ (close fd)))
+                        buf))))))))))
 
 ;; Write null-terminated string to file. Returns bytes written or -1.
 (defun spit (path contents) -> i64
@@ -118,7 +96,9 @@
     (if (< fd 0)
         -1
         (let ((len (strlen contents)))
-          (spit-write fd contents len)))))
+          (let ((written (write fd contents len)))
+            (let ((_ (close fd)))
+              written))))))
 
 ;; Append null-terminated string to file. Returns bytes written or -1.
 (defun spit-append (path contents) -> i64
@@ -126,7 +106,9 @@
     (if (< fd 0)
         -1
         (let ((len (strlen contents)))
-          (spit-write fd contents len)))))
+          (let ((written (write fd contents len)))
+            (let ((_ (close fd)))
+              written))))))
 
 
 ;;; ============================================

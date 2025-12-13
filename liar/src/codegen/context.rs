@@ -61,6 +61,9 @@ pub struct CodegenContext {
     /// Entry bindings that must be emitted BEFORE any branches in the entry block
     /// Used for closure env access - these bindings need to be available in all branches
     entry_bindings: Vec<(String, Box<lir::Expr>)>,
+    /// Block bindings that must be emitted at the start of the current block
+    /// Used for let bindings when body is multiblock (if expression)
+    block_bindings: Vec<(String, Box<lir::Expr>)>,
     /// Whether the current expression is in tail position
     /// When true, direct function calls should be generated as tail calls
     in_tail_position: bool,
@@ -97,6 +100,7 @@ impl CodegenContext {
             block_counter: 0,
             pending_phis: Vec::new(),
             entry_bindings: Vec::new(),
+            block_bindings: Vec::new(),
             in_tail_position: false,
             can_emit_tailcall: true,
         }
@@ -122,6 +126,7 @@ impl CodegenContext {
         self.block_counter = 0;
         self.pending_phis.clear();
         self.entry_bindings.clear();
+        self.block_bindings.clear();
         self.in_tail_position = false;
         self.can_emit_tailcall = true;
     }
@@ -147,6 +152,7 @@ impl CodegenContext {
         self.block_counter = 0;
         self.pending_phis.clear();
         self.entry_bindings.clear();
+        self.block_bindings.clear();
         self.var_types.clear();
         self.var_struct_types.clear(); // Clear struct type tracking between functions
         self.in_tail_position = false;
@@ -168,6 +174,7 @@ impl CodegenContext {
     /// Returns the completed block
     /// If there are pending phi bindings, they are wrapped around the terminator
     /// If this is the entry block and there are entry bindings, they are emitted first
+    /// Block bindings are always emitted first (for let bindings before if branches)
     pub fn end_block(&mut self, terminator: lir::Expr) -> lir::BasicBlock {
         // Take any pending phi bindings
         let pending = std::mem::take(&mut self.pending_phis);
@@ -181,6 +188,16 @@ impl CodegenContext {
                 body: vec![terminator],
             }
         };
+
+        // Block bindings for let expressions with multiblock bodies
+        // These need to be available before any branches
+        if !self.block_bindings.is_empty() {
+            let block_binds = std::mem::take(&mut self.block_bindings);
+            instr = lir::Expr::Let {
+                bindings: block_binds,
+                body: vec![instr],
+            };
+        }
 
         // If this is the entry block and there are entry bindings, wrap those first
         // Entry bindings are for captured variables that must be available in all branches
@@ -201,8 +218,11 @@ impl CodegenContext {
     }
 
     /// Start a new block with the given label
+    /// Clears block bindings (they belong to the previous block)
     pub fn start_block(&mut self, label: &str) {
         self.current_block_label = label.to_string();
+        // Block bindings should have been consumed by end_block, but clear just in case
+        self.block_bindings.clear();
     }
 
     /// Add a phi binding to be emitted at the start of the current block
@@ -225,6 +245,12 @@ impl CodegenContext {
     /// Take entry bindings (for single-block functions that don't use end_block)
     pub fn take_entry_bindings(&mut self) -> Vec<(String, Box<lir::Expr>)> {
         std::mem::take(&mut self.entry_bindings)
+    }
+
+    /// Add a block binding - these are emitted at the start of the current block
+    /// before any branches. Used for let bindings when the body is multiblock.
+    pub fn add_block_binding(&mut self, name: String, value: lir::Expr) {
+        self.block_bindings.push((name, Box::new(value)));
     }
 
     /// Take all completed blocks (for function finalization)
