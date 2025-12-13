@@ -396,7 +396,7 @@ impl Evaluator {
     }
 
     /// Evaluate built-in functions
-    fn eval_builtin(
+    pub fn eval_builtin(
         &self,
         env: &Env,
         name: &str,

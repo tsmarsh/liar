@@ -142,7 +142,7 @@ impl Expander {
             }
         }
 
-        // Create JIT and add all defuns
+        // Create JIT - stdlib is automatically loaded by MacroJit::new()
         let mut jit = MacroJit::new(context).map_err(|e| {
             CompileError::macro_error(Span::default(), format!("JIT init failed: {}", e))
         })?;
@@ -735,91 +735,223 @@ impl<'a, 'ctx> JitEvaluator<'a, 'ctx> {
         }
     }
 
-    /// Evaluate an expression, falling back to JIT for unknown function calls
+    /// Evaluate an expression with JIT-aware function resolution
+    ///
+    /// This method handles all expression types, ensuring that any nested
+    /// function calls go through JIT resolution.
     fn eval(&self, env: &Env, expr: &Spanned<Expr>) -> Result<Value> {
-        self.eval_inner(env, expr)
-    }
+        use crate::ast::Expr;
+        use crate::eval::Value;
+        use std::rc::Rc;
 
-    fn eval_inner(&self, env: &Env, expr: &Spanned<Expr>) -> Result<Value> {
         match &expr.node {
-            // Function call - try JIT for unknown functions
+            // Literals - handle directly
+            Expr::Int(n) => Ok(Value::Int(*n)),
+            Expr::Float(f) => Ok(Value::Float(*f)),
+            Expr::Bool(b) => Ok(Value::Bool(*b)),
+            Expr::String(s) => Ok(Value::String(s.clone())),
+            Expr::Nil => Ok(Value::Nil),
+            Expr::Keyword(k) => Ok(Value::Keyword(k.clone())),
+
+            // Variables - look up in environment
+            Expr::Var(name) => env.lookup(name).ok_or_else(|| {
+                CompileError::macro_error(expr.span, format!("undefined variable '{}'", name))
+            }),
+
+            // Quote
+            Expr::Quote(s) => Ok(Value::Symbol(s.clone())),
+
+            // Let binding - evaluate with JIT-aware recursion
+            Expr::Let(bindings, body) => {
+                let mut new_env = Env::with_parent(Rc::new(env.clone()));
+                for binding in bindings {
+                    let value = self.eval(&new_env, &binding.value)?;
+                    new_env.bind(binding.name.node.clone(), value);
+                }
+                self.eval(&new_env, body)
+            }
+
+            // If - evaluate with JIT-aware recursion
+            Expr::If(cond, then_branch, else_branch) => {
+                let cond_val = self.eval(env, cond)?.unwrap_literal();
+                let is_true = match cond_val {
+                    Value::Bool(b) => b,
+                    Value::Int(n) => n != 0,
+                    Value::Nil => false,
+                    _ => true,
+                };
+                if is_true {
+                    self.eval(env, then_branch)
+                } else {
+                    self.eval(env, else_branch)
+                }
+            }
+
+            // Lambda - create closure
+            Expr::Lambda(params, body) => {
+                let param_names: Vec<String> = params.iter().map(|p| p.name.node.clone()).collect();
+                Ok(Value::Closure {
+                    env: env.clone(),
+                    params: param_names,
+                    body: body.as_ref().clone(),
+                })
+            }
+
+            // Function call - the key case for JIT integration
             Expr::Call(func, args) => {
                 if let Expr::Var(name) = &func.node {
-                    // Check builtins first (delegated to base evaluator)
-                    // Then check JIT
-                    if !self.is_builtin(name)
-                        && !self.evaluator.has_macro(name)
-                        && !self.macros.contains_key(name)
-                    {
-                        let jit = self.jit.borrow();
-                        if jit.has_function(name) {
-                            drop(jit);
-                            // Evaluate arguments
-                            let arg_vals: Result<Vec<Value>> =
-                                args.iter().map(|a| self.eval_inner(env, a)).collect();
-                            let arg_vals = arg_vals?;
+                    // Try builtins first, using JIT-aware eval for arguments
+                    if let Some(result) = self.eval_builtin(env, name, args, expr.span)? {
+                        return Ok(result);
+                    }
 
-                            // Build expression string with marshalled arguments
-                            let arg_strs: Vec<String> =
-                                arg_vals.iter().map(value_to_source).collect();
-                            let expr_str = format!("({} {})", name, arg_strs.join(" "));
+                    // Check if this is a macro call
+                    if self.macros.contains_key(name) || self.evaluator.has_macro(name) {
+                        // Delegate macro expansion to base evaluator
+                        return self.evaluator.eval(env, expr);
+                    }
 
-                            // Evaluate via JIT
-                            let mut jit = self.jit.borrow_mut();
-                            return jit.eval_expr(&expr_str, expr.span);
-                        }
+                    // Check JIT for user-defined functions
+                    let jit = self.jit.borrow();
+                    if jit.has_function(name) {
+                        drop(jit);
+                        // Evaluate arguments with JIT-aware eval
+                        let arg_vals: Result<Vec<Value>> =
+                            args.iter().map(|a| self.eval(env, a)).collect();
+                        let arg_vals = arg_vals?;
+
+                        // Build expression string with marshalled arguments
+                        let arg_strs: Vec<String> = arg_vals.iter().map(value_to_source).collect();
+                        let expr_str = format!("({} {})", name, arg_strs.join(" "));
+
+                        // Evaluate via JIT
+                        let mut jit = self.jit.borrow_mut();
+                        return jit.eval_expr(&expr_str, expr.span);
                     }
                 }
-                // Fall through to base evaluator
-                self.evaluator.eval(env, expr)
+
+                // Fall through to base evaluator for closures and unknown functions
+                // Evaluate function and arguments with JIT-aware eval
+                let func_val = self.eval(env, func)?;
+                let arg_vals: Result<Vec<Value>> = args.iter().map(|a| self.eval(env, a)).collect();
+                let arg_vals = arg_vals?;
+                self.apply(func_val, arg_vals, expr.span)
             }
-            // For other expressions, delegate to base evaluator
+
+            // Quasiquote and other complex expressions - delegate to base evaluator
+            // These don't typically contain function calls that need JIT
             _ => self.evaluator.eval(env, expr),
         }
     }
 
-    /// Check if a name is a builtin function
-    fn is_builtin(&self, name: &str) -> bool {
-        matches!(
-            name,
-            "+" | "-"
-                | "*"
-                | "/"
-                | "="
-                | "<"
-                | ">"
-                | "<="
-                | ">="
-                | "not"
-                | "and"
-                | "or"
-                | "list"
-                | "cons"
-                | "first"
-                | "rest"
-                | "nil?"
-                | "empty?"
-                | "length"
-                | "count"
-                | "append"
-                | "reverse"
-                | "map"
-                | "filter"
-                | "reduce"
-                | "str"
-                | "symbol"
-                | "keyword"
-                | "symbol?"
-                | "keyword?"
-                | "list?"
-                | "int?"
-                | "struct-fields"
-                | "struct-field-type"
-                | "struct?"
-                | "make-field-access"
-                | "make-struct-call"
-                | "gensym"
-        )
+    /// Evaluate a builtin function, using JIT-aware evaluation for arguments
+    fn eval_builtin(
+        &self,
+        env: &Env,
+        name: &str,
+        args: &[Spanned<Expr>],
+        span: Span,
+    ) -> Result<Option<Value>> {
+        use crate::eval::Value;
+
+        match name {
+            // Arithmetic - evaluate args with JIT-aware eval
+            "+" => {
+                let vals: Result<Vec<Value>> = args
+                    .iter()
+                    .map(|a| self.eval(env, a).map(|v| v.unwrap_literal()))
+                    .collect();
+                let vals = vals?;
+                let mut sum = 0i64;
+                for v in vals {
+                    match v {
+                        Value::Int(n) => sum += n,
+                        _ => return Err(CompileError::macro_error(span, "+ requires integers")),
+                    }
+                }
+                Ok(Some(Value::Int(sum)))
+            }
+            "-" => {
+                if args.len() != 2 {
+                    return Err(CompileError::macro_error(span, "- requires 2 arguments"));
+                }
+                let a = self.eval(env, &args[0])?.unwrap_literal();
+                let b = self.eval(env, &args[1])?.unwrap_literal();
+                match (a, b) {
+                    (Value::Int(x), Value::Int(y)) => Ok(Some(Value::Int(x - y))),
+                    _ => Err(CompileError::macro_error(span, "- requires integers")),
+                }
+            }
+            "*" => {
+                let vals: Result<Vec<Value>> = args
+                    .iter()
+                    .map(|a| self.eval(env, a).map(|v| v.unwrap_literal()))
+                    .collect();
+                let vals = vals?;
+                let mut product = 1i64;
+                for v in vals {
+                    match v {
+                        Value::Int(n) => product *= n,
+                        _ => return Err(CompileError::macro_error(span, "* requires integers")),
+                    }
+                }
+                Ok(Some(Value::Int(product)))
+            }
+            "/" => {
+                if args.len() != 2 {
+                    return Err(CompileError::macro_error(span, "/ requires 2 arguments"));
+                }
+                let a = self.eval(env, &args[0])?.unwrap_literal();
+                let b = self.eval(env, &args[1])?.unwrap_literal();
+                match (a, b) {
+                    (Value::Int(x), Value::Int(y)) => {
+                        if y == 0 {
+                            Err(CompileError::macro_error(span, "division by zero"))
+                        } else {
+                            Ok(Some(Value::Int(x / y)))
+                        }
+                    }
+                    _ => Err(CompileError::macro_error(span, "/ requires integers")),
+                }
+            }
+            // For other builtins, delegate to base evaluator's builtin handling
+            // but we need to pass through for evaluation
+            _ => {
+                // Delegate to base evaluator for complex builtins
+                // This is safe because these builtins don't recursively call user functions
+                self.evaluator.eval_builtin(env, name, args, span)
+            }
+        }
+    }
+
+    /// Apply a function value to arguments
+    fn apply(&self, func: Value, args: Vec<Value>, span: Span) -> Result<Value> {
+        use crate::eval::Value;
+        use std::rc::Rc;
+
+        match func {
+            Value::Closure { env, params, body } => {
+                if params.len() != args.len() {
+                    return Err(CompileError::macro_error(
+                        span,
+                        format!(
+                            "function expects {} arguments, got {}",
+                            params.len(),
+                            args.len()
+                        ),
+                    ));
+                }
+                let mut new_env = Env::with_parent(Rc::new(env.clone()));
+                for (param, arg) in params.iter().zip(args) {
+                    new_env.bind(param.clone(), arg);
+                }
+                self.eval(&new_env, &body)
+            }
+            _ => Err(CompileError::macro_error(
+                span,
+                format!("cannot call non-function: {:?}", func),
+            )),
+        }
     }
 }
 
@@ -1068,5 +1200,58 @@ mod tests {
         let body = get_test_body(&program);
         // Should expand to 21 (7 * 3)
         assert!(matches!(body, Expr::Int(21)));
+    }
+
+    /// Test that macros can call stdlib functions (loaded automatically by JIT)
+    #[test]
+    #[cfg(feature = "jit-macros")]
+    fn test_macro_calls_stdlib_function() {
+        // This test verifies that stdlib functions are available to macros
+        let source = r#"
+            (defmacro squared (n)
+              (square n))
+            (defun test () (squared 5))
+        "#;
+
+        // Parse and expand with JIT support
+        let mut parser = Parser::new(source).unwrap();
+        let mut program = parser.parse_program().unwrap();
+
+        // Use the JIT-aware expansion
+        let context = inkwell::context::Context::create();
+        let mut expander = Expander::new();
+        expander
+            .expand_program_with_jit(&mut program, source, &context)
+            .unwrap();
+
+        let body = get_test_body(&program);
+        // Should expand to 25 (5 * 5) using stdlib's square function
+        assert!(matches!(body, Expr::Int(25)));
+    }
+
+    /// Test that stdlib functions can be nested in macro bodies
+    #[test]
+    #[cfg(feature = "jit-macros")]
+    fn test_macro_nested_stdlib_calls() {
+        // This tests that nested function calls in macro bodies work
+        // E.g., (+ (inc a) (dec b)) should correctly evaluate both JIT calls
+        let source = r#"
+            (defmacro compute (a b)
+              (+ (inc a) (dec b)))
+            (defun test () (compute 5 3))
+        "#;
+
+        let mut parser = Parser::new(source).unwrap();
+        let mut program = parser.parse_program().unwrap();
+
+        let context = inkwell::context::Context::create();
+        let mut expander = Expander::new();
+        expander
+            .expand_program_with_jit(&mut program, source, &context)
+            .unwrap();
+
+        let body = get_test_body(&program);
+        // (+ (inc 5) (dec 3)) = (+ 6 2) = 8
+        assert!(matches!(body, Expr::Int(8)));
     }
 }

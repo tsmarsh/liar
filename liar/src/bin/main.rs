@@ -38,7 +38,12 @@ fn main() {
             }
         };
 
-        match liar::compile(&source) {
+        #[cfg(feature = "jit-macros")]
+        let result = liar::compile_with_jit(&source);
+        #[cfg(not(feature = "jit-macros"))]
+        let result = liar::compile(&source);
+
+        match result {
             Ok(lir) => print!("{}", lir),
             Err(errors) => {
                 for e in errors {
