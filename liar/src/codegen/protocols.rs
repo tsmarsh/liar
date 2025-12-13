@@ -2,13 +2,70 @@
 //!
 //! Handles extend-protocol and protocol method calls.
 
-use crate::ast::{Expr, ExtendProtocol, ExtendProtocolDefault};
+use std::collections::HashSet;
+
+use crate::ast::{Expr, ExtendProtocol, ExtendProtocolDefault, MethodImpl};
 use crate::error::{CompileError, Result};
 use crate::span::Spanned;
 use lir_core::ast as lir;
 
 use super::context::CodegenContext;
 use super::expr::generate_expr;
+
+/// Find parameters that are used as callables (closures) in a method body
+/// Only considers variables that are actual parameters of the method
+fn find_closure_params(method: &MethodImpl) -> HashSet<String> {
+    // Collect parameter names
+    let param_names: HashSet<String> = method.params.iter().map(|p| p.node.clone()).collect();
+
+    // Find which parameters are used in call position
+    let mut closure_params = HashSet::new();
+    find_callables_in_expr(&method.body.node, &param_names, &mut closure_params);
+    closure_params
+}
+
+/// Recursively find variables used in call position that are also parameters
+fn find_callables_in_expr(
+    expr: &Expr,
+    param_names: &HashSet<String>,
+    closure_params: &mut HashSet<String>,
+) {
+    match expr {
+        Expr::Call(func, args) => {
+            // If the function is a variable that's one of our parameters, it's a closure
+            if let Expr::Var(name) = &func.node {
+                if param_names.contains(name) {
+                    closure_params.insert(name.clone());
+                }
+            }
+            // Also recurse into function and args
+            find_callables_in_expr(&func.node, param_names, closure_params);
+            for arg in args {
+                find_callables_in_expr(&arg.node, param_names, closure_params);
+            }
+        }
+        Expr::Let(bindings, body) | Expr::Plet(bindings, body) => {
+            for b in bindings {
+                find_callables_in_expr(&b.value.node, param_names, closure_params);
+            }
+            find_callables_in_expr(&body.node, param_names, closure_params);
+        }
+        Expr::If(cond, then_, else_) => {
+            find_callables_in_expr(&cond.node, param_names, closure_params);
+            find_callables_in_expr(&then_.node, param_names, closure_params);
+            find_callables_in_expr(&else_.node, param_names, closure_params);
+        }
+        Expr::Do(exprs) => {
+            for e in exprs {
+                find_callables_in_expr(&e.node, param_names, closure_params);
+            }
+        }
+        Expr::Lambda(_, body) => {
+            find_callables_in_expr(&body.node, param_names, closure_params);
+        }
+        _ => {}
+    }
+}
 
 /// Generate lIR functions for an extend-protocol declaration
 /// Each method implementation becomes a function: __<Protocol>_<Type>__<method>
@@ -184,6 +241,9 @@ pub fn generate_extend_protocol_default(
         // Register the default implementation
         ctx.register_protocol_default(target_protocol, source_protocol, method_name, &fn_name);
 
+        // Find parameters used as closures
+        let closure_params = find_closure_params(method_impl);
+
         // Generate parameters - first param is `self` (ptr to struct)
         let params: Vec<lir::Param> = method_impl
             .params
@@ -192,6 +252,9 @@ pub fn generate_extend_protocol_default(
                 // `self` is a pointer to the struct
                 let ty = if p.node == "self" {
                     lir::ParamType::Ptr
+                } else if closure_params.contains(&p.node) {
+                    // Parameter is used as a callable - it's a closure struct
+                    lir::ParamType::AnonStruct(vec![lir::ParamType::Ptr, lir::ParamType::Ptr])
                 } else {
                     // Other params default to i64
                     lir::ParamType::Scalar(lir::ScalarType::I64)
@@ -326,8 +389,11 @@ pub fn generate_protocol_call(
     let self_arg = &args[0];
 
     // Generate arguments (we'll need them for either dispatch path)
+    // Arguments are NOT in tail position (the protocol call result is what's in tail position)
+    let was_tail = ctx.set_tail_position(false);
     let call_args: Result<Vec<lir::Expr>> = args.iter().map(|a| generate_expr(ctx, a)).collect();
     let call_args = call_args?;
+    ctx.set_tail_position(was_tail);
 
     // Try static dispatch first
     if let Some(type_name) = infer_struct_type(ctx, self_arg) {
@@ -354,7 +420,7 @@ pub fn generate_protocol_call(
 
 /// Generate runtime protocol dispatch based on type_id
 /// Loads type_id from field 0 of receiver, dispatches via nested selects
-/// NOTE: Caller must ensure receiver is not nil (will segfault on nil)
+/// Handles nil receiver gracefully by returning default value
 fn generate_runtime_dispatch(
     ctx: &mut CodegenContext,
     expr: &Spanned<Expr>,
@@ -407,7 +473,7 @@ fn generate_runtime_dispatch(
 
     // Build dispatch chain: nested selects for each implementation
     // Default depends on return type to satisfy LLVM type requirements
-    let mut dispatch_expr: lir::Expr = if returns_ptr {
+    let default_val: lir::Expr = if returns_ptr {
         lir::Expr::NullPtr
     } else {
         lir::Expr::IntLit {
@@ -415,6 +481,8 @@ fn generate_runtime_dispatch(
             value: 0,
         }
     };
+
+    let mut dispatch_expr = default_val.clone();
 
     for (type_name, type_id, impl_fn_name) in impls.iter().rev() {
         let cond = lir::Expr::ICmp {
@@ -444,13 +512,28 @@ fn generate_runtime_dispatch(
         let _ = type_name;
     }
 
-    // Wrap in let to bind receiver and type_id
-    Ok(lir::Expr::Let {
-        bindings: vec![
-            (receiver_var, Box::new(receiver)),
-            (type_id_var, Box::new(load_type_id)),
-        ],
+    // Null check: if receiver is null, return default without loading type_id
+    let null_check = lir::Expr::ICmp {
+        pred: lir::ICmpPred::Eq,
+        lhs: Box::new(lir::Expr::LocalRef(receiver_var.clone())),
+        rhs: Box::new(lir::Expr::NullPtr),
+    };
+
+    let dispatch_with_type_id = lir::Expr::Let {
+        bindings: vec![(type_id_var, Box::new(load_type_id))],
         body: vec![dispatch_expr],
+    };
+
+    let null_safe_dispatch = lir::Expr::Select {
+        cond: Box::new(null_check),
+        true_val: Box::new(default_val),
+        false_val: Box::new(dispatch_with_type_id),
+    };
+
+    // Wrap in let to bind receiver
+    Ok(lir::Expr::Let {
+        bindings: vec![(receiver_var, Box::new(receiver))],
+        body: vec![null_safe_dispatch],
     })
 }
 

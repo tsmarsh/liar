@@ -83,7 +83,59 @@ pub fn generate(program: &Program, type_env: &TypeEnv) -> Result<Module> {
         }
     }
 
-    // Fourth pass: generate code (including protocol implementations)
+    // Fourth pass: register all protocol implementations BEFORE generating code
+    // This ensures runtime dispatch can find implementations regardless of source order
+    for item in &program.items {
+        if let Item::ExtendProtocol(extend) = &item.node {
+            let protocol_name = &extend.protocol.node;
+            let type_name = &extend.type_name.node;
+
+            // Register that this type implements this protocol
+            ctx.register_type_protocol(type_name, protocol_name);
+
+            for method_impl in &extend.implementations {
+                let method_name = &method_impl.name.node;
+                let fn_name = format!("__{}_{}__{}", protocol_name, type_name, method_name);
+
+                // Register this implementation so dispatch can find it
+                ctx.register_protocol_impl(type_name, method_name, &fn_name);
+
+                // Infer and register return type
+                ctx.start_function();
+                ctx.register_var_struct_type("self", type_name);
+                let return_type = infer_liar_expr_type(&ctx, &method_impl.body.node);
+                ctx.register_func_return_type(&fn_name, return_type);
+            }
+        }
+    }
+
+    // Also register protocol defaults before generating code
+    for item in &program.items {
+        if let Item::ExtendProtocolDefault(extend) = &item.node {
+            let target_protocol = &extend.protocol.node;
+            let source_protocol = &extend.source_protocol.node;
+
+            for method_impl in &extend.implementations {
+                let method_name = &method_impl.name.node;
+                let fn_name = format!("__{}_{}_{}", target_protocol, source_protocol, method_name);
+
+                // Register the default implementation
+                ctx.register_protocol_default(
+                    target_protocol,
+                    source_protocol,
+                    method_name,
+                    &fn_name,
+                );
+
+                // Infer and register return type
+                ctx.start_function();
+                let return_type = infer_liar_expr_type(&ctx, &method_impl.body.node);
+                ctx.register_func_return_type(&fn_name, return_type);
+            }
+        }
+    }
+
+    // Fifth pass: generate code (including protocol implementations)
     let mut items = Vec::new();
     for item in &program.items {
         match &item.node {

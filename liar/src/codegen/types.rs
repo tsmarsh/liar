@@ -136,6 +136,35 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
             lir::ReturnType::AnonStruct(vec![lir::ParamType::Ptr, lir::ParamType::Ptr])
         }
 
+        // Field access - look up the struct and field type
+        Expr::Field(obj, field_name) => {
+            // Try to infer the struct type from the object
+            if let Expr::Var(var_name) = &obj.node {
+                if let Some(struct_name) = ctx.lookup_var_struct_type(var_name) {
+                    if let Some(struct_info) = ctx.lookup_struct(struct_name) {
+                        for (name, ty) in &struct_info.fields {
+                            if name == &field_name.node {
+                                // Convert ParamType to ReturnType
+                                return match ty {
+                                    lir::ParamType::Scalar(s) => lir::ReturnType::Scalar(s.clone()),
+                                    lir::ParamType::Ptr
+                                    | lir::ParamType::Own(_)
+                                    | lir::ParamType::Ref(_)
+                                    | lir::ParamType::RefMut(_)
+                                    | lir::ParamType::Rc(_) => lir::ReturnType::Ptr,
+                                    lir::ParamType::AnonStruct(fields) => {
+                                        lir::ReturnType::AnonStruct(fields.clone())
+                                    }
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            // Default to i64 if we can't determine the type
+            lir::ReturnType::Scalar(lir::ScalarType::I64)
+        }
+
         // Default
         _ => lir::ReturnType::Scalar(lir::ScalarType::I64),
     }

@@ -167,3 +167,23 @@
 ;; Convert list to vector
 (defun vec (lst: ptr) -> ptr
   (vec-from-list (vector) lst))
+
+;;; ============================================================
+;;; Protocol Implementations
+;;; ============================================================
+
+;; Note: Protocols (Seq, Countable, Indexable, Collection) are defined in seq.liar
+;; These extend-protocol declarations connect PersistentVector to the protocol system
+
+;; Countable - O(1) count
+(extend-protocol Countable PersistentVector
+  (count [self] (. self cnt)))
+
+;; Indexable - O(log32 n) random access
+(extend-protocol Indexable PersistentVector
+  (nth [self idx] (vec-nth self idx)))
+
+;; Collection - O(log32 n) append
+(extend-protocol Collection PersistentVector
+  (conj [self x] (vec-conj self x))
+  (pop [self] self))  ; TODO: implement vec-pop

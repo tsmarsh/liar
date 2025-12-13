@@ -297,15 +297,41 @@ impl CodegenContext {
 
     /// Get all type implementations for a protocol method
     /// Returns Vec of (type_name, type_id, impl_fn_name)
+    /// Includes both direct implementations and types that use protocol defaults
     pub fn get_method_implementations(&self, method_name: &str) -> Vec<(String, i64, String)> {
         let mut impls = Vec::new();
+        let mut types_with_direct_impl = std::collections::HashSet::new();
+
+        // First: collect direct implementations
         for ((type_name, method), impl_fn) in &self.protocol_impls {
             if method == method_name {
                 if let Some(type_id) = self.struct_type_ids.get(type_name) {
                     impls.push((type_name.clone(), *type_id, impl_fn.clone()));
+                    types_with_direct_impl.insert(type_name.clone());
                 }
             }
         }
+
+        // Second: add types that use protocol defaults
+        // For each default (target_protocol, method) -> (source_protocol, impl_fn),
+        // find types that implement source_protocol but don't have a direct impl
+        for ((_target_proto, method), (source_proto, default_impl_fn)) in &self.protocol_defaults {
+            if method == method_name {
+                // Find all types implementing the source protocol
+                for (type_name, protocols) in &self.type_protocols {
+                    if protocols.contains(source_proto)
+                        && !types_with_direct_impl.contains(type_name)
+                    {
+                        if let Some(type_id) = self.struct_type_ids.get(type_name) {
+                            impls.push((type_name.clone(), *type_id, default_impl_fn.clone()));
+                            // Don't add to types_with_direct_impl - there might be multiple defaults
+                            // (though that would be a semantic error, handle gracefully)
+                        }
+                    }
+                }
+            }
+        }
+
         impls
     }
 

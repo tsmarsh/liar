@@ -24,6 +24,112 @@
   (conj [self x])     ; returns collection with x added
   (pop [self]))
 
+;; Mappable - transform elements
+(defprotocol Mappable
+  (map [self f]))
+
+;; Filterable - select elements
+(defprotocol Filterable
+  (filter [self pred]))
+
+;; Reducible - fold elements
+(defprotocol Reducible
+  (reduce [self f init]))
+
+;; Traversable - iterate for side effects
+(defprotocol Traversable
+  (for-each [self f]))
+
+;; Searchable - search and membership tests
+(defprotocol Searchable
+  (any [self pred])      ; true if pred is true for any element
+  (all [self pred])      ; true if pred is true for all elements
+  (member [self x]))     ; true if x is in self
+
+;; SeqTransform - sequence transformations
+(defprotocol SeqTransform
+  (seq-reverse [self])   ; reverse the sequence
+  (seq-append [self other])  ; concatenate two sequences
+  (seq-take [self n])    ; first n elements
+  (seq-drop [self n]))   ; skip first n elements
+
+;;; ============================================================
+;;; Protocol Defaults - Seq provides Countable, Indexable, and HOFs
+;;; ============================================================
+
+(extend-protocol-default Countable Seq
+  (count [self]
+    (let ((tail (rest self)))
+      (if (nil? tail) 1 (+ 1 (count tail))))))
+
+(extend-protocol-default Indexable Seq
+  (nth [self idx]
+    (if (= idx 0)
+        (first self)
+        (if (nil? (rest self))
+            0
+            (nth (rest self) (- idx 1))))))
+
+(extend-protocol-default Mappable Seq
+  (map [self f]
+    (if (nil? (rest self))
+        (cons (f (first self)) nil)
+        (cons (f (first self)) (map (rest self) f)))))
+
+(extend-protocol-default Filterable Seq
+  (filter [self pred]
+    (if (nil? (rest self))
+        (if (pred (first self))
+            (cons (first self) nil)
+            nil)
+        (if (pred (first self))
+            (cons (first self) (filter (rest self) pred))
+            (filter (rest self) pred)))))
+
+(extend-protocol-default Reducible Seq
+  (reduce [self f init]
+    (if (nil? (rest self))
+        (f init (first self))
+        (reduce (rest self) f (f init (first self))))))
+
+(extend-protocol-default Traversable Seq
+  (for-each [self f]
+    (if (nil? (rest self))
+        (let ((_ (f (first self)))) 0)
+        (let ((_ (f (first self)))) (for-each (rest self) f)))))
+
+(extend-protocol-default Searchable Seq
+  (any [self pred]
+    (if (nil? (rest self))
+        (if (pred (first self)) 1 0)
+        (if (pred (first self)) 1 (any (rest self) pred))))
+  (all [self pred]
+    (if (nil? (rest self))
+        (if (pred (first self)) 1 0)
+        (if (pred (first self)) (all (rest self) pred) 0)))
+  (member [self x]
+    (if (nil? (rest self))
+        (if (= x (first self)) 1 0)
+        (if (= x (first self)) 1 (member (rest self) x)))))
+
+(extend-protocol-default SeqTransform Seq
+  (seq-reverse [self]
+    (seq-reverse-acc self nil))
+  (seq-append [self other]
+    (if (nil? (rest self))
+        (cons (first self) other)
+        (cons (first self) (seq-append (rest self) other))))
+  (seq-take [self n]
+    (if (= n 0) nil
+        (if (nil? (rest self))
+            (cons (first self) nil)
+            (cons (first self) (seq-take (rest self) (- n 1))))))
+  (seq-drop [self n]
+    (if (= n 0) self
+        (if (nil? (rest self))
+            nil
+            (seq-drop (rest self) (- n 1))))))
+
 ;;; ============================================================
 ;;; Cons - the fundamental list building block
 ;;; ============================================================
@@ -34,15 +140,7 @@
   (first [self] (. self head))
   (rest [self] (. self tail)))
 
-(extend-protocol Countable Cons
-  (count [self]
-    (+ 1 (count-seq (. self tail)))))
-
-(extend-protocol Indexable Cons
-  (nth [self idx]
-    (if (= idx 0)
-        (. self head)
-        (nth-seq (. self tail) (- idx 1)))))
+;; Cons gets Countable and Indexable automatically via Seq default
 
 (extend-protocol Collection Cons
   (conj [self x] (share (Cons x self)))
@@ -121,17 +219,12 @@
 ;;; Sequence operations (work on any Seq)
 ;;; ============================================================
 
-;; count-seq - helper that handles nil, dispatches to Countable
-(defun count-seq (seq: ptr)
-  (if (nil? seq)
-      0
-      (count seq)))
-
-;; nth-seq - helper that handles nil, dispatches to Indexable
-(defun nth-seq (seq: ptr n)
-  (if (nil? seq)
-      0  ; out of bounds returns 0
-      (nth seq n)))
+;; Helper for seq-reverse (avoids reduce type issues)
+(defun seq-reverse-acc (seq: ptr acc: ptr) -> ptr
+  (if (nil? seq) acc
+      (if (nil? (rest seq))
+          (cons (first seq) acc)
+          (seq-reverse-acc (rest seq) (cons (first seq) acc)))))
 
 ;; last - get last element
 (defun last (seq: ptr)
@@ -142,35 +235,11 @@
           (last (rest seq)))))
 
 ;;; ============================================================
-;;; Higher-order sequence functions
+;;; Higher-order sequence functions (now via protocols)
 ;;; ============================================================
 
-;; map - apply f to each element, return new list
-(defun map (f seq: ptr)
-  (if (nil? seq)
-      nil
-      (cons (f (first seq)) (map f (rest seq)))))
-
-;; filter - keep elements where pred returns non-zero
-(defun filter (pred seq: ptr)
-  (if (nil? seq)
-      nil
-      (if (pred (first seq))
-          (cons (first seq) (filter pred (rest seq)))
-          (filter pred (rest seq)))))
-
-;; reduce - fold left with accumulator
-(defun reduce (f init seq: ptr)
-  (if (nil? seq)
-      init
-      (reduce f (f init (first seq)) (rest seq))))
-
-;; for-each - apply f to each element for side effects
-(defun for-each (f seq: ptr)
-  (if (nil? seq)
-      0
-      (let ((_ (f (first seq))))
-        (for-each f (rest seq)))))
+;; map, filter, reduce, for-each are now protocol methods
+;; Call style: (map seq f), (filter seq pred), (reduce seq f init), (for-each seq f)
 
 ;;; ============================================================
 ;;; List transformations
@@ -178,7 +247,8 @@
 
 ;; reverse - reverse a list
 (defun reverse (seq: ptr)
-  (reduce (fn (acc x) (cons x acc)) nil seq))
+  (if (nil? seq) nil
+      (reduce seq (fn (acc x) (cons x acc)) nil)))
 
 ;; append - concatenate two lists
 (defun append (seq1: ptr seq2: ptr)
@@ -236,20 +306,26 @@
 
 ;; sum - sum of all elements
 (defun sum (seq: ptr)
-  (reduce (fn (acc x) (+ acc x)) 0 seq))
+  (if (nil? seq) 0
+      (reduce seq (fn (acc x) (+ acc x)) 0)))
 
 ;; product - product of all elements
 (defun product (seq: ptr)
-  (reduce (fn (acc x) (* acc x)) 1 seq))
+  (if (nil? seq) 1
+      (reduce seq (fn (acc x) (* acc x)) 1)))
 
 ;; minimum - smallest element
 (defun minimum (seq: ptr)
   (if (nil? seq)
       0
-      (reduce (fn (acc x) (if (< x acc) x acc)) (first seq) (rest seq))))
+      (if (nil? (rest seq))
+          (first seq)
+          (reduce (rest seq) (fn (acc x) (if (< x acc) x acc)) (first seq)))))
 
 ;; maximum - largest element
 (defun maximum (seq: ptr)
   (if (nil? seq)
       0
-      (reduce (fn (acc x) (if (> x acc) x acc)) (first seq) (rest seq))))
+      (if (nil? (rest seq))
+          (first seq)
+          (reduce (rest seq) (fn (acc x) (if (> x acc) x acc)) (first seq)))))

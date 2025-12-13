@@ -1,0 +1,113 @@
+;; liar Mutable Vector Library
+;;
+;; A growable mutable array. Extends Countable, Indexable, and Collection.
+;;
+;; Internal layout: data array where
+;;   data[0] = length
+;;   data[1] = capacity
+;;   data[2..] = elements
+
+;;; ============================================================
+;;; Data Structure
+;;; ============================================================
+
+(defstruct MutVector (data: ptr))
+
+;;; ============================================================
+;;; Internal Helpers
+;;; ============================================================
+
+(defun mv-default-cap () 8)
+(defun mv-growth-factor () 2)
+
+(defun mv-get-len (data: ptr) (aget data 0))
+(defun mv-get-cap (data: ptr) (aget data 1))
+(defun mv-set-len! (data: ptr len) (aset data 0 len))
+(defun mv-data-idx (idx) (+ idx 2))
+
+;; Copy elements from old array to new array
+(defun mv-copy-loop (old: ptr new: ptr i len) -> ptr
+  (if (>= i len)
+      new
+      (let ((s (aset new (mv-data-idx i) (aget old (mv-data-idx i)))))
+        (mv-copy-loop old new (+ i 1) len))))
+
+(defun mv-copy-data (old: ptr new: ptr len) -> ptr
+  (mv-copy-loop old new 0 len))
+
+;; Grow the vector to accommodate more elements
+(defun mv-grow (v: ptr) -> ptr
+  (let ((old-data (. v data))
+        (old-len (mv-get-len old-data))
+        (old-cap (mv-get-cap old-data))
+        (new-cap (* old-cap (mv-growth-factor)))
+        (new-data (heap-array (+ new-cap 2)))
+        (s0 (aset new-data 0 old-len))
+        (s1 (aset new-data 1 new-cap))
+        (s2 (mv-copy-data old-data new-data old-len)))
+    (share (MutVector new-data))))
+
+;;; ============================================================
+;;; Constructor
+;;; ============================================================
+
+(defun mut-vector () -> ptr
+  (let ((cap (mv-default-cap))
+        (data (heap-array (+ cap 2)))
+        (s0 (aset data 0 0))
+        (s1 (aset data 1 cap)))
+    (share (MutVector data))))
+
+;;; ============================================================
+;;; Protocol Implementations
+;;; ============================================================
+
+(extend-protocol Countable MutVector
+  (count [self]
+    (mv-get-len (. self data))))
+
+(extend-protocol Indexable MutVector
+  (nth [self idx]
+    (let ((data (. self data))
+          (len (mv-get-len data)))
+      (if (>= idx len)
+          0  ; out of bounds
+          (aget data (mv-data-idx idx))))))
+
+(extend-protocol Collection MutVector
+  (conj [self x]
+    (let ((data (. self data))
+          (len (mv-get-len data))
+          (cap (mv-get-cap data)))
+      (if (< len cap)
+          (let ((s1 (aset data (mv-data-idx len) x))
+                (s2 (mv-set-len! data (+ len 1))))
+            self)
+          (let ((new-v (mv-grow self))
+                (new-data (. new-v data))
+                (new-len (mv-get-len new-data))
+                (s1 (aset new-data (mv-data-idx new-len) x))
+                (s2 (mv-set-len! new-data (+ new-len 1))))
+            new-v))))
+  (pop [self]
+    (let ((data (. self data))
+          (len (mv-get-len data)))
+      (if (= len 0)
+          0  ; empty vector
+          (let ((last-idx (- len 1))
+                (val (aget data (mv-data-idx last-idx)))
+                (s (mv-set-len! data last-idx)))
+            val)))))
+
+;;; ============================================================
+;;; Additional Operations
+;;; ============================================================
+
+;; Set element at index (mutates)
+(defun mv-set! (v: ptr idx val)
+  (let ((data (. v data))
+        (len (mv-get-len data)))
+    (if (>= idx len)
+        v  ; out of bounds, return unchanged
+        (let ((s (aset data (mv-data-idx idx) val)))
+          v))))
