@@ -31,6 +31,13 @@ pub struct CodegenContext {
     pub protocol_methods: HashMap<String, String>,
     /// Protocol implementations: (type_name, method_name) -> impl_fn_name
     pub protocol_impls: HashMap<(String, String), String>,
+    /// Type to protocols mapping: type_name -> [protocol_names]
+    /// Tracks which protocols each type implements (via extend-protocol)
+    type_protocols: HashMap<String, Vec<String>>,
+    /// Protocol default implementations: (target_protocol, method) -> (source_protocol, impl_fn_name)
+    /// Used for extend-protocol-default where types implementing source_protocol
+    /// automatically get the default implementation of target_protocol methods
+    protocol_defaults: HashMap<(String, String), (String, String)>,
     /// Whether malloc declaration is needed
     pub needs_malloc: bool,
     /// Whether printf declaration is needed
@@ -79,6 +86,8 @@ impl CodegenContext {
             var_types: HashMap::new(),
             protocol_methods: HashMap::new(),
             protocol_impls: HashMap::new(),
+            type_protocols: HashMap::new(),
+            protocol_defaults: HashMap::new(),
             needs_malloc: false,
             needs_printf: false,
             type_id_counter: 1, // 0 reserved for nil
@@ -102,6 +111,8 @@ impl CodegenContext {
         self.var_types.clear();
         self.protocol_methods.clear();
         self.protocol_impls.clear();
+        self.type_protocols.clear();
+        self.protocol_defaults.clear();
         self.needs_malloc = false;
         self.needs_printf = false;
         self.type_id_counter = 1;
@@ -137,6 +148,7 @@ impl CodegenContext {
         self.pending_phis.clear();
         self.entry_bindings.clear();
         self.var_types.clear();
+        self.var_struct_types.clear(); // Clear struct type tracking between functions
         self.in_tail_position = false;
         self.can_emit_tailcall = true;
     }
@@ -353,6 +365,66 @@ impl CodegenContext {
     pub fn lookup_protocol_impl(&self, type_name: &str, method_name: &str) -> Option<&String> {
         self.protocol_impls
             .get(&(type_name.to_string(), method_name.to_string()))
+    }
+
+    /// Register that a type implements a protocol
+    /// Called when processing extend-protocol
+    pub fn register_type_protocol(&mut self, type_name: &str, protocol: &str) {
+        self.type_protocols
+            .entry(type_name.to_string())
+            .or_default()
+            .push(protocol.to_string());
+    }
+
+    /// Get the protocols implemented by a type
+    pub fn get_type_protocols(&self, type_name: &str) -> &[String] {
+        static EMPTY: Vec<String> = Vec::new();
+        self.type_protocols.get(type_name).unwrap_or(&EMPTY)
+    }
+
+    /// Register a protocol default implementation
+    /// Records that types implementing source_protocol get this default impl for target_protocol
+    pub fn register_protocol_default(
+        &mut self,
+        target_protocol: &str,
+        source_protocol: &str,
+        method: &str,
+        impl_fn: &str,
+    ) {
+        self.protocol_defaults.insert(
+            (target_protocol.to_string(), method.to_string()),
+            (source_protocol.to_string(), impl_fn.to_string()),
+        );
+    }
+
+    /// Look up a protocol default implementation
+    /// Returns (source_protocol, impl_fn_name) if found
+    pub fn lookup_protocol_default(
+        &self,
+        target_protocol: &str,
+        method: &str,
+    ) -> Option<(&str, &str)> {
+        self.protocol_defaults
+            .get(&(target_protocol.to_string(), method.to_string()))
+            .map(|(source, impl_fn)| (source.as_str(), impl_fn.as_str()))
+    }
+
+    /// Look up a protocol default that applies to a type based on its implemented protocols
+    /// Returns the impl_fn_name if a matching default exists
+    pub fn lookup_default_for_type(&self, type_name: &str, method_name: &str) -> Option<&str> {
+        // Get all protocols the type implements
+        let protocols = self.get_type_protocols(type_name);
+
+        // Check each protocol method default
+        for ((_target_proto, method), (source_proto, impl_fn)) in &self.protocol_defaults {
+            if method == method_name {
+                // Does this type implement the source protocol?
+                if protocols.contains(source_proto) {
+                    return Some(impl_fn.as_str());
+                }
+            }
+        }
+        None
     }
 
     /// Register a function's return type

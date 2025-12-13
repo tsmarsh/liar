@@ -416,6 +416,17 @@ impl BorrowChecker {
                 // Protocol definitions don't have ownership semantics
             }
             Item::ExtendProtocol(extend) => self.check_extend_protocol(extend),
+            Item::ExtendProtocolDefault(extend) => {
+                // Check each method implementation
+                for method in &extend.implementations {
+                    self.push_scope();
+                    for param in &method.params {
+                        self.define(&param.node, param.span);
+                    }
+                    self.check_expr(&method.body);
+                    self.pop_scope();
+                }
+            }
             Item::Defmacro(_) => {
                 // Macros are expanded before ownership checking
             }

@@ -67,3 +67,36 @@ Feature: Protocol Dispatch
     Given the definition (defun test () (let ((v (mut-vector))) (let ((v (conj v 100))) (let ((v (conj v 200))) (pop v)))))
     When I evaluate (test)
     Then the result is 200
+
+  # Protocol default implementations
+
+  Scenario: Default implementation via source protocol
+    Given the definition (defprotocol Seq (first [self]) (rest [self]))
+    Given the definition (defprotocol Headable (get-head [self]))
+    Given the definition (defstruct Cons (head: i64 tail: ptr))
+    Given the definition (extend-protocol Seq Cons (first [self] (. self head)) (rest [self] (. self tail)))
+    Given the definition (extend-protocol-default Headable Seq (get-head [self] (first self)))
+    Given the definition (defun test () (let ((xs (Cons 42 nil))) (get-head xs)))
+    When I evaluate (test)
+    Then the result is 42
+
+  Scenario: Direct impl takes precedence over default
+    Given the definition (defprotocol Seq (first [self]) (rest [self]))
+    Given the definition (defprotocol Countable (count [self]))
+    Given the definition (defstruct FastList (len: i64 data: ptr))
+    Given the definition (extend-protocol Seq FastList (first [self] 0) (rest [self] nil))
+    Given the definition (extend-protocol-default Countable Seq (count [self] 999))
+    Given the definition (extend-protocol Countable FastList (count [self] (. self len)))
+    Given the definition (defun test () (let ((xs (FastList 42 nil))) (count xs)))
+    When I evaluate (test)
+    Then the result is 42
+
+  Scenario: Default impl with multiple args
+    Given the definition (defprotocol Seq (first [self]) (rest [self]))
+    Given the definition (defprotocol Addable (add-n [self n]))
+    Given the definition (defstruct Single (val: i64))
+    Given the definition (extend-protocol Seq Single (first [self] (. self val)) (rest [self] nil))
+    Given the definition (extend-protocol-default Addable Seq (add-n [self n] (+ (first self) n)))
+    Given the definition (defun test () (let ((s (Single 10))) (add-n s 5)))
+    When I evaluate (test)
+    Then the result is 15

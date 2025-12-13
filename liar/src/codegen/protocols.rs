@@ -2,7 +2,7 @@
 //!
 //! Handles extend-protocol and protocol method calls.
 
-use crate::ast::{Expr, ExtendProtocol};
+use crate::ast::{Expr, ExtendProtocol, ExtendProtocolDefault};
 use crate::error::{CompileError, Result};
 use crate::span::Spanned;
 use lir_core::ast as lir;
@@ -18,6 +18,10 @@ pub fn generate_extend_protocol(
 ) -> Result<Vec<lir::FunctionDef>> {
     let protocol_name = &extend.protocol.node;
     let type_name = &extend.type_name.node;
+
+    // Register that this type implements this protocol
+    // Used for protocol default lookups
+    ctx.register_type_protocol(type_name, protocol_name);
 
     let mut functions = Vec::new();
 
@@ -159,6 +163,147 @@ pub fn generate_extend_protocol(
     Ok(functions)
 }
 
+/// Generate lIR functions for an extend-protocol-default declaration
+/// Each method becomes a function: __<TargetProtocol>_<SourceProtocol>__<method>
+/// This provides default implementations for any type implementing SourceProtocol
+pub fn generate_extend_protocol_default(
+    ctx: &mut CodegenContext,
+    extend: &ExtendProtocolDefault,
+) -> Result<Vec<lir::FunctionDef>> {
+    let target_protocol = &extend.protocol.node;
+    let source_protocol = &extend.source_protocol.node;
+
+    let mut functions = Vec::new();
+
+    for method_impl in &extend.implementations {
+        let method_name = &method_impl.name.node;
+
+        // Generate function name: __Mappable_Seq__map (target_source_method)
+        let fn_name = format!("__{}_{}_{}", target_protocol, source_protocol, method_name);
+
+        // Register the default implementation
+        ctx.register_protocol_default(target_protocol, source_protocol, method_name, &fn_name);
+
+        // Generate parameters - first param is `self` (ptr to struct)
+        let params: Vec<lir::Param> = method_impl
+            .params
+            .iter()
+            .map(|p| {
+                // `self` is a pointer to the struct
+                let ty = if p.node == "self" {
+                    lir::ParamType::Ptr
+                } else {
+                    // Other params default to i64
+                    lir::ParamType::Scalar(lir::ScalarType::I64)
+                };
+                lir::Param {
+                    ty,
+                    name: p.node.clone(),
+                }
+            })
+            .collect();
+
+        // Initialize block management for this function
+        ctx.start_function();
+
+        // NOTE: We don't register self's struct type here because
+        // self could be any type implementing source_protocol
+        // The body must use protocol methods (first, rest, etc.) not field access
+
+        // Register parameter types for phi inference
+        for param in &params {
+            let return_type = match &param.ty {
+                lir::ParamType::Ptr
+                | lir::ParamType::Own(_)
+                | lir::ParamType::Ref(_)
+                | lir::ParamType::RefMut(_)
+                | lir::ParamType::Rc(_) => lir::ReturnType::Ptr,
+                lir::ParamType::Scalar(s) => lir::ReturnType::Scalar(s.clone()),
+                lir::ParamType::AnonStruct(fields) => lir::ReturnType::AnonStruct(fields.clone()),
+            };
+            ctx.register_var_type(&param.name, return_type);
+        }
+
+        // Infer return type from AST
+        let return_type = super::types::infer_liar_expr_type(ctx, &method_impl.body.node);
+
+        // Register the function's return type BEFORE generating body
+        ctx.register_func_return_type(&fn_name, return_type.clone());
+
+        // Generate body expression
+        let body_expr = generate_expr(ctx, &method_impl.body)?;
+
+        // Helper to check if an expression ends in a tail call
+        fn is_tailcall(expr: &lir::Expr) -> bool {
+            match expr {
+                lir::Expr::TailCall { .. } => true,
+                lir::Expr::Let { body, .. } => body.last().is_some_and(is_tailcall),
+                _ => false,
+            }
+        }
+
+        // Check if any blocks were emitted (from if expressions)
+        let blocks = if ctx.has_blocks() {
+            let mut blocks = ctx.take_blocks();
+            let pending_phis = ctx.take_pending_phis();
+
+            let final_instr = if pending_phis.is_empty() {
+                if is_tailcall(&body_expr) {
+                    body_expr
+                } else {
+                    lir::Expr::Ret(Some(Box::new(body_expr)))
+                }
+            } else {
+                lir::Expr::Let {
+                    bindings: pending_phis,
+                    body: vec![if is_tailcall(&body_expr) {
+                        body_expr
+                    } else {
+                        lir::Expr::Ret(Some(Box::new(body_expr)))
+                    }],
+                }
+            };
+
+            let final_block = lir::BasicBlock {
+                label: ctx.current_block().to_string(),
+                instructions: vec![final_instr],
+            };
+            blocks.push(final_block);
+
+            blocks
+        } else {
+            // Single-block function
+            let mut ret_instr = if is_tailcall(&body_expr) {
+                body_expr
+            } else {
+                lir::Expr::Ret(Some(Box::new(body_expr)))
+            };
+
+            let entry_bindings = ctx.take_entry_bindings();
+            if !entry_bindings.is_empty() {
+                ret_instr = lir::Expr::Let {
+                    bindings: entry_bindings,
+                    body: vec![ret_instr],
+                };
+            }
+
+            vec![lir::BasicBlock {
+                label: "entry".to_string(),
+                instructions: vec![ret_instr],
+            }]
+        };
+
+        functions.push(lir::FunctionDef {
+            name: fn_name,
+            return_type,
+            params,
+            blocks,
+        });
+    }
+
+    Ok(functions)
+}
+
 /// Generate code for a protocol method call
 /// Uses static dispatch if type is known at compile time, otherwise runtime dispatch
 pub fn generate_protocol_call(
@@ -186,10 +331,18 @@ pub fn generate_protocol_call(
 
     // Try static dispatch first
     if let Some(type_name) = infer_struct_type(ctx, self_arg) {
-        // Look up the implementation function for this type
+        // 1. Look up direct implementation for this type
         if let Some(impl_fn_name) = ctx.lookup_protocol_impl(&type_name, method_name).cloned() {
             return Ok(lir::Expr::Call {
                 name: impl_fn_name,
+                args: call_args,
+            });
+        }
+
+        // 2. Look up default implementation via type's implemented protocols
+        if let Some(default_fn) = ctx.lookup_default_for_type(&type_name, method_name) {
+            return Ok(lir::Expr::Call {
+                name: default_fn.to_string(),
                 args: call_args,
             });
         }

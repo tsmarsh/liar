@@ -61,6 +61,11 @@ impl<'a> ThreadSafetyChecker<'a> {
                     self.check_expr(&method.body);
                 }
             }
+            Item::ExtendProtocolDefault(extend) => {
+                for method in &extend.implementations {
+                    self.check_expr(&method.body);
+                }
+            }
             Item::Defmacro(_) => {}
             Item::Extern(_) => {}
         }

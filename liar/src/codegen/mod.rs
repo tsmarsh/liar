@@ -93,6 +93,12 @@ pub fn generate(program: &Program, type_env: &TypeEnv) -> Result<Module> {
                     items.push(lir::Item::Function(impl_fn));
                 }
             }
+            Item::ExtendProtocolDefault(extend) => {
+                // Generate default implementation functions
+                for impl_fn in protocols::generate_extend_protocol_default(&mut ctx, extend)? {
+                    items.push(lir::Item::Function(impl_fn));
+                }
+            }
             _ => {
                 if let Some(lir_item) = generate_item(&mut ctx, item, type_env)? {
                     items.push(lir_item);
@@ -164,6 +170,10 @@ fn generate_item(
         }
         Item::ExtendProtocol(_e) => {
             // Protocol implementations are metadata - skip for now
+            Ok(None)
+        }
+        Item::ExtendProtocolDefault(_e) => {
+            // Protocol default implementations are metadata - skip for now
             Ok(None)
         }
         Item::Defmacro(_) => {

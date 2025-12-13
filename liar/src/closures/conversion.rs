@@ -15,7 +15,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::ast::{Def, Defun, Expr, ExtendProtocol, Item, LetBinding, Param, Program};
+use crate::ast::{
+    Def, Defun, Expr, ExtendProtocol, ExtendProtocolDefault, Item, LetBinding, Param, Program,
+};
 use crate::error::Result;
 use crate::span::{Span, Spanned};
 use crate::types::{Ty, TypeEnv};
@@ -283,6 +285,9 @@ impl ClosureConverter {
             Item::ExtendProtocol(extend) => {
                 Item::ExtendProtocol(self.convert_extend_protocol(extend)?)
             }
+            Item::ExtendProtocolDefault(extend) => {
+                Item::ExtendProtocolDefault(self.convert_extend_protocol_default(extend)?)
+            }
             // These don't need conversion
             Item::Defstruct(s) => Item::Defstruct(s),
             Item::Defprotocol(p) => Item::Defprotocol(p),
@@ -380,6 +385,26 @@ impl ClosureConverter {
         Ok(ExtendProtocol {
             protocol: extend.protocol,
             type_name: extend.type_name,
+            implementations: new_implementations,
+        })
+    }
+
+    fn convert_extend_protocol_default(
+        &mut self,
+        extend: ExtendProtocolDefault,
+    ) -> Result<ExtendProtocolDefault> {
+        let mut new_implementations = Vec::new();
+        for method in extend.implementations {
+            let new_body = self.convert_expr(method.body)?;
+            new_implementations.push(crate::ast::MethodImpl {
+                name: method.name,
+                params: method.params,
+                body: new_body,
+            });
+        }
+        Ok(ExtendProtocolDefault {
+            protocol: extend.protocol,
+            source_protocol: extend.source_protocol,
             implementations: new_implementations,
         })
     }

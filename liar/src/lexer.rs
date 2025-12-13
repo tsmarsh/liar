@@ -72,8 +72,9 @@ pub enum TokenKind {
     Commute, // commute
 
     // Protocol keywords (ADR-022)
-    Defprotocol,    // defprotocol
-    ExtendProtocol, // extend-protocol
+    Defprotocol,           // defprotocol
+    ExtendProtocol,        // extend-protocol
+    ExtendProtocolDefault, // extend-protocol-default
 
     // Macro keywords
     Defmacro, // defmacro
@@ -466,6 +467,7 @@ impl<'a> Lexer<'a> {
             // Protocol keywords
             "defprotocol" => TokenKind::Defprotocol,
             "extend-protocol" => TokenKind::ExtendProtocol,
+            "extend-protocol-default" => TokenKind::ExtendProtocolDefault,
             // Macro keywords
             "defmacro" => TokenKind::Defmacro,
             "gensym" => TokenKind::Gensym,

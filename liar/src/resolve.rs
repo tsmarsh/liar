@@ -290,6 +290,9 @@ impl Resolver {
                 Item::ExtendProtocol(_) => {
                     // extend-protocol doesn't define a new name
                 }
+                Item::ExtendProtocolDefault(_) => {
+                    // extend-protocol-default doesn't define a new name
+                }
                 Item::Defmacro(defmacro) => {
                     self.define(&defmacro.name.node, defmacro.name.span, BindingKind::Macro);
                 }
@@ -316,6 +319,21 @@ impl Resolver {
             Item::Defstruct(defstruct) => self.resolve_defstruct(defstruct),
             Item::Defprotocol(defprotocol) => self.resolve_defprotocol(defprotocol),
             Item::ExtendProtocol(extend) => self.resolve_extend_protocol(extend),
+            Item::ExtendProtocolDefault(extend) => {
+                // Verify both protocols exist
+                self.lookup(&extend.protocol.node, extend.protocol.span);
+                self.lookup(&extend.source_protocol.node, extend.source_protocol.span);
+
+                // Resolve method implementations
+                for method in &extend.implementations {
+                    self.push_scope();
+                    for param in &method.params {
+                        self.define(&param.node, param.span, BindingKind::Parameter);
+                    }
+                    self.resolve_expr(&method.body);
+                    self.pop_scope();
+                }
+            }
             Item::Defmacro(defmacro) => self.resolve_defmacro(defmacro),
             Item::Extern(_) => {
                 // Extern declarations have no body to resolve

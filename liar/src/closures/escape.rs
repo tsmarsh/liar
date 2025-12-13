@@ -80,6 +80,11 @@ impl EscapeAnalyzer {
                     self.analyze_expr(&method.body);
                 }
             }
+            Item::ExtendProtocolDefault(extend) => {
+                for method in &extend.implementations {
+                    self.analyze_expr(&method.body);
+                }
+            }
             Item::Defstruct(_) | Item::Defprotocol(_) | Item::Defmacro(_) | Item::Extern(_) => {}
         }
     }

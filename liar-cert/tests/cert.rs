@@ -79,6 +79,13 @@ async fn given_extend_protocol(world: &mut LiarWorld, rest: String) {
     world.source.push('\n');
 }
 
+#[given(regex = "^the definition \\(extend-protocol-default (.*)$")]
+async fn given_extend_protocol_default(world: &mut LiarWorld, rest: String) {
+    world.source.push_str("(extend-protocol-default ");
+    world.source.push_str(&rest);
+    world.source.push('\n');
+}
+
 #[when(regex = "^I evaluate \\(test\\)$")]
 async fn when_evaluate_test(world: &mut LiarWorld) {
     world.func_name = "test".to_string();

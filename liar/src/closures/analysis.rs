@@ -65,6 +65,17 @@ impl ClosureAnalyzer {
             Item::Defstruct(_) => {}
             Item::Defprotocol(_) => {}
             Item::ExtendProtocol(extend) => self.analyze_extend_protocol(extend),
+            Item::ExtendProtocolDefault(extend) => {
+                // Analyze method bodies just like ExtendProtocol
+                for method in &extend.implementations {
+                    self.push_scope();
+                    for param in &method.params {
+                        self.define(&param.node);
+                    }
+                    self.analyze_expr(&method.body);
+                    self.pop_scope();
+                }
+            }
             // Macros should be expanded before closure analysis
             Item::Defmacro(_) => {}
             // Extern declarations have no body

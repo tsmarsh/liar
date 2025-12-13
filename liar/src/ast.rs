@@ -21,6 +21,8 @@ pub enum Item {
     Defprotocol(Defprotocol),
     /// Protocol extension: (extend-protocol ProtocolName TypeName (method [self args...] body)...)
     ExtendProtocol(ExtendProtocol),
+    /// Protocol default: (extend-protocol-default TargetProtocol SourceProtocol (method [self args...] body)...)
+    ExtendProtocolDefault(ExtendProtocolDefault),
     /// Macro definition: (defmacro name (params...) body)
     Defmacro(Defmacro),
     /// External function declaration: (extern name ret-type (param-types...))
@@ -95,6 +97,15 @@ pub struct MethodImpl {
     pub name: Spanned<String>,
     pub params: Vec<Spanned<String>>, // includes self
     pub body: Spanned<Expr>,
+}
+
+/// Protocol default implementation for types implementing another protocol
+/// (extend-protocol-default TargetProtocol SourceProtocol (method [self] body)...)
+#[derive(Debug, Clone)]
+pub struct ExtendProtocolDefault {
+    pub protocol: Spanned<String>, // The protocol being extended (e.g., Mappable)
+    pub source_protocol: Spanned<String>, // The source protocol constraint (e.g., Seq)
+    pub implementations: Vec<MethodImpl>,
 }
 
 /// Macro definition

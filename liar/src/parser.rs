@@ -66,6 +66,10 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Item::ExtendProtocol(self.parse_extend_protocol()?)
             }
+            TokenKind::ExtendProtocolDefault => {
+                self.advance();
+                Item::ExtendProtocolDefault(self.parse_extend_protocol_default()?)
+            }
             TokenKind::Defmacro => {
                 self.advance();
                 Item::Defmacro(self.parse_defmacro()?)
@@ -269,6 +273,43 @@ impl<'a> Parser<'a> {
         Ok(ExtendProtocol {
             protocol,
             type_name,
+            implementations,
+        })
+    }
+
+    /// Parse protocol default: (extend-protocol-default TargetProtocol SourceProtocol (method [self args...] body)...)
+    fn parse_extend_protocol_default(&mut self) -> Result<ExtendProtocolDefault> {
+        let protocol = self.parse_symbol()?;
+        let source_protocol = self.parse_symbol()?;
+
+        // Parse method implementations (same structure as extend-protocol)
+        let mut implementations = Vec::new();
+        while !self.check(TokenKind::RParen) {
+            self.expect(TokenKind::LParen)?;
+            let method_name = self.parse_symbol()?;
+
+            // Parse parameter list [self arg1 arg2]
+            self.expect(TokenKind::LBracket)?;
+            let mut params = Vec::new();
+            while !self.check(TokenKind::RBracket) {
+                params.push(self.parse_symbol()?);
+            }
+            self.expect(TokenKind::RBracket)?;
+
+            // Parse body
+            let body = self.parse_expr()?;
+            self.expect(TokenKind::RParen)?;
+
+            implementations.push(MethodImpl {
+                name: method_name,
+                params,
+                body,
+            });
+        }
+
+        Ok(ExtendProtocolDefault {
+            protocol,
+            source_protocol,
             implementations,
         })
     }
