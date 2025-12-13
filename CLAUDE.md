@@ -40,22 +40,37 @@ lIR is fully functional as an LLVM IR assembler:
 
 ### liar
 
-liar is a working compiler (62 passing test scenarios):
-- Arithmetic, comparisons, boolean logic
-- Functions with type inference
-- Let bindings (sequential and parallel)
+liar is a working compiler (132 passing test scenarios):
+- Arithmetic, comparisons, boolean logic (int and float)
+- Functions with type inference and annotations
+- Let bindings (sequential and parallel, with destructuring)
 - Atoms for thread-safe shared state
-- Closures with capture analysis
-- Structs and field access
-- Protocols and dispatch
-- Macros with quasiquote
-- Ownership and borrow checking
+- Closures with capture analysis and escape detection
+- Structs with typed fields and field access via `.`
+- Protocols with runtime dispatch and default implementations
+- Macros with quasiquote, unquote, splicing, and gensym
+- Tail call optimization
+- FFI to C functions (extern declarations)
+- I/O via `print`/`println` builtins and `lib/io.liar`
+- Type conversions (trunc, zext, sext, fptosi, sitofp, etc.)
+- Bitwise operations and popcount
+- Byte-level pointer operations (store-byte, load-byte, ptr+)
 - REPL with incremental JIT
 
+**Standard Library (`lib/`):**
+- `seq.liar` — Protocols (Seq, Countable, Indexable, etc.) and list operations
+- `vector.liar` — Persistent vectors (32-way trie)
+- `hashmap.liar` — Persistent hash maps (HAMT)
+- `hashset.liar` — Persistent hash sets
+- `io.liar` — File I/O (slurp, spit, read-line)
+- `array.liar` — Low-level array helpers
+
 **Not yet implemented:**
-- I/O (`print`, `println`)
-- Collection operations (`map`, `filter`, `reduce`)
-- Modules
+- Pattern matching / match expressions
+- Algebraic data types (enums)
+- Module system
+- Full borrow checking (simplified ownership model)
+- Garbage collection
 
 ---
 
@@ -180,19 +195,20 @@ Predicates: `oeq`, `one`, `olt`, `ole`, `ogt`, `oge`, `ord`, `uno`, `ueq`, `une`
 
 # liar
 
-See [LIAR.md](LIAR.md) for the full language definition.
+See [LIAR.md](doc/LIAR.md) for the full language definition.
 
 **Key concepts:**
 
 | Concept | Summary |
 |---------|---------|
-| Immutability | Values immutable by default |
-| Mutation | `&` sigil for mutable references |
-| Ownership | Lexical scope |
-| Closures | Own their captured state |
-| Threading | `let` (single-threaded) vs `plet` (thread-safe with atoms) |
-| Async | Requires `plet` (continuation may resume on different thread) |
-| FFI | `unsafe` blocks, same ownership rules apply inside |
+| Functions | `defun` with optional type annotations (`-> i64`) |
+| Closures | `fn` with automatic capture analysis |
+| Structs | `defstruct` with typed fields, field access via `.` |
+| Protocols | `defprotocol` / `extend-protocol` for polymorphism |
+| Macros | `defmacro` with quasiquote, unquote, splicing |
+| Threading | `let` vs `plet` (parallel bindings with atoms) |
+| Memory | `share` for heap allocation, manual management |
+| FFI | `extern` declarations for C functions |
 
 **Design decisions:** See [doc/adr/](doc/adr/) for Architecture Decision Records.
 

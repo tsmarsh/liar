@@ -1,204 +1,74 @@
 # liar
 
-A borrow-checked Lisp built on lIR. Rust's memory safety, Lisp's metaprogramming.
+A Lisp that compiles to native code via LLVM. S-expressions meet systems programming.
 
 ```
 liar source → liar → lIR → lair → LLVM IR → native
 ```
 
+## Quick Start
+
+```lisp
+;; hello.liar
+(defun main () -> i64
+  (println "Hello, World!")
+  0)
+```
+
+```bash
+liarc hello.liar -o hello && ./hello
+```
+
 ## Goals
 
-1. **Memory safe without GC** — ownership, borrowing, reference counting
-2. **As fast as Rust** — zero-cost abstractions, compiles to LLVM IR via lIR
-3. **As lispy as possible** — s-expressions, homoiconicity, macros, first-class functions
-4. **Simpler than Rust** — no lifetime annotations, no trait soup
+1. **Fast** — Compiles to native code via LLVM IR
+2. **Lispy** — S-expressions, macros, first-class functions
+3. **Simple** — Minimal core, build abstractions in the language itself
+4. **Practical** — FFI to C, real data structures, file I/O
 
-## Core Types
+## Types
 
 ### Primitives
 
 ```lisp
-; Integers (i64 default)
-42              ; i64
-(i32 42)        ; explicit i32
-(i64 42)        ; explicit i64
-
-; Floats (f64 default)  
-3.14            ; f64
-(f32 3.14)      ; explicit f32
-
-; Overflow handling
-(boxed (* BIG BIGGER))   ; promotes to biginteger, never overflows
-(wrapping (* x y))       ; C-style silent wrap
-
-; Other primitives
+42              ; integer (i64)
+3.14            ; float (double)
+"hello"         ; string (null-terminated, UTF-8)
 true false      ; boolean
-"hello"         ; string (immutable, UTF-8)
-\a              ; character
-'foo            ; symbol (interned)
-:foo            ; keyword
-#[0x48 0x65]    ; byte array
-#r"pattern"     ; regex (reader macro)
+nil             ; null pointer
+:keyword        ; keyword (interned symbol)
 ```
 
-### SIMD Vectors
+### Type Annotations
+
+Functions can have explicit type annotations:
 
 ```lisp
-<<1 2 3 4>>              ; v4 i64 (inferred)
-<<1.0 2.0 3.0 4.0>>      ; v4 f64 (inferred)
-<i8<1 2 3 4>>            ; v4 i8 (explicit type)
-<f32<1.0 2.0 3.0 4.0>>   ; v4 f32 (explicit type)
+(defun add (a: i64 b: i64) -> i64
+  (+ a b))
 
-; Operations - normal arithmetic, scalar broadcast
-(+ <<1 2 3 4>> <<5 6 7 8>>)   ; => <<6 8 10 12>>
-(* 2 <<1 2 3 4>>)             ; => <<2 4 6 8>>
+(defun greet (name: ptr) -> i64
+  (println name))
 ```
 
-### Collections
+Available types: `i64`, `i32`, `i16`, `i8`, `i1`, `double`, `float`, `ptr`, `void`
+
+### Structs
+
+User-defined product types with typed fields:
 
 ```lisp
-; Persistent (default) — immutable, structural sharing
-[1 2 3]         ; persistent vector
-{:a 1 :b 2}     ; persistent map
-'(1 2 3)        ; list (linked)
+(defstruct Point (x: i64 y: i64))
 
-; Conventional — mutable, O(1) access
-<[1 2 3]>       ; conventional vector
-<{:a 1 :b 2}>   ; conventional map
-```
+;; Constructor
+(Point 10 20)
 
-### Functions
+;; Field access with .
+(let ((p (Point 10 20)))
+  (+ (. p x) (. p y)))  ; => 30
 
-```lisp
-(fn (x) x)      ; anonymous function (closure)
-```
-
-## Ownership Model
-
-Every value has exactly one owner. When the owner goes out of scope, the value is dropped.
-
-### Binding Creates Ownership
-
-```lisp
-(let ((x (cons 1 2)))   ; x owns this cons cell
-  (car x))              ; x is accessed
-                        ; x dropped here, cons cell freed
-```
-
-### Move Semantics (Default)
-
-Passing a value transfers ownership:
-
-```lisp
-(let ((x (cons 1 2)))
-  (let ((y x))          ; x moved to y
-    (car y)))           ; y owns it now
-                        ; accessing x here would be compile error
-```
-
-Function arguments move by default:
-
-```lisp
-(define (consume-pair p)
-  (+ (car p) (cdr p)))
-
-(let ((x (cons 1 2)))
-  (consume-pair x)      ; x moved into function
-  x)                    ; ERROR: x has been moved
-```
-
-### Borrow (Temporary Access)
-
-Borrow grants temporary read access without transferring ownership:
-
-```lisp
-(let ((x (cons 1 2)))
-  (let ((view &x))      ; view borrows x
-    (car view))         ; read through borrow OK
-  (car x))              ; x still valid, borrow ended
-```
-
-Multiple shared borrows allowed:
-
-```lisp
-(let ((x (cons 1 2)))
-  (let ((a &x)
-        (b &x))         ; two borrows OK
-    (+ (car a) (car b))))
-```
-
-Borrow cannot escape owner's scope:
-
-```lisp
-(define (bad-escape)
-  (let ((x (cons 1 2)))
-    &x))                ; ERROR: borrow would outlive x
-```
-
-### Mutable Borrow (Exclusive Access)
-
-Mutable borrow grants exclusive read/write access:
-
-```lisp
-(let ((x (cons 1 2)))
-  (let ((m &mut x))     ; exclusive mutable borrow
-    (set-car! m 99))    ; mutation through borrow
-  (car x))              ; => 99, borrow ended, x accessible
-```
-
-Mutable borrow is exclusive:
-
-```lisp
-(let ((x (cons 1 2)))
-  (let ((m &mut x)
-        (v &x))         ; ERROR: cannot borrow while mutably borrowed
-    ...))
-```
-
-```lisp
-(let ((x (cons 1 2)))
-  (let ((m1 &mut x)
-        (m2 &mut x))    ; ERROR: cannot have two mutable borrows
-    ...))
-```
-
-### Clone (Deep Copy)
-
-Explicit deep copy creates a new owned value:
-
-```lisp
-(let ((x (cons 1 2)))
-  (let ((y (clone x)))  ; y owns a copy
-    (set-car! y 99)     ; mutate copy
-    (cons (car x)       ; x unchanged => 1
-          (car y))))    ; y changed => 99
-```
-
-### Share (Reference Counting)
-
-Share creates a reference-counted value with multiple owners:
-
-```lisp
-(let ((x (share (cons 1 2))))   ; refcount=1
-  (let ((y x))                   ; refcount=2, both own it
-    (car y))                     ; access through y
-  (car x))                       ; still valid, refcount=1
-                                 ; refcount=0, freed
-```
-
-Shared values are immutable by default:
-
-```lisp
-(let ((x (share (cons 1 2))))
-  (set-car! x 99))              ; ERROR: shared values are immutable
-```
-
-For mutable shared data, use atomic cells:
-
-```lisp
-(let ((x (share (atom 0))))     ; atomic cell
-  (swap! x inc)                  ; atomic update
-  @x)                            ; atomic read => 1
+;; Heap-allocated (for returning, storing in collections)
+(share (Point 10 20))
 ```
 
 ## Functions
@@ -206,179 +76,32 @@ For mutable shared data, use atomic cells:
 ### Named Functions
 
 ```lisp
-(define (add a b)
-  (+ a b))
+(defun square (x)
+  (* x x))
 
-(add 1 2)  ; => 3
-```
-
-Arguments move in by default. Use sigils to change:
-
-```lisp
-; Borrow (read-only access, caller keeps ownership)
-(define (peek &p)
-  (car p))
-
-(let ((x (cons 1 2)))
-  (peek x)              ; x borrowed, not moved
-  (car x))              ; x still valid
-
-; Mutable borrow (exclusive access, caller keeps ownership)
-(define (poke &mut p val)
-  (set-car! p val))
-
-(let ((x (cons 1 2)))
-  (poke x 99)           ; x mutably borrowed
-  (car x))              ; => 99
-
-; Move (explicit, same as default)
-(define (consume ^p)
-  (+ (car p) (cdr p)))
-```
-
-### Closures
-
-Closures capture variables from their environment.
-
-```lisp
-(let ((x 10))
-  (fn (y) (+ x y)))     ; x captured
-```
-
-Capture mode determines ownership:
-
-```lisp
-; Capture by move (default for owned values)
-(let ((data (cons 1 2)))
-  (fn ()
-    (car data)))        ; data moved into closure
-                        ; cannot access data after this point
-
-; Capture by borrow (closure cannot escape)
-(let ((data (cons 1 2)))
-  (let ((f (fn () (car &data))))  ; borrow data
-    (f)                 ; OK
-    (f))                ; OK
-  (car data))           ; data still valid
-
-; Capture by clone
-(let ((data (cons 1 2)))
-  (fn ()
-    (car (clone data))) ; closure owns a copy
-  (car data))           ; original still accessible
-```
-
-### Returning Functions
-
-Functions returning closures must not capture borrows:
-
-```lisp
-; OK: captured by move
-(define (make-adder n)
-  (fn (x) (+ n x)))     ; n moved into closure
-
-; ERROR: borrow would escape
-(define (bad-closure)
-  (let ((x 10))
-    (fn () &x)))        ; x doesn't live long enough
-```
-
-### Recursion
-
-Named recursion just works:
-
-```lisp
-(define (factorial n)
+(defun factorial (n)
   (if (= n 0)
       1
       (* n (factorial (- n 1)))))
-
-(factorial 5)  ; => 120
 ```
 
-Mutual recursion:
+### Anonymous Functions (Closures)
 
 ```lisp
-(define (even? n)
-  (if (= n 0) true (odd? (- n 1))))
+(fn (x) (* x 2))
 
-(define (odd? n)
-  (if (= n 0) false (even? (- n 1))))
+;; With capture
+(let ((multiplier 3))
+  (fn (x) (* x multiplier)))
 ```
 
-No Y combinator needed. The environment resolves names.
+### Tail Call Optimization
 
-## Data Structures
-
-### Pairs and Lists
+Direct tail calls are optimized:
 
 ```lisp
-(cons 1 2)              ; pair: (1 . 2)
-(cons 1 (cons 2 nil))   ; list: (1 2)
-'(1 2 3)                ; quoted list (immutable)
-(list 1 2 3)            ; constructed list
-
-(car '(1 2 3))          ; => 1
-(cdr '(1 2 3))          ; => (2 3)
-```
-
-### Vectors
-
-```lisp
-[1 2 3]                 ; vector literal
-(vec 1 2 3)             ; constructed vector
-
-(get v 0)               ; index access
-(set v 0 99)            ; returns new vector (immutable)
-(set! &mut v 0 99)      ; mutate in place
-(len v)                 ; length
-```
-
-### Maps
-
-```lisp
-{:a 1 :b 2}             ; map literal
-(hash-map :a 1 :b 2)    ; constructed map
-
-(get m :a)              ; => 1
-(assoc m :c 3)          ; returns new map with :c
-(dissoc m :a)           ; returns new map without :a
-```
-
-### Structs
-
-User-defined product types:
-
-```lisp
-(defstruct Point
-  x y)
-
-(let ((p (Point 10 20)))
-  (Point-x p))          ; => 10
-
-; With mutability
-(let ((p (Point 10 20)))
-  (set-Point-x! &mut p 99)
-  (Point-x p))          ; => 99
-```
-
-### Enums
-
-User-defined sum types:
-
-```lisp
-(defenum Option
-  (Some value)
-  None)
-
-(defenum Result
-  (Ok value)
-  (Err error))
-
-(let ((x (Some 42)))
-  (match x
-    ((Some v) v)
-    (None 0)))          ; => 42
+(defun loop-forever (n)
+  (loop-forever (+ n 1)))  ; no stack overflow
 ```
 
 ## Control Flow
@@ -386,263 +109,431 @@ User-defined sum types:
 ### Conditionals
 
 ```lisp
-(if condition
-    then-expr
-    else-expr)
-
-(cond
-  (test1 result1)
-  (test2 result2)
-  (else default))
-
-(when condition
-  body...)              ; returns nil if false
-
-(unless condition
-  body...)
+(if (> x 0)
+    "positive"
+    "non-positive")
 ```
 
-### Pattern Matching
+`if` always requires both branches. Both branches must have compatible types.
+
+### Sequencing
 
 ```lisp
-(match value
-  (pattern1 result1)
-  (pattern2 result2)
-  (_ default))
-
-; Patterns
-42                      ; literal
-x                       ; binding (moves value)
-&x                      ; binding (borrows value)
-_                       ; wildcard
-(cons a b)              ; destructuring
-(Point x y)             ; struct destructuring
-(Some value)            ; enum variant
-(Some &value)           ; enum variant, borrow inner
-[a b c]                 ; vector destructuring
-[first . rest]          ; vector with rest
+(do
+  (println "first")
+  (println "second")
+  42)  ; returns last expression
 ```
 
-Ownership in patterns:
+## Bindings
+
+### Let (Sequential)
 
 ```lisp
-(let ((x (Some (cons 1 2))))
-  (match x
-    ((Some pair) (car pair))  ; pair moved out of x
-    (None 0)))
-; x is now in moved state (inner was extracted)
-
-(let ((x (Some (cons 1 2))))
-  (match x
-    ((Some &pair) (car pair)) ; pair borrowed from x
-    (None 0)))
-; x still valid
+(let ((x 1)
+      (y (+ x 1)))  ; can reference earlier bindings
+  (+ x y))          ; => 3
 ```
 
-### Loops
+### Destructuring Let
 
 ```lisp
-; Functional iteration (preferred)
-(map (fn (x) (* x 2)) '(1 2 3))     ; => (2 4 6)
-(filter odd? '(1 2 3 4 5))          ; => (1 3 5)
-(fold + 0 '(1 2 3))                 ; => 6
+(defstruct Point (x: i64 y: i64))
 
-; Imperative loop
-(loop ((i 0)
-       (sum 0))
-  (if (>= i 10)
-      sum
-      (recur (+ i 1) (+ sum i))))   ; => 45
-
-; For comprehension
-(for ((x '(1 2 3))
-      (y '(a b)))
-  (cons x y))                       ; => ((1 . a) (1 . b) (2 . a) ...)
+(let (((Point x y) (Point 10 20)))
+  (+ x y))  ; => 30
 ```
+
+### Parallel Let
+
+```lisp
+(plet ((a (expensive-computation-1))
+       (b (expensive-computation-2)))
+  (+ a b))
+```
+
+Bindings evaluate in parallel. Cannot reference each other.
 
 ## Macros
 
-Macros are compile-time functions that transform code.
+Macros transform code at compile time.
+
+### Defining Macros
 
 ```lisp
-(defmacro when (condition &rest body)
-  `(if ,condition
-       (do ,@body)
-       nil))
+(defmacro unless (cond then else)
+  `(if ,cond ,else ,then))
 
-(when (> x 0)
-  (print "positive")
-  x)
-
-; Expands to:
-(if (> x 0)
-    (do (print "positive") x)
-    nil)
+(unless (= x 0)
+  (/ 10 x)
+  0)
 ```
 
 ### Quasiquoting
 
 ```lisp
-`(a b c)                ; => (a b c)
-`(a ,x c)               ; => (a <value-of-x> c)
-`(a ,@xs c)             ; => (a <spliced-xs> c)
+`(a b c)        ; => (a b c)
+`(a ,x c)       ; => (a <value-of-x> c)
+`(a ,@xs c)     ; => (a <spliced-elements-of-xs> c)
 ```
 
-### Hygiene
+### Gensym
 
-Macros use gensym for internal bindings:
+Generate unique symbols to avoid capture:
 
 ```lisp
-(defmacro swap (a b)
-  (let ((temp (gensym)))
-    `(let ((,temp ,a))
-       (set! ,a ,b)
-       (set! ,b ,temp))))
+(defmacro with-temp (body)
+  (let ((tmp (gensym "tmp")))
+    `(let ((,tmp 0))
+       ,body)))
 ```
 
-### Compile-time Computation
+### Macro Calling Macros
 
-Macros can do arbitrary computation:
+Macros can call other macros during expansion:
 
 ```lisp
-(defmacro compile-time-factorial (n)
-  (let ((result (factorial n)))  ; runs at compile time
-    result))
+(defmacro double (x) `(+ ,x ,x))
+(defmacro quadruple (x) (double (double x)))
 
-(compile-time-factorial 5)       ; compiles to literal 120
+(quadruple 5)  ; => 20
 ```
 
-## Ownership Annotations Summary
+## Protocols
 
-| Syntax | Meaning |
-|--------|---------|
-| `x` | Move/own (default) |
-| `&x` | Shared borrow |
-| `&mut x` | Mutable borrow |
-| `(clone x)` | Deep copy |
-| `(share x)` | Reference counted |
-| `^x` | Explicit move (in function params) |
+Protocols define interfaces that types can implement.
 
-## Error Handling
+### Defining Protocols
 
 ```lisp
-; Result type
-(define (divide a b)
-  (if (= b 0)
-      (Err "division by zero")
-      (Ok (/ a b))))
+(defprotocol Countable
+  (count [self]))
 
-; Propagate errors with ?
-(define (compute x y)
-  (let ((a (divide x y)?))      ; early return if Err
-    (+ a 1)))
-
-; Or handle explicitly
-(match (divide 10 2)
-  ((Ok v) v)
-  ((Err e) (panic e)))
+(defprotocol Indexable
+  (nth [self idx]))
 ```
 
-## Modules
+### Implementing Protocols
 
 ```lisp
-; math.cor
-(module math)
+(defstruct MyList (data: ptr len: i64))
 
-(define (square x) (* x x))
-(define (cube x) (* x x x))
+(extend-protocol Countable MyList
+  (count [self] (. self len)))
 
-(export square cube)
+(extend-protocol Indexable MyList
+  (nth [self idx] (aget (. self data) idx)))
+```
 
-; main.cor
-(use math)
-(math/square 5)         ; => 25
+### Protocol Defaults
 
-(use math :only (square))
-(square 5)              ; => 25
+Types implementing one protocol can get default implementations of another:
+
+```lisp
+(defprotocol Seq
+  (first [self])
+  (rest [self]))
+
+;; Any type implementing Seq automatically gets Countable
+(extend-protocol-default Countable Seq
+  (count [self]
+    (if (nil? (rest self))
+        1
+        (+ 1 (count (rest self))))))
+```
+
+### Runtime Dispatch
+
+Protocol methods dispatch based on the runtime type of `self`:
+
+```lisp
+(defun process (item)
+  (count item))  ; works with any Countable type
+```
+
+## FFI (Foreign Function Interface)
+
+Call C functions directly:
+
+```lisp
+;; Declare external function
+(extern printf i32 (ptr ...))  ; varargs with ...
+(extern malloc ptr (i64))
+(extern strlen i64 (ptr))
+
+;; Use it
+(printf "Value: %ld\n" 42)
+```
+
+Common declarations:
+```lisp
+(extern open i32 (ptr i32 i32))
+(extern close i32 (i32))
+(extern read i64 (i32 ptr i64))
+(extern write i64 (i32 ptr i64))
+```
+
+## Atoms (Thread-Safe State)
+
+Atoms provide thread-safe mutable state:
+
+```lisp
+;; Create
+(atom 0)
+
+;; Read (deref)
+@counter
+
+;; Update atomically
+(swap! counter (fn (x) (+ x 1)))
+
+;; Set directly
+(reset! counter 0)
+
+;; Compare-and-set
+(compare-and-set! counter 0 1)  ; returns 1 if successful
+```
+
+## Built-in Operations
+
+### Arithmetic
+
+| Op | Description |
+|----|-------------|
+| `+` `-` `*` `/` | Integer arithmetic |
+| `rem` | Integer remainder |
+| `+.` `-.` `*.` `/.` | Float arithmetic |
+| `%.` | Float remainder |
+
+### Comparison
+
+| Op | Description |
+|----|-------------|
+| `=` `!=` | Equality |
+| `<` `>` `<=` `>=` | Integer comparison |
+| `=.` `!=.` `<.` `>.` | Float comparison |
+
+### Boolean
+
+| Op | Description |
+|----|-------------|
+| `and` `or` `not` | Logical operations |
+
+### Bitwise
+
+| Op | Description |
+|----|-------------|
+| `bit-and` `bit-or` `bit-xor` `bit-not` | Bitwise logic |
+| `bit-shift-left` `bit-shift-right` | Shifts (logical) |
+| `arithmetic-shift-right` | Arithmetic shift |
+| `popcount` | Count set bits |
+
+### Type Conversions
+
+```lisp
+;; Integer truncation/extension
+(trunc i8 255)      ; truncate to 8 bits
+(zext i64 (trunc i8 255))  ; zero-extend back
+(sext i64 (trunc i8 255))  ; sign-extend back
+
+;; Float conversions
+(fptosi i64 3.7)    ; float to signed int => 3
+(sitofp double 42)  ; signed int to float => 42.0
+(fptrunc float 3.14159)  ; double to float
+(fpext double x)    ; float to double
+```
+
+### Array Operations
+
+```lisp
+(heap-array 10)           ; allocate 10-element array
+(aget arr idx)            ; get element
+(aset arr idx val)        ; set element (returns val)
+(array-copy size dest src) ; copy arrays
+```
+
+### Pointer Operations
+
+```lisp
+(nil? ptr)          ; check if null
+(ptr+ ptr offset)   ; add byte offset to pointer
+(store-byte ptr val) ; store byte at pointer
+(load-byte ptr)     ; load byte from pointer
+```
+
+### I/O
+
+```lisp
+(print x)    ; print value (no newline)
+(println x)  ; print value with newline
+```
+
+### Memory
+
+```lisp
+(share (StructName fields...))  ; heap-allocate struct
+```
+
+## Standard Library
+
+The standard library lives in `lib/` and provides:
+
+### seq.liar - Sequences
+
+Core protocols and list operations:
+
+```lisp
+;; Protocols: Seq, Countable, Indexable, Collection,
+;;            Mappable, Filterable, Reducible, etc.
+
+;; Cons lists
+(cons 1 (cons 2 (cons 3 nil)))
+(list3 1 2 3)  ; same as above
+
+;; Operations (on any Seq)
+(first xs)      ; head
+(rest xs)       ; tail
+(count xs)      ; length
+(nth xs 2)      ; element at index
+
+;; Higher-order (note: collection-first argument order)
+(map xs (fn (x) (* x 2)))
+(filter xs (fn (x) (> x 0)))
+(reduce xs (fn (acc x) (+ acc x)) 0)
+(for-each xs println)
+
+;; Transformations
+(reverse xs)
+(append xs ys)
+(take 3 xs)
+(drop 3 xs)
+
+;; Predicates
+(any (fn (x) (= x 0)) xs)
+(all (fn (x) (> x 0)) xs)
+(member 5 xs)
+
+;; Numeric
+(sum xs)
+(product xs)
+(minimum xs)
+(maximum xs)
+```
+
+### vector.liar - Persistent Vectors
+
+Immutable vectors with O(log32 n) operations:
+
+```lisp
+(vector)            ; empty vector
+(vec (list3 1 2 3)) ; from list
+
+(vec-count v)       ; length
+(vec-nth v idx)     ; get element
+(vec-conj v x)      ; append (returns new vector)
+(vec-assoc v idx x) ; update (returns new vector)
+(vec-first v)       ; first element
+(vec-peek v)        ; last element
+```
+
+### io.liar - File I/O
+
+```lisp
+;; High-level
+(slurp "/path/to/file")  ; read entire file as string
+(spit "/path/to/file" "content")  ; write string to file
+(spit-append "/path" "more")  ; append to file
+
+;; Low-level
+(file-open-read path)
+(file-open-write path)
+(file-close fd)
+(read-bytes fd buf len)
+(write-bytes fd buf len)
+
+;; Console
+(print-str "hello")
+(println-str "hello")
+(eprint "error")
+(eprintln "error")
+```
+
+### hashmap.liar - Hash Maps
+
+Persistent hash array mapped trie (integer keys only):
+
+```lisp
+(hash-map)          ; empty map
+(hm-get m key)      ; get value (0 if not found)
+(hm-assoc m key val) ; returns new map with key=val
+(hm-contains? m key) ; 0 or 1
+(hm-count m)        ; number of entries
+(hm-empty? m)       ; 0 or 1
+```
+
+### hashset.liar - Hash Sets
+
+Persistent set (integer elements only):
+
+```lisp
+(hash-set)          ; empty set
+(hs-contains? s x)  ; 0 or 1
+(hs-add s x)        ; returns new set with x
+(hs-count s)        ; number of elements
+(hs-empty? s)       ; 0 or 1
 ```
 
 ## Complete Example
 
 ```lisp
-; A functional queue with amortized O(1) operations
+;; Factorial with accumulator (tail recursive)
+(defun fact-acc (n acc)
+  (if (= n 0)
+      acc
+      (fact-acc (- n 1) (* n acc))))
 
-(defstruct Queue
-  inbox outbox)
+(defun factorial (n)
+  (fact-acc n 1))
 
-(define (empty-queue)
-  (Queue '() '()))
+;; Using the sequence library
+(defun sum-squares (xs: ptr)
+  (reduce (map xs (fn (x) (* x x)))
+          (fn (acc x) (+ acc x))
+          0))
 
-(define (enqueue &q item)
-  (Queue (cons item (Queue-inbox q))
-         (Queue-outbox q)))
+;; Protocol-based polymorphism
+(defprotocol Describable
+  (describe [self]))
 
-(define (dequeue &mut q)
-  (when (nil? (Queue-outbox q))
-    (set-Queue-outbox! q (reverse (Queue-inbox q)))
-    (set-Queue-inbox! q '()))
-  (if (nil? (Queue-outbox q))
-      None
-      (let ((item (car (Queue-outbox q))))
-        (set-Queue-outbox! q (cdr (Queue-outbox q)))
-        (Some item))))
+(defstruct Person (name: ptr age: i64))
 
-; Usage
-(let ((q (empty-queue)))
-  (let ((q (enqueue q 1)))
-    (let ((q (enqueue q 2)))
-      (let ((q (enqueue q 3)))
-        (match (dequeue &mut q)
-          ((Some x) x)      ; => 1
-          (None 0))))))
-```
+(extend-protocol Describable Person
+  (describe [self]
+    (println (. self name))))
 
-## What's Not Allowed
-
-```lisp
-; Use after move
-(let ((x (cons 1 2)))
-  (consume x)
-  x)                    ; ERROR: x has been moved
-
-; Borrow escapes scope
-(define (escape)
-  (let ((x 10))
-    &x))                ; ERROR: x does not live long enough
-
-; Mutable aliasing
-(let ((x (cons 1 2)))
-  (let ((a &mut x)
-        (b &x))         ; ERROR: cannot borrow x while mutably borrowed
-    ...))
-
-; Mutate shared data
-(let ((x (share (cons 1 2))))
-  (set-car! x 99))      ; ERROR: cannot mutate shared value
-
-; Return reference to local
-(define (bad)
-  (let ((v [1 2 3]))
-    &(get v 0)))        ; ERROR: cannot return reference to local
-
-; Self-referential closure without share
-(let ((f (fn () (f)))) ; ERROR: f captured before defined
-  (f))
-
-; Use this instead:
-(define (f) (f))        ; OK: named recursion
+(defun main () -> i64
+  (let ((p (share (Person "Alice" 30))))
+    (describe p)
+    (println (factorial 10)))
+  0)
 ```
 
 ## Implementation Notes
 
-liar compiles to lIR (an S-expression assembly for LLVM IR), which compiles to native code.
+liar compiles through several stages:
 
-The borrow checker runs as a pass over the AST before code generation. It tracks:
-- Ownership state for each binding
-- Active borrows and their scopes
-- Move detection
-- Lifetime analysis
+1. **Parse** — S-expressions to AST
+2. **Macro Expand** — Run compile-time transformations
+3. **Resolve** — Name resolution, capture analysis
+4. **Closure Convert** — Transform closures to structs + functions
+5. **Codegen** — Generate lIR (S-expression assembly)
+6. **LIR → LLVM** — lair compiles to LLVM IR
+7. **LLVM → Native** — Standard LLVM compilation
 
-Reference counting (for `share`) generates atomic increment/decrement operations in lIR. The compiler inserts drops at scope exits automatically.
+### Not Yet Implemented
 
-Macros expand before the borrow checker runs, so they have full freedom to generate any code — ownership rules apply to the expanded form.
+- Pattern matching / match expressions
+- Algebraic data types (enums)
+- Module system
+- Full borrow checking
+- Garbage collection (use manual memory management or share)
