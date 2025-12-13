@@ -1,0 +1,169 @@
+;; liar Persistent Vector
+;;
+;; A 32-way branching trie with tail optimization.
+;; Provides O(log32 n) ≈ O(1) access and update with structural sharing.
+
+;;; ============================================================
+;;; Data Structures
+;;; ============================================================
+
+;; Vector node - 32-element array
+(defstruct VecNode (array: ptr))
+
+;; Persistent vector
+(defstruct PersistentVector (cnt: i64 shift: i64 root: ptr tail: ptr tail-len: i64))
+
+;;; ============================================================
+;;; Constants (as functions since def doesn't work)
+;;; ============================================================
+
+(defun vec-bits () 5)
+(defun vec-width () 32)
+(defun vec-mask () 31)
+
+;;; ============================================================
+;;; Array Helpers
+;;; ============================================================
+
+(defun array-clone-32 (src: ptr) -> ptr
+  (let ((new (heap-array 32))
+        (cp (array-copy 32 new src)))
+    new))
+
+(defun array-set-copy-32 (src: ptr idx val) -> ptr
+  (let ((new (heap-array 32))
+        (cp (array-copy 32 new src))
+        (st (aset new idx val)))
+    new))
+
+;;; ============================================================
+;;; Constructors
+;;; ============================================================
+
+;; Empty vector
+(defun vector () -> ptr
+  (share (PersistentVector 0 5 nil (heap-array 32) 0)))
+
+;;; ============================================================
+;;; Helper Functions
+;;; ============================================================
+
+;; Index within a level: (idx >> shift) & MASK
+(defun vec-index (idx shift)
+  (bit-and (bit-shr idx shift) 31))
+
+;; Where the tail starts in the vector
+(defun tail-offset (v: ptr)
+  (if (< (. v cnt) 32)
+      0
+      (bit-shl (bit-shr (- (. v cnt) 1) 5) 5)))
+
+;;; ============================================================
+;;; Access Operations - O(log32 n)
+;;; ============================================================
+
+;; Traverse tree to find node containing index
+(defun array-for-loop (node: ptr shift idx) -> ptr
+  (if (<= shift 0)
+      (. node array)
+      (array-for-loop (aget (. node array) (vec-index idx shift)) (- shift 5) idx)))
+
+(defun array-for (v: ptr idx) -> ptr
+  (if (>= idx (tail-offset v))
+      (. v tail)
+      (array-for-loop (. v root) (. v shift) idx)))
+
+;; Get element at index
+(defun vec-nth (v: ptr idx)
+  (if (>= idx (. v cnt))
+      0
+      (if (< idx 0)
+          0
+          (aget (array-for v idx) (bit-and idx 31)))))
+
+;; Get count
+(defun vec-count (v: ptr)
+  (. v cnt))
+
+;; Check if empty
+(defun vec-empty? (v: ptr)
+  (= (. v cnt) 0))
+
+;; Get first element
+(defun vec-first (v: ptr)
+  (if (= (. v cnt) 0)
+      0
+      (vec-nth v 0)))
+
+;; Get last element - O(1) via tail
+(defun vec-peek (v: ptr)
+  (if (= (. v cnt) 0)
+      0
+      (aget (. v tail) (- (. v tail-len) 1))))
+
+;;; ============================================================
+;;; Update Operations - O(log32 n)
+;;; ============================================================
+
+;; Create new node
+(defun new-node () -> ptr
+  (share (VecNode (heap-array 32))))
+
+;; Create new path down to leaf
+(defun new-path (level node: ptr) -> ptr
+  (if (<= level 0)
+      node
+      (let ((n (new-node))
+            (st (aset (. n array) 0 (new-path (- level 5) node))))
+        n)))
+
+;; Push tail into tree (simplified - only handles adding to existing level)
+(defun push-tail-simple (shift parent: ptr tail-node: ptr) -> ptr
+  (let ((subidx (bit-and (bit-shr (- (. parent cnt) 1) shift) 31))
+        (new-arr (array-clone-32 (. parent array)))
+        (st (aset new-arr subidx tail-node)))
+    (share (VecNode new-arr))))
+
+;; Append element - O(log32 n) but simplified for tail-only case
+(defun vec-conj (v: ptr val) -> ptr
+  (let ((cnt (. v cnt))
+        (tail-len (. v tail-len)))
+    (if (< tail-len 32)
+        ;; Room in tail - just add
+        (let ((new-tail (array-clone-32 (. v tail)))
+              (st (aset new-tail tail-len val)))
+          (share (PersistentVector (+ cnt 1) (. v shift) (. v root) new-tail (+ tail-len 1))))
+        ;; Tail full - push to tree
+        (let ((tail-node (share (VecNode (. v tail))))
+              (new-root (if (nil? (. v root))
+                           tail-node
+                           (push-tail-simple (. v shift) (. v root) tail-node)))
+              (new-tail (heap-array 32))
+              (st (aset new-tail 0 val)))
+          (share (PersistentVector (+ cnt 1) (. v shift) new-root new-tail 1))))))
+
+;; Update element at index - O(log32 n)
+(defun vec-assoc (v: ptr idx val) -> ptr
+  (if (= idx (. v cnt))
+      (vec-conj v val)
+      (if (>= idx (tail-offset v))
+          ;; In tail - update tail
+          (let ((tail-idx (- idx (tail-offset v)))
+                (new-tail (array-set-copy-32 (. v tail) tail-idx val)))
+            (share (PersistentVector (. v cnt) (. v shift) (. v root) new-tail (. v tail-len))))
+          ;; In tree - path copy (TODO: full implementation)
+          v)))
+
+;;; ============================================================
+;;; Conversion Functions
+;;; ============================================================
+
+;; Build vector from list (recursive helper)
+(defun vec-from-list (v: ptr lst: ptr) -> ptr
+  (if (nil? lst)
+      v
+      (vec-from-list (vec-conj v (first lst)) (rest lst))))
+
+;; Convert list to vector
+(defun vec (lst: ptr) -> ptr
+  (vec-from-list (vector) lst))

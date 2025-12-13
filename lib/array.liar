@@ -1,0 +1,51 @@
+;; liar Array Library
+;;
+;; Helper functions for working with heap-allocated arrays.
+;; These build on the primitives: heap-array, array-copy, aget, aset
+
+;;; ============================================================
+;;; Array Creation
+;;; ============================================================
+
+;; array-of-1 - create array with 1 element
+(defun array-of-1 (a)
+  (let ((arr (heap-array 1))
+        (s0 (aset arr 0 a)))
+    arr))
+
+;; array-of-2 - create array with 2 elements
+(defun array-of-2 (a b)
+  (let ((arr (heap-array 2))
+        (s0 (aset arr 0 a))
+        (s1 (aset arr 1 b)))
+    arr))
+
+;; make-array - create array with n elements (initialized to 0)
+(defun make-array (n)
+  (heap-array n))
+
+;;; ============================================================
+;;; Array Copy Operations
+;;; ============================================================
+
+;; array-set-copy - copy array and set one element
+;; Returns new array with element at idx set to val
+(defun array-set-copy (size src idx val)
+  (let ((new (heap-array size))
+        (cp (array-copy size new src))
+        (st (aset new idx val)))
+    new))
+
+;; array-append - create new array with element appended
+;; size is the current size of src
+(defun array-append (size src val)
+  (let ((new (heap-array (+ size 1)))
+        (cp (array-copy size new src))
+        (st (aset new size val)))
+    new))
+
+;; array-clone - create exact copy of array
+(defun array-clone (size src)
+  (let ((new (heap-array size))
+        (cp (array-copy size new src)))
+    new))

@@ -189,7 +189,8 @@ impl<'a> Lexer<'a> {
         let mut ident = String::new();
         while let Some(&c) = self.chars.peek() {
             // Allow alphanumeric, underscore, hyphen, @ (for function references),
-            // : (for keywords), % (for LLVM named types), . (for %struct.name)
+            // : (for keywords), % (for LLVM named types), . (for %struct.name),
+            // ? and ! (for Lisp-style predicates and mutators)
             if c.is_alphanumeric()
                 || c == '_'
                 || c == '-'
@@ -197,6 +198,8 @@ impl<'a> Lexer<'a> {
                 || c == ':'
                 || c == '%'
                 || c == '.'
+                || c == '?'
+                || c == '!'
             {
                 ident.push(c);
                 self.chars.next();

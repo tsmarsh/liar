@@ -1,0 +1,116 @@
+;; PersistentHashSet - Set backed by HAMT
+;;
+;; A persistent, immutable set implemented as a wrapper around HashMap.
+;; Uses a sentinel value (1) to indicate membership.
+
+(defstruct BitmapNode (bitmap: i64 array: ptr))
+(defstruct HashSet (cnt: i64 root: ptr))
+
+;; Reuse HAMT internals from hashmap
+
+(defun bit-at (pos)
+  (shl 1 pos))
+
+(defun has-bit (bitmap pos)
+  (if (= 0 (bit-and bitmap (bit-at pos))) 0 1))
+
+(defun index-for (bitmap pos)
+  (popcount (bit-and bitmap (- (bit-at pos) 1))))
+
+(defun mask-hash (hash shift)
+  (bit-and (shr hash shift) 31))
+
+(defun hash-key (key)
+  (bit-xor key (shr key 16)))
+
+(defun clone-pairs (n src: ptr) -> ptr
+  (let ((new (heap-array 64))
+        (cp (array-copy 64 new src)))
+    new))
+
+(defun copy-pairs-before (dest: ptr src: ptr idx) -> ptr
+  (if (= idx 0)
+      dest
+      (copy-pairs-before-loop dest src 0 idx)))
+
+(defun copy-pairs-before-loop (dest: ptr src: ptr i idx) -> ptr
+  (if (>= i idx)
+      dest
+      (let ((s1 (aset dest (* 2 i) (aget src (* 2 i))))
+            (s2 (aset dest (+ (* 2 i) 1) (aget src (+ (* 2 i) 1)))))
+        (copy-pairs-before-loop dest src (+ i 1) idx))))
+
+(defun copy-pairs-after (dest: ptr src: ptr idx n) -> ptr
+  (if (>= idx n)
+      dest
+      (copy-pairs-after-loop dest src idx n)))
+
+(defun copy-pairs-after-loop (dest: ptr src: ptr i n) -> ptr
+  (if (>= i n)
+      dest
+      (let ((di (+ i 1))
+            (s1 (aset dest (* 2 di) (aget src (* 2 i))))
+            (s2 (aset dest (+ (* 2 di) 1) (aget src (+ (* 2 i) 1)))))
+        (copy-pairs-after-loop dest src (+ i 1) n))))
+
+(defun insert-pair (n src: ptr idx key val) -> ptr
+  (let ((new (heap-array 64))
+        (c1 (copy-pairs-before new src idx))
+        (s1 (aset new (* 2 idx) key))
+        (s2 (aset new (+ (* 2 idx) 1) val))
+        (c2 (copy-pairs-after new src idx n)))
+    new))
+
+;; Internal node operations
+
+(defun node-contains? (node: ptr hash shift)
+  (let ((pos (mask-hash hash shift)))
+    (has-bit (. node bitmap) pos)))
+
+(defun node-add (node: ptr hash shift key) -> ptr
+  (let ((pos (mask-hash hash shift))
+        (bitmap (. node bitmap))
+        (idx (index-for bitmap pos))
+        (n (popcount bitmap)))
+    (if (= 0 (has-bit bitmap pos))
+        ;; New key - insert at position (value = 1 as sentinel)
+        (let ((new-arr (insert-pair n (. node array) idx key 1)))
+          (share (BitmapNode (bit-or bitmap (bit-at pos)) new-arr)))
+        ;; Key already exists - return same node
+        node)))
+
+;;; ============================================================
+;;; Public API
+;;; ============================================================
+
+;; Create an empty hash set
+(defun hash-set () -> ptr
+  (share (HashSet 0 nil)))
+
+;; Check if element exists (returns 0 or 1)
+(defun hs-contains? (s: ptr elem)
+  (if (nil? (. s root))
+      0
+      (node-contains? (. s root) (hash-key elem) 0)))
+
+;; Add element to set, returns new set
+(defun hs-add (s: ptr elem) -> ptr
+  (let ((hash (hash-key elem)))
+    (if (nil? (. s root))
+        (let ((pos (mask-hash hash 0))
+              (arr (heap-array 64))
+              (s1 (aset arr 0 elem))
+              (s2 (aset arr 1 1))  ;; sentinel value
+              (node (share (BitmapNode (bit-at pos) arr))))
+          (share (HashSet 1 node)))
+        (if (= 1 (hs-contains? s elem))
+            s  ;; Already contains, return same set
+            (share (HashSet (+ (. s cnt) 1) (node-add (. s root) hash 0 elem)))))))
+
+;; Get count of elements
+(defun hs-count (s: ptr)
+  (. s cnt))
+
+;; Check if set is empty
+(defun hs-empty? (s: ptr)
+  (= 0 (. s cnt)))

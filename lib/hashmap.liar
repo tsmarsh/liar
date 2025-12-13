@@ -1,0 +1,139 @@
+;; PersistentHashMap - Hash Array Mapped Trie (HAMT)
+;;
+;; A persistent, immutable hash map using bitmap-indexed trie nodes.
+;; Uses structural sharing for efficient updates - only the path from
+;; root to modified leaf is copied.
+;;
+;; Implementation:
+;; - 32-way branching (5 bits per level)
+;; - Bitmap compression (popcount for index calculation)
+;; - Fixed 64-element arrays (max 32 key-value pairs per node)
+;; - Integer keys only (for now)
+
+(defstruct BitmapNode (bitmap: i64 array: ptr))
+(defstruct HashMap (cnt: i64 root: ptr))
+
+;; Bit operations for bitmap indexing
+(defun bit-at (pos)
+  (shl 1 pos))
+
+(defun has-bit (bitmap pos)
+  (if (= 0 (bit-and bitmap (bit-at pos))) 0 1))
+
+(defun index-for (bitmap pos)
+  (popcount (bit-and bitmap (- (bit-at pos) 1))))
+
+;; Hash function helpers
+(defun mask-hash (hash shift)
+  (bit-and (shr hash shift) 31))
+
+(defun hash-key (key)
+  (bit-xor key (shr key 16)))
+
+;; Array copy helpers for path copying
+(defun clone-pairs (n src: ptr) -> ptr
+  (let ((new (heap-array 64))
+        (cp (array-copy 64 new src)))
+    new))
+
+(defun copy-pairs-before (dest: ptr src: ptr idx) -> ptr
+  (if (= idx 0)
+      dest
+      (copy-pairs-before-loop dest src 0 idx)))
+
+(defun copy-pairs-before-loop (dest: ptr src: ptr i idx) -> ptr
+  (if (>= i idx)
+      dest
+      (let ((s1 (aset dest (* 2 i) (aget src (* 2 i))))
+            (s2 (aset dest (+ (* 2 i) 1) (aget src (+ (* 2 i) 1)))))
+        (copy-pairs-before-loop dest src (+ i 1) idx))))
+
+(defun copy-pairs-after (dest: ptr src: ptr idx n) -> ptr
+  (if (>= idx n)
+      dest
+      (copy-pairs-after-loop dest src idx n)))
+
+(defun copy-pairs-after-loop (dest: ptr src: ptr i n) -> ptr
+  (if (>= i n)
+      dest
+      (let ((di (+ i 1))
+            (s1 (aset dest (* 2 di) (aget src (* 2 i))))
+            (s2 (aset dest (+ (* 2 di) 1) (aget src (+ (* 2 i) 1)))))
+        (copy-pairs-after-loop dest src (+ i 1) n))))
+
+(defun insert-pair (n src: ptr idx key val) -> ptr
+  (let ((new (heap-array 64))
+        (c1 (copy-pairs-before new src idx))
+        (s1 (aset new (* 2 idx) key))
+        (s2 (aset new (+ (* 2 idx) 1) val))
+        (c2 (copy-pairs-after new src idx n)))
+    new))
+
+;; Internal node operations
+
+(defun node-get (node: ptr hash shift)
+  (let ((pos (mask-hash hash shift)))
+    (if (= 0 (has-bit (. node bitmap) pos))
+        0
+        (let ((idx (index-for (. node bitmap) pos))
+              (arr (. node array)))
+          (aget arr (+ (* 2 idx) 1))))))
+
+(defun node-contains? (node: ptr hash shift)
+  (let ((pos (mask-hash hash shift)))
+    (has-bit (. node bitmap) pos)))
+
+(defun node-assoc (node: ptr hash shift key val) -> ptr
+  (let ((pos (mask-hash hash shift))
+        (bitmap (. node bitmap))
+        (idx (index-for bitmap pos))
+        (n (popcount bitmap)))
+    (if (= 0 (has-bit bitmap pos))
+        ;; New key - insert at position
+        (let ((new-arr (insert-pair n (. node array) idx key val)))
+          (share (BitmapNode (bit-or bitmap (bit-at pos)) new-arr)))
+        ;; Existing key - update value (path copy)
+        (let ((new-arr (clone-pairs n (. node array)))
+              (s1 (aset new-arr (* 2 idx) key))
+              (s2 (aset new-arr (+ (* 2 idx) 1) val)))
+          (share (BitmapNode bitmap new-arr))))))
+
+;;; ============================================================
+;;; Public API
+;;; ============================================================
+
+;; Create an empty hash map
+(defun hash-map () -> ptr
+  (share (HashMap 0 nil)))
+
+;; Get value for key, returns 0 if not found
+(defun hm-get (m: ptr key)
+  (if (nil? (. m root))
+      0
+      (node-get (. m root) (hash-key key) 0)))
+
+;; Associate key with value, returns new map
+(defun hm-assoc (m: ptr key val) -> ptr
+  (let ((hash (hash-key key)))
+    (if (nil? (. m root))
+        (let ((pos (mask-hash hash 0))
+              (arr (heap-array 64))
+              (s1 (aset arr 0 key))
+              (s2 (aset arr 1 val))
+              (node (share (BitmapNode (bit-at pos) arr))))
+          (share (HashMap 1 node)))
+        (share (HashMap (+ (. m cnt) 1) (node-assoc (. m root) hash 0 key val))))))
+
+;; Get count of entries
+(defun hm-count (m: ptr)
+  (. m cnt))
+
+;; Check if map is empty
+(defun hm-empty? (m: ptr)
+  (= 0 (. m cnt)))
+
+;; Check if key exists (returns 0 or 1)
+(defun hm-contains? (m: ptr key)
+  (if (nil? (. m root))
+      0
+      (node-contains? (. m root) (hash-key key) 0)))
