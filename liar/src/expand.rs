@@ -10,19 +10,12 @@ use std::collections::HashMap;
 
 use crate::ast::{Defstruct, Expr, Item, Program};
 use crate::error::{CompileError, Result};
-use crate::eval::{Env, Evaluator, StructInfo, Value};
+use crate::eval::{Env, Evaluator, MacroDef, StructInfo, Value};
 use crate::span::{Span, Spanned};
 
 /// Convenience function to expand macros in a program
 pub fn expand(program: &mut Program) -> Result<()> {
     Expander::new().expand_program(program)
-}
-
-/// A macro definition
-#[derive(Clone)]
-struct MacroDef {
-    params: Vec<String>,
-    body: Spanned<Expr>,
 }
 
 /// Macro expander
@@ -53,7 +46,11 @@ impl Expander {
                     params: defmacro.params.iter().map(|p| p.node.clone()).collect(),
                     body: defmacro.body.clone(),
                 };
-                self.macros.insert(defmacro.name.node.clone(), def);
+                let name = defmacro.name.node.clone();
+                // Store in local map
+                self.macros.insert(name.clone(), def.clone());
+                // Also register with evaluator for nested macro calls
+                self.evaluator.register_macro(name, def);
             }
         }
     }

@@ -10,6 +10,15 @@ use crate::ast::Expr;
 use crate::error::{CompileError, Result};
 use crate::span::{Span, Spanned};
 
+/// A macro definition for compile-time evaluation
+#[derive(Clone, Debug)]
+pub struct MacroDef {
+    /// Parameter names
+    pub params: Vec<String>,
+    /// Macro body expression
+    pub body: Spanned<Expr>,
+}
+
 /// A compile-time value
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -156,11 +165,27 @@ pub struct StructInfo {
 #[derive(Default)]
 pub struct Evaluator {
     structs: HashMap<String, StructInfo>,
+    macros: HashMap<String, MacroDef>,
 }
 
 impl Evaluator {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Register a macro for nested macro expansion
+    pub fn register_macro(&mut self, name: String, def: MacroDef) {
+        self.macros.insert(name, def);
+    }
+
+    /// Check if a macro is registered
+    pub fn has_macro(&self, name: &str) -> bool {
+        self.macros.contains_key(name)
+    }
+
+    /// Get a macro definition
+    pub fn get_macro(&self, name: &str) -> Option<&MacroDef> {
+        self.macros.get(name)
     }
 
     /// Register a struct for reflection
@@ -176,6 +201,71 @@ impl Evaluator {
     /// Get struct fields
     pub fn get_struct_fields(&self, name: &str) -> Option<&[(String, String)]> {
         self.structs.get(name).map(|info| info.fields.as_slice())
+    }
+
+    /// Expand a macro call (used for nested macro calls)
+    /// The caller_env is used to resolve variable references in arguments
+    fn expand_macro(
+        &self,
+        caller_env: &Env,
+        macro_def: &MacroDef,
+        args: &[Spanned<Expr>],
+        span: Span,
+    ) -> Result<Value> {
+        // Check arity
+        if args.len() != macro_def.params.len() {
+            return Err(CompileError::macro_error(
+                span,
+                format!(
+                    "macro expects {} arguments, got {}",
+                    macro_def.params.len(),
+                    args.len()
+                ),
+            ));
+        }
+
+        // Create environment with macro parameters bound to argument expressions
+        let mut new_env = Env::new();
+        for (param, arg) in macro_def.params.iter().zip(args.iter()) {
+            // Resolve the argument in the caller's environment
+            let resolved_arg = self.resolve_arg(caller_env, arg)?;
+            new_env.bind(param.clone(), resolved_arg);
+        }
+
+        // Evaluate the macro body
+        self.eval(&new_env, &macro_def.body)
+    }
+
+    /// Resolve an argument expression in the given environment
+    /// - If it's a variable, look it up and return its value
+    /// - If it's a macro call, expand it
+    /// - Otherwise, wrap it as Value::Expr
+    fn resolve_arg(&self, env: &Env, arg: &Spanned<Expr>) -> Result<Value> {
+        match &arg.node {
+            // Variable reference - look up in environment
+            Expr::Var(name) => {
+                if let Some(val) = env.lookup(name) {
+                    Ok(val)
+                } else {
+                    // Unknown var - keep as expression
+                    Ok(Value::Expr(arg.clone()))
+                }
+            }
+            // Macro call - expand it first
+            Expr::Call(func, inner_args) => {
+                if let Expr::Var(name) = &func.node {
+                    if let Some(macro_def) = self.macros.get(name).cloned() {
+                        // Recursively expand the macro call
+                        let result = self.expand_macro(env, &macro_def, inner_args, arg.span)?;
+                        return Ok(result);
+                    }
+                }
+                // Not a macro call - keep as expression
+                Ok(Value::Expr(arg.clone()))
+            }
+            // Other expressions - wrap as is
+            _ => Ok(Value::Expr(arg.clone())),
+        }
     }
 
     /// Evaluate an expression at compile time
@@ -233,6 +323,12 @@ impl Evaluator {
                 if let Expr::Var(name) = &func.node {
                     if let Some(result) = self.eval_builtin(env, name, args, expr.span)? {
                         return Ok(result);
+                    }
+
+                    // Check if this is a call to another macro
+                    if let Some(macro_def) = self.macros.get(name).cloned() {
+                        // Expand the nested macro call, passing current env for var resolution
+                        return self.expand_macro(env, &macro_def, args, expr.span);
                     }
                 }
 
@@ -785,6 +881,41 @@ impl Evaluator {
                 }
                 let name = self.extract_name(env, &args[0])?;
                 Ok(Some(Value::Bool(self.has_struct(&name))))
+            }
+
+            // Construct a field access expression: (make-field-access obj field-name)
+            // This is needed because (. obj field) expects field to be a literal symbol,
+            // but in macro-generated code we have the field name as a value.
+            "make-field-access" => {
+                if args.len() != 2 {
+                    return Err(CompileError::macro_error(
+                        span,
+                        "make-field-access requires 2 arguments: object and field-name",
+                    ));
+                }
+                let obj_expr = self.eval(env, &args[0])?.to_expr(span);
+                let field_name = self.extract_name(env, &args[1])?;
+                let field_expr = Expr::Field(Box::new(obj_expr), Spanned::new(field_name, span));
+                Ok(Some(Value::Expr(Spanned::new(field_expr, span))))
+            }
+
+            // Construct a struct instantiation: (make-struct-call StructName arg1 arg2 ...)
+            // Returns an expression like (StructName arg1 arg2 ...)
+            "make-struct-call" => {
+                if args.is_empty() {
+                    return Err(CompileError::macro_error(
+                        span,
+                        "make-struct-call requires at least a struct name",
+                    ));
+                }
+                let struct_name = self.extract_name(env, &args[0])?;
+                let struct_name_expr = Spanned::new(Expr::Var(struct_name), span);
+                let field_values: Vec<Spanned<Expr>> = args[1..]
+                    .iter()
+                    .map(|arg| self.eval(env, arg).map(|v| v.to_expr(span)))
+                    .collect::<Result<Vec<_>>>()?;
+                let call_expr = Expr::Call(Box::new(struct_name_expr), field_values);
+                Ok(Some(Value::Expr(Spanned::new(call_expr, span))))
             }
 
             // Gensym
