@@ -58,6 +58,26 @@
 
 (defun sum-to (n) (if (<= n 0) 0 (+ n (sum-to (- n 1)))))
 
+;; Fast (O(1) or O(log n)) versions
+
+;; Sum of 1..n using closed-form formula: n*(n+1)/2
+(defun sum-to-fast (n) (/ (* n (+ n 1)) 2))
+
+;; Fibonacci using tail recursion - O(n)
+(defun fib-iter (n a b)
+  (if (= n 0) a (fib-iter (- n 1) b (+ a b))))
+
+(defun fib-fast (n) (fib-iter n 0 1))
+
+;; Fast exponentiation by squaring - O(log n)
+(defun pow-fast (base exp)
+  (if (= exp 0)
+      1
+      (if (evenp exp)
+          (let ((half (pow-fast base (/ exp 2))))
+            (* half half))
+          (* base (pow-fast base (- exp 1))))))
+
 ;; Higher-order functions
 
 ;; Returns a function that always returns v, ignoring its argument
