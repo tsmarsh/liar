@@ -24,6 +24,7 @@ pub mod ast;
 pub mod closures;
 pub mod codegen;
 pub mod error;
+pub mod eval;
 pub mod expand;
 pub mod infer;
 pub mod lexer;
