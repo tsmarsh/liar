@@ -674,6 +674,48 @@ pub fn generate_builtin(
             })
         }
 
+        // Byte operations (for string manipulation)
+        "store-byte" => {
+            // (store-byte ptr value) - store a byte at ptr
+            check_binary(expr, "store-byte", args)?;
+            let ptr = generate_expr(ctx, &args[0])?;
+            let value = generate_expr(ctx, &args[1])?;
+            // Truncate i64 value to i8 before storing
+            Some(lir::Expr::Store {
+                value: Box::new(lir::Expr::Trunc {
+                    ty: lir::ScalarType::I8,
+                    value: Box::new(value),
+                }),
+                ptr: Box::new(ptr),
+            })
+        }
+        "load-byte" => {
+            // (load-byte ptr) - load a byte from ptr, return as i64
+            check_unary(expr, "load-byte", args)?;
+            let ptr = generate_expr(ctx, &args[0])?;
+            // Load i8 and zero-extend to i64
+            Some(lir::Expr::ZExt {
+                ty: lir::ScalarType::I64,
+                value: Box::new(lir::Expr::Load {
+                    ty: lir::ParamType::Scalar(lir::ScalarType::I8),
+                    ptr: Box::new(ptr),
+                }),
+            })
+        }
+        "ptr+" => {
+            // (ptr+ ptr offset) - add byte offset to pointer
+            check_binary(expr, "ptr+", args)?;
+            let ptr = generate_expr(ctx, &args[0])?;
+            let offset = generate_expr(ctx, &args[1])?;
+            // GEP on i8 type for byte-level arithmetic
+            Some(lir::Expr::GetElementPtr {
+                ty: lir::GepType::Scalar(lir::ScalarType::I8),
+                ptr: Box::new(ptr),
+                indices: vec![offset],
+                inbounds: true,
+            })
+        }
+
         _ => None,
     };
 

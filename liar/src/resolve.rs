@@ -166,6 +166,11 @@ const BUILTINS: &[&str] = &[
     "uitofp",
     // Nil check
     "nil?",
+    // Byte operations (for string manipulation)
+    "store-byte",
+    "load-byte",
+    // Pointer arithmetic
+    "ptr+",
     // Type names (used as arguments to conversion functions)
     "i1",
     "i8",

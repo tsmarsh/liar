@@ -1,0 +1,178 @@
+;; lib/io.liar - I/O Library
+;;
+;; Provides file I/O operations built on libc.
+;; For bootstrap, we use blocking operations.
+;;
+;; Note: Some functions are factored into helpers to work around
+;; a codegen bug with nested let/if/do constructs.
+
+;;; ============================================
+;;; libc FFI declarations
+;;; ============================================
+
+;; File operations
+(extern open i32 (ptr i32 i32))
+(extern close i32 (i32))
+(extern read i64 (i32 ptr i64))
+(extern write i64 (i32 ptr i64))
+(extern lseek i64 (i32 i64 i32))
+
+;; Memory
+(extern malloc ptr (i64))
+(extern free void (ptr))
+
+;; String ops
+(extern strlen i64 (ptr))
+
+
+;;; ============================================
+;;; File Operations
+;;; ============================================
+
+;; Open a file. Returns fd or -1 on error.
+(defun file-open (path flags mode) -> i64
+  (open path flags mode))
+
+;; Open file for reading. O_RDONLY=0
+(defun file-open-read (path) -> i64
+  (file-open path 0 0))
+
+;; Open file for writing (create/truncate). Mode 0644.
+;; O_WRONLY=1, O_CREAT=64, O_TRUNC=512
+(defun file-open-write (path) -> i64
+  (file-open path (bit-or 1 (bit-or 64 512)) 420))
+
+;; Open file for appending.
+;; O_WRONLY=1, O_CREAT=64, O_APPEND=1024
+(defun file-open-append (path) -> i64
+  (file-open path (bit-or 1 (bit-or 64 1024)) 420))
+
+;; Close a file descriptor.
+(defun file-close (fd) -> i64
+  (close fd))
+
+;; Get file size by seeking to end.
+;; SEEK_CUR=1, SEEK_END=2, SEEK_SET=0
+(defun file-size (fd) -> i64
+  (let ((pos (lseek fd 0 1)))
+    (let ((size (lseek fd 0 2)))
+      (let ((_ (lseek fd pos 0)))
+        size))))
+
+
+;;; ============================================
+;;; Read/Write Operations
+;;; ============================================
+
+;; Read up to len bytes from fd into buf. Returns bytes read or -1.
+(defun read-bytes (fd buf len) -> i64
+  (read fd buf len))
+
+;; Write len bytes from buf to fd. Returns bytes written or -1.
+(defun write-bytes (fd buf len) -> i64
+  (write fd buf len))
+
+
+;;; ============================================
+;;; High-Level Conveniences
+;;; ============================================
+
+;; Helper: read file content into buffer and close
+(defun slurp-read (fd buf: ptr size) -> ptr
+  (let ((_ (lseek fd 0 0)))
+    (let ((_ (read fd buf size)))
+      (let ((_ (store-byte (ptr+ buf size) 0)))
+        (let ((_ (close fd)))
+          buf)))))
+
+;; Helper: close fd and return nil
+(defun slurp-error (fd) -> ptr
+  (let ((_ (close fd)))
+    nil))
+
+;; Helper: allocate buffer and read
+(defun slurp-alloc (fd size) -> ptr
+  (let ((buf (malloc (+ size 1))))
+    (if (nil? buf)
+        (slurp-error fd)
+        (slurp-read fd buf size))))
+
+;; Read entire file as null-terminated string. Returns ptr or nil.
+;; Caller is responsible for freeing the returned buffer.
+(defun slurp (path) -> ptr
+  (let ((fd (file-open-read path)))
+    (if (< fd 0)
+        nil
+        (let ((size (file-size fd)))
+          (slurp-alloc fd size)))))
+
+;; Helper: write contents to fd and close
+(defun spit-write (fd contents: ptr len) -> i64
+  (let ((written (write fd contents len)))
+    (let ((_ (close fd)))
+      written)))
+
+;; Write null-terminated string to file. Returns bytes written or -1.
+(defun spit (path contents) -> i64
+  (let ((fd (file-open-write path)))
+    (if (< fd 0)
+        -1
+        (let ((len (strlen contents)))
+          (spit-write fd contents len)))))
+
+;; Append null-terminated string to file. Returns bytes written or -1.
+(defun spit-append (path contents) -> i64
+  (let ((fd (file-open-append path)))
+    (if (< fd 0)
+        -1
+        (let ((len (strlen contents)))
+          (spit-write fd contents len)))))
+
+
+;;; ============================================
+;;; Standard Streams
+;;; STDIN=0, STDOUT=1, STDERR=2
+;;; ============================================
+
+;; Write string to stdout.
+(defun print-str (s) -> i64
+  (write-bytes 1 s (strlen s)))
+
+;; Write string + newline to stdout.
+(defun println-str (s) -> i64
+  (let ((_ (print-str s)))
+    (write-bytes 1 "\n" 1)))
+
+;; Write string to stderr.
+(defun eprint (s) -> i64
+  (write-bytes 2 s (strlen s)))
+
+;; Write string + newline to stderr.
+(defun eprintln (s) -> i64
+  (let ((_ (eprint s)))
+    (write-bytes 2 "\n" 1)))
+
+
+;;; ============================================
+;;; Line Reading
+;;; ============================================
+
+;; Helper: check if we found newline or should continue
+(defun read-line-check (fd buf: ptr pos n max-len) -> i64
+  (if (<= n 0)
+      pos
+      (if (= (load-byte (ptr+ buf pos)) 10)
+          (+ pos 1)
+          (read-line-loop fd buf (+ pos 1) max-len))))
+
+;; Read one byte at a time until newline or max-len.
+(defun read-line-loop (fd buf: ptr pos max-len) -> i64
+  (if (>= pos max-len)
+      pos
+      (let ((n (read-bytes fd (ptr+ buf pos) 1)))
+        (read-line-check fd buf pos n max-len))))
+
+;; Read a line from fd into buf. Stops at newline or max-len.
+;; Returns bytes read (including newline if present).
+(defun read-line (fd buf: ptr max-len) -> i64
+  (read-line-loop fd buf 0 max-len))
