@@ -67,9 +67,19 @@ pub fn generate(program: &Program, type_env: &TypeEnv) -> Result<Module> {
 
     // Third pass: collect function signatures for type inference
     for item in &program.items {
-        if let Item::Defun(defun) = &item.node {
-            let return_type = infer_function_return_type(&ctx, defun);
-            ctx.register_func_return_type(&defun.name.node, return_type);
+        match &item.node {
+            Item::Defun(defun) => {
+                let return_type = infer_function_return_type(&ctx, defun);
+                ctx.register_func_return_type(&defun.name.node, return_type);
+            }
+            Item::Extern(ext) => {
+                // Register extern function return types so they can be called directly
+                let return_type = liar_type_to_lir_return(&ext.return_type.node);
+                ctx.register_func_return_type(&ext.name.node, return_type);
+                // Mark as extern so we don't prepend __env
+                ctx.register_extern(&ext.name.node);
+            }
+            _ => {}
         }
     }
 
@@ -100,6 +110,19 @@ pub fn generate(program: &Program, type_env: &TypeEnv) -> Result<Module> {
                 return_type: lir::ReturnType::Ptr,
                 param_types: vec![lir::ParamType::Scalar(lir::ScalarType::I64)],
                 varargs: false,
+            }),
+        );
+    }
+
+    // Add printf declaration if print/println was used
+    if ctx.take_needs_printf() {
+        items.insert(
+            0,
+            lir::Item::ExternDecl(lir::ExternDecl {
+                name: "printf".to_string(),
+                return_type: lir::ReturnType::Scalar(lir::ScalarType::I32),
+                param_types: vec![lir::ParamType::Ptr],
+                varargs: true,
             }),
         );
     }

@@ -19,6 +19,8 @@ static VAR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 pub struct CodegenContext {
     /// Function return types for type inference
     pub func_return_types: HashMap<String, lir::ReturnType>,
+    /// Extern function names (don't take __env parameter)
+    pub extern_funcs: std::collections::HashSet<String>,
     /// Struct definitions
     pub struct_defs: HashMap<String, StructInfo>,
     /// Variable to struct type mapping (for field access)
@@ -29,6 +31,8 @@ pub struct CodegenContext {
     pub protocol_impls: HashMap<(String, String), String>,
     /// Whether malloc declaration is needed
     pub needs_malloc: bool,
+    /// Whether printf declaration is needed
+    pub needs_printf: bool,
     /// Type ID counter for runtime type dispatch
     type_id_counter: i64,
     /// Struct name to type ID mapping
@@ -67,11 +71,13 @@ impl CodegenContext {
     pub fn new() -> Self {
         Self {
             func_return_types: HashMap::new(),
+            extern_funcs: std::collections::HashSet::new(),
             struct_defs: HashMap::new(),
             var_struct_types: HashMap::new(),
             protocol_methods: HashMap::new(),
             protocol_impls: HashMap::new(),
             needs_malloc: false,
+            needs_printf: false,
             type_id_counter: 1, // 0 reserved for nil
             struct_type_ids: HashMap::new(),
             blocks: Vec::new(),
@@ -87,11 +93,13 @@ impl CodegenContext {
     /// Reset all context state (for testing)
     pub fn reset(&mut self) {
         self.func_return_types.clear();
+        self.extern_funcs.clear();
         self.struct_defs.clear();
         self.var_struct_types.clear();
         self.protocol_methods.clear();
         self.protocol_impls.clear();
         self.needs_malloc = false;
+        self.needs_printf = false;
         self.type_id_counter = 1;
         self.struct_type_ids.clear();
         self.blocks.clear();
@@ -340,6 +348,16 @@ impl CodegenContext {
         self.func_return_types.get(name)
     }
 
+    /// Register an extern function
+    pub fn register_extern(&mut self, name: &str) {
+        self.extern_funcs.insert(name.to_string());
+    }
+
+    /// Check if a function is an extern
+    pub fn is_extern(&self, name: &str) -> bool {
+        self.extern_funcs.contains(name)
+    }
+
     /// Mark that malloc is needed
     pub fn set_needs_malloc(&mut self) {
         self.needs_malloc = true;
@@ -348,6 +366,16 @@ impl CodegenContext {
     /// Take the needs_malloc flag (returns true if set, then clears it)
     pub fn take_needs_malloc(&mut self) -> bool {
         std::mem::take(&mut self.needs_malloc)
+    }
+
+    /// Mark that printf is needed
+    pub fn set_needs_printf(&mut self) {
+        self.needs_printf = true;
+    }
+
+    /// Take the needs_printf flag (returns true if set, then clears it)
+    pub fn take_needs_printf(&mut self) -> bool {
+        std::mem::take(&mut self.needs_printf)
     }
 }
 

@@ -542,6 +542,36 @@ pub fn generate_builtin(
             })
         }
 
+        // I/O operations
+        "print" => {
+            check_unary(expr, "print", args)?;
+            ctx.set_needs_printf();
+            let a = generate_expr(ctx, &args[0])?;
+            // Use %s for strings (ptr type), %ld for integers
+            let format = match &args[0].node {
+                Expr::String(_) => "%s",
+                _ => "%ld",
+            };
+            Some(lir::Expr::Call {
+                name: "printf".to_string(),
+                args: vec![lir::Expr::StringLit(format.to_string()), a],
+            })
+        }
+        "println" => {
+            check_unary(expr, "println", args)?;
+            ctx.set_needs_printf();
+            let a = generate_expr(ctx, &args[0])?;
+            // Use %s\n for strings (ptr type), %ld\n for integers
+            let format = match &args[0].node {
+                Expr::String(_) => "%s\n",
+                _ => "%ld\n",
+            };
+            Some(lir::Expr::Call {
+                name: "printf".to_string(),
+                args: vec![lir::Expr::StringLit(format.to_string()), a],
+            })
+        }
+
         // Integer width conversions
         "trunc" => {
             check_binary(expr, "trunc", args)?;

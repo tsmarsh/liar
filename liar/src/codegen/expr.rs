@@ -177,10 +177,16 @@ fn generate_call(
     if let Expr::Var(name) = &func.node {
         // Check if this is a known function (direct call)
         if ctx.lookup_func_return_type(name).is_some() {
-            // Direct function call - prepend null for __env parameter
             // Arguments are NOT in tail position
             let was_tail = ctx.set_tail_position(false);
-            let mut call_args = vec![lir::Expr::NullPtr];
+
+            // Extern functions don't take __env parameter
+            let mut call_args = if ctx.is_extern(name) {
+                Vec::new()
+            } else {
+                vec![lir::Expr::NullPtr]
+            };
+
             for arg in args {
                 call_args.push(generate_expr(ctx, arg)?);
             }
