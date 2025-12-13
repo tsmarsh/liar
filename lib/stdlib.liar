@@ -71,3 +71,20 @@
 ;; Returns a function with arguments flipped: (flip f) returns (fn (a b) (f b a))
 (defun flip (f)
   (fn (a b) (f b a)))
+
+;; Returns a function that negates the result of predicate f
+;; Works with predicates returning i64 (0 = false, non-zero = true)
+(defun complement (f)
+  (fn (x) (if (= 0 (f x)) 1 0)))
+
+;; Composition of three functions: (f (g (h x)))
+(defun comp3 (f g h)
+  (fn (x) (f (g (h x)))))
+
+;; Variadic composition macro - composes any number of functions
+(defmacro comp* (... fns)
+  (if (nil? fns)
+      `identity
+      (if (nil? (rest fns))
+          (first fns)
+          `(fn (x) (,(first fns) ((comp* ,@(rest fns)) x))))))
