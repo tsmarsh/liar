@@ -41,18 +41,25 @@ pub fn generate(program: &Program, type_env: &TypeEnv) -> Result<Module> {
 
     // First pass: collect struct definitions
     // All structs have a type_id as field 0 for runtime protocol dispatch
+    // Also track namespace context as we encounter (ns ...) declarations
     for item in &program.items {
-        if let Item::Defstruct(defstruct) = &item.node {
-            // Prepend __type_id field (i64) for runtime dispatch
-            let mut fields: Vec<(String, lir::ParamType)> = vec![(
-                "__type_id".to_string(),
-                lir::ParamType::Scalar(lir::ScalarType::I64),
-            )];
-            fields.extend(defstruct.fields.iter().map(|f| {
-                let ty = liar_type_to_lir_param(&f.ty.node);
-                (f.name.node.clone(), ty)
-            }));
-            ctx.register_struct(&defstruct.name.node, StructInfo { fields });
+        match &item.node {
+            Item::Namespace(ns) => {
+                ctx.set_namespace(&ns.name.node);
+            }
+            Item::Defstruct(defstruct) => {
+                // Prepend __type_id field (i64) for runtime dispatch
+                let mut fields: Vec<(String, lir::ParamType)> = vec![(
+                    "__type_id".to_string(),
+                    lir::ParamType::Scalar(lir::ScalarType::I64),
+                )];
+                fields.extend(defstruct.fields.iter().map(|f| {
+                    let ty = liar_type_to_lir_param(&f.ty.node);
+                    (f.name.node.clone(), ty)
+                }));
+                ctx.register_struct(&defstruct.name.node, StructInfo { fields });
+            }
+            _ => {}
         }
     }
 

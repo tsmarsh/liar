@@ -70,6 +70,8 @@ pub struct CodegenContext {
     /// Whether tail calls can be emitted (false inside if branches)
     /// Tail calls are terminators and can't be used inside expressions
     can_emit_tailcall: bool,
+    /// Current namespace for name mangling (None if no namespace declared)
+    current_namespace: Option<String>,
 }
 
 impl Default for CodegenContext {
@@ -103,6 +105,7 @@ impl CodegenContext {
             block_bindings: Vec::new(),
             in_tail_position: false,
             can_emit_tailcall: true,
+            current_namespace: None,
         }
     }
 
@@ -129,6 +132,43 @@ impl CodegenContext {
         self.block_bindings.clear();
         self.in_tail_position = false;
         self.can_emit_tailcall = true;
+        self.current_namespace = None;
+    }
+
+    // ========== Namespace Management ==========
+
+    /// Set the current namespace (from (ns ...) declaration)
+    pub fn set_namespace(&mut self, ns: &str) {
+        self.current_namespace = Some(ns.to_string());
+    }
+
+    /// Clear the current namespace (for starting a new pass)
+    pub fn clear_namespace(&mut self) {
+        self.current_namespace = None;
+    }
+
+    /// Mangle a name with the current namespace
+    /// Converts "my.namespace" + "foo" -> "my_namespace$foo"
+    pub fn mangle_name(&self, name: &str) -> String {
+        match &self.current_namespace {
+            Some(ns) => format!("{}${}", ns.replace('.', "_"), name),
+            None => name.to_string(),
+        }
+    }
+
+    /// Mangle a qualified name
+    /// - If qualified (namespace/symbol), use qualifier as namespace
+    /// - If unqualified, use current namespace
+    pub fn mangle_qualified(&self, qname: &crate::ast::QualifiedName) -> String {
+        match &qname.qualifier {
+            Some(ns) => format!("{}${}", ns.replace('.', "_"), qname.name),
+            None => self.mangle_name(&qname.name),
+        }
+    }
+
+    /// Get the current namespace (if any)
+    pub fn current_namespace(&self) -> Option<&str> {
+        self.current_namespace.as_deref()
     }
 
     // ========== Variable Type Tracking ==========
