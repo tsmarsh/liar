@@ -1,20 +1,19 @@
 (ns liar.io
-  (:require [liar.core :refer :all]))
+  (:require [liar.core :refer :all]
+            [liar.runtime :refer :all]))
 
-;; liar I/O Library
+;; liar Async I/O Library
 ;;
-;; Provides file I/O operations built on libc.
-;; For bootstrap, we use blocking operations.
+;; All I/O operations are async-native, using the liar-runtime.
+;; Blocking wrappers poll until completion for convenience.
 
 ;;; ============================================
-;;; libc FFI declarations
+;;; libc FFI declarations (for open/close/seek)
 ;;; ============================================
 
-;; File operations
+;; File operations (sync syscalls - that's fine for metadata)
 (extern open i32 (ptr i32 i32))
 (extern close i32 (i32))
-(extern read i64 (i32 ptr i64))
-(extern write i64 (i32 ptr i64))
 (extern lseek i64 (i32 i64 i32))
 
 ;; Memory
@@ -26,60 +25,166 @@
 
 
 ;;; ============================================
+;;; Constants
+;;; ============================================
+
+;; Seek
+(defun SEEK_SET () 0)
+(defun SEEK_CUR () 1)
+(defun SEEK_END () 2)
+
+;; Standard fds
+(defun STDIN_FD () 0)
+(defun STDOUT_FD () 1)
+(defun STDERR_FD () 2)
+
+;; Open flags
+(defun O_RDONLY () 0)
+(defun O_WRONLY () 1)
+(defun O_RDWR () 2)
+(defun O_CREAT () 64)
+(defun O_TRUNC () 512)
+(defun O_APPEND () 1024)
+
+
+;;; ============================================
+;;; Low-Level Async Operations
+;;; ============================================
+
+(defun read-async (fd buf len)
+  "Start an async read. Returns a ReadFuture ptr."
+  (liar_io_read fd buf len))
+
+(defun write-async (fd buf len)
+  "Start an async write. Returns a WriteFuture ptr."
+  (liar_io_write fd buf len))
+
+(defun poll-read (future waker)
+  "Poll a read future. Returns bytes read or negative if pending/error."
+  (liar_io_read_poll future waker))
+
+(defun poll-write (future waker)
+  "Poll a write future. Returns bytes written or negative if pending/error."
+  (liar_io_write_poll future waker))
+
+(defun free-read-future (future)
+  (liar_io_read_free future))
+
+(defun free-write-future (future)
+  (liar_io_write_free future))
+
+
+;;; ============================================
+;;; Blocking Wrappers (poll until ready)
+;;; ============================================
+
+;; Poll result encoding from liar-runtime:
+;; >= 0: Ready with that many bytes
+;; -1: Error
+;; i64::MIN (-9223372036854775808): Pending
+
+(defun POLL_PENDING () -> i64
+  "Sentinel value for pending (i64::MIN)."
+  -9223372036854775808)
+
+(defun pending? (poll-result)
+  "Check if poll result indicates pending."
+  (= poll-result (POLL_PENDING)))
+
+(defun poll-until-ready (future poll-fn) -> i64
+  "Spin-poll until future is ready. Returns result."
+  (let ((result (poll-fn future nil)))
+    (if (pending? result)
+        (poll-until-ready future poll-fn)
+        result)))
+
+(defun read-blocking (fd buf len) -> i64
+  "Read from fd, blocking until complete. Returns bytes read or -1."
+  (let ((future (read-async fd buf len)))
+    (let ((result (poll-until-ready future poll-read)))
+      (let ((_ (free-read-future future)))
+        result))))
+
+(defun write-blocking (fd buf len) -> i64
+  "Write to fd, blocking until complete. Returns bytes written or -1."
+  (let ((future (write-async fd buf len)))
+    (let ((result (poll-until-ready future poll-write)))
+      (let ((_ (free-write-future future)))
+        result))))
+
+
+;;; ============================================
 ;;; File Operations
 ;;; ============================================
 
-;; Open a file. Returns fd or -1 on error.
 (defun file-open (path flags mode) -> i64
+  "Open a file. Returns fd or -1 on error."
   (open path flags mode))
 
-;; Open file for reading. O_RDONLY=0
 (defun file-open-read (path) -> i64
-  (file-open path 0 0))
+  "Open file for reading."
+  (file-open path (O_RDONLY) 0))
 
-;; Open file for writing (create/truncate). Mode 0644.
-;; O_WRONLY=1, O_CREAT=64, O_TRUNC=512
 (defun file-open-write (path) -> i64
-  (file-open path (bit-or 1 (bit-or 64 512)) 420))
+  "Open file for writing (create/truncate). Mode 0644."
+  (file-open path (bit-or (O_WRONLY) (bit-or (O_CREAT) (O_TRUNC))) 420))
 
-;; Open file for appending.
-;; O_WRONLY=1, O_CREAT=64, O_APPEND=1024
 (defun file-open-append (path) -> i64
-  (file-open path (bit-or 1 (bit-or 64 1024)) 420))
+  "Open file for appending."
+  (file-open path (bit-or (O_WRONLY) (bit-or (O_CREAT) (O_APPEND))) 420))
 
-;; Close a file descriptor.
 (defun file-close (fd) -> i64
+  "Close a file descriptor."
   (close fd))
 
-;; Get file size by seeking to end.
-;; SEEK_CUR=1, SEEK_END=2, SEEK_SET=0
 (defun file-size (fd) -> i64
-  (let ((pos (lseek fd 0 1)))
-    (let ((size (lseek fd 0 2)))
-      (let ((_ (lseek fd pos 0)))
+  "Get file size by seeking to end."
+  (let ((pos (lseek fd 0 (SEEK_CUR))))
+    (let ((size (lseek fd 0 (SEEK_END))))
+      (let ((_ (lseek fd pos (SEEK_SET))))
         size))))
 
 
 ;;; ============================================
-;;; Read/Write Operations
+;;; Read/Write Helpers
 ;;; ============================================
 
-;; Read up to len bytes from fd into buf. Returns bytes read or -1.
-(defun read-bytes (fd buf len) -> i64
-  (read fd buf len))
+(defun read-all-loop (fd buf: ptr offset remaining) -> i64
+  "Read loop handling partial reads."
+  (if (<= remaining 0)
+      offset
+      (let ((n (read-blocking fd (ptr+ buf offset) remaining)))
+        (if (<= n 0)
+            (if (= n 0) offset -1)  ; EOF vs error
+            (read-all-loop fd buf (+ offset n) (- remaining n))))))
 
-;; Write len bytes from buf to fd. Returns bytes written or -1.
-(defun write-bytes (fd buf len) -> i64
-  (write fd buf len))
+(defun read-all-blocking (fd buf size) -> i64
+  "Read all bytes, handling partial reads."
+  (read-all-loop fd buf 0 size))
+
+(defun write-all-loop (fd buf: ptr offset remaining) -> i64
+  "Write loop handling partial writes."
+  (if (<= remaining 0)
+      offset
+      (let ((n (write-blocking fd (ptr+ buf offset) remaining)))
+        (if (<= n 0)
+            -1
+            (write-all-loop fd buf (+ offset n) (- remaining n))))))
+
+(defun write-all-blocking (fd buf len) -> i64
+  "Write all bytes, handling partial writes."
+  (write-all-loop fd buf 0 len))
 
 
 ;;; ============================================
 ;;; High-Level Conveniences
 ;;; ============================================
 
-;; Read entire file as null-terminated string. Returns ptr or nil.
-;; Caller is responsible for freeing the returned buffer.
 (defun slurp (path) -> ptr
+  "Read entire file as null-terminated string. Returns ptr or nil.
+   Caller is responsible for freeing the returned buffer.
+
+   This is async-native but blocks the current task until complete."
   (let ((fd (file-open-read path)))
     (if (< fd 0)
         nil
@@ -87,77 +192,79 @@
           (let ((buf (malloc (+ size 1))))
             (if (nil? buf)
                 (let ((_ (close fd))) nil)
-                (let ((_ (lseek fd 0 0)))
-                  (let ((_ (read fd buf size)))
-                    (let ((_ (store-byte (ptr+ buf size) 0)))
-                      (let ((_ (close fd)))
-                        buf))))))))))
+                (let ((_ (lseek fd 0 (SEEK_SET))))
+                  (let ((bytes-read (read-all-blocking fd buf size)))
+                    (if (< bytes-read 0)
+                        (let ((_ (free buf)))
+                          (let ((_ (close fd))) nil))
+                        (let ((_ (store-byte (ptr+ buf bytes-read) 0)))
+                          (let ((_ (close fd)))
+                            buf)))))))))))
 
-;; Write null-terminated string to file. Returns bytes written or -1.
 (defun spit (path contents) -> i64
+  "Write null-terminated string to file. Returns bytes written or -1."
   (let ((fd (file-open-write path)))
     (if (< fd 0)
         -1
         (let ((len (strlen contents)))
-          (let ((written (write fd contents len)))
+          (let ((written (write-all-blocking fd contents len)))
             (let ((_ (close fd)))
               written))))))
 
-;; Append null-terminated string to file. Returns bytes written or -1.
 (defun spit-append (path contents) -> i64
+  "Append null-terminated string to file. Returns bytes written or -1."
   (let ((fd (file-open-append path)))
     (if (< fd 0)
         -1
         (let ((len (strlen contents)))
-          (let ((written (write fd contents len)))
+          (let ((written (write-all-blocking fd contents len)))
             (let ((_ (close fd)))
               written))))))
 
 
 ;;; ============================================
 ;;; Standard Streams
-;;; STDIN=0, STDOUT=1, STDERR=2
 ;;; ============================================
 
-;; Write string to stdout.
 (defun print-str (s) -> i64
-  (write-bytes 1 s (strlen s)))
+  "Write string to stdout."
+  (write-blocking (STDOUT_FD) s (strlen s)))
 
-;; Write string + newline to stdout.
 (defun println-str (s) -> i64
+  "Write string + newline to stdout."
   (let ((_ (print-str s)))
-    (write-bytes 1 "\n" 1)))
+    (write-blocking (STDOUT_FD) "\n" 1)))
 
-;; Write string to stderr.
 (defun eprint (s) -> i64
-  (write-bytes 2 s (strlen s)))
+  "Write string to stderr."
+  (write-blocking (STDERR_FD) s (strlen s)))
 
-;; Write string + newline to stderr.
 (defun eprintln (s) -> i64
+  "Write string + newline to stderr."
   (let ((_ (eprint s)))
-    (write-bytes 2 "\n" 1)))
+    (write-blocking (STDERR_FD) "\n" 1)))
 
 
 ;;; ============================================
 ;;; Line Reading
 ;;; ============================================
 
-;; Helper: check if we found newline or should continue
 (defun read-line-check (fd buf: ptr pos n max-len) -> i64
+  "Helper: check if we found newline or should continue."
   (if (<= n 0)
       pos
       (if (= (load-byte (ptr+ buf pos)) 10)
           (+ pos 1)
           (read-line-loop fd buf (+ pos 1) max-len))))
 
-;; Read one byte at a time until newline or max-len.
 (defun read-line-loop (fd buf: ptr pos max-len) -> i64
+  "Read one byte at a time until newline or max-len."
   (if (>= pos max-len)
       pos
-      (let ((n (read-bytes fd (ptr+ buf pos) 1)))
+      (let ((n (read-blocking fd (ptr+ buf pos) 1)))
         (read-line-check fd buf pos n max-len))))
 
-;; Read a line from fd into buf. Stops at newline or max-len.
-;; Returns bytes read (including newline if present).
 (defun read-line (fd buf: ptr max-len) -> i64
+  "Read a line from fd into buf. Stops at newline or max-len.
+   Returns bytes read (including newline if present)."
   (read-line-loop fd buf 0 max-len))

@@ -60,16 +60,23 @@ pub extern "C" fn liar_io_read(fd: i64, buf: *mut u8, len: i64) -> *mut ReadFutu
     Box::into_raw(ReadFuture::new(fd as i32, buf, len as usize))
 }
 
+/// Sentinel value for Poll::Pending.
+/// Using i64::MIN which is clearly distinguishable from valid byte counts.
+pub const POLL_PENDING: i64 = i64::MIN;
+
 /// Poll a read operation.
 ///
 /// - future: Pointer to the ReadFuture.
 /// - waker: Pointer to the waker to use.
 ///
-/// Returns Poll::Ready with bytes read, or Poll::Pending.
+/// Returns:
+/// - `>= 0`: Ready with that many bytes read
+/// - `-1`: Error
+/// - `POLL_PENDING` (i64::MIN): Pending
 #[no_mangle]
-pub extern "C" fn liar_io_read_poll(future: *mut ReadFuture, waker: *mut Waker) -> Poll {
+pub extern "C" fn liar_io_read_poll(future: *mut ReadFuture, waker: *mut Waker) -> i64 {
     if future.is_null() {
-        return Poll::Ready(-1isize as *mut u8);
+        return -1;
     }
     let future = unsafe { &mut *future };
     let waker = if waker.is_null() {
@@ -77,7 +84,10 @@ pub extern "C" fn liar_io_read_poll(future: *mut ReadFuture, waker: *mut Waker) 
     } else {
         unsafe { (*waker).clone() }
     };
-    future.poll(&waker)
+    match future.poll(&waker) {
+        Poll::Ready(ptr) => ptr as i64,
+        Poll::Pending => POLL_PENDING,
+    }
 }
 
 /// Free a read future.
@@ -103,10 +113,15 @@ pub extern "C" fn liar_io_write(fd: i64, buf: *const u8, len: i64) -> *mut Write
 }
 
 /// Poll a write operation.
+///
+/// Returns:
+/// - `>= 0`: Ready with that many bytes written
+/// - `-1`: Error
+/// - `POLL_PENDING` (i64::MIN): Pending
 #[no_mangle]
-pub extern "C" fn liar_io_write_poll(future: *mut WriteFuture, waker: *mut Waker) -> Poll {
+pub extern "C" fn liar_io_write_poll(future: *mut WriteFuture, waker: *mut Waker) -> i64 {
     if future.is_null() {
-        return Poll::Ready(-1isize as *mut u8);
+        return -1;
     }
     let future = unsafe { &mut *future };
     let waker = if waker.is_null() {
@@ -114,7 +129,10 @@ pub extern "C" fn liar_io_write_poll(future: *mut WriteFuture, waker: *mut Waker
     } else {
         unsafe { (*waker).clone() }
     };
-    future.poll(&waker)
+    match future.poll(&waker) {
+        Poll::Ready(ptr) => ptr as i64,
+        Poll::Pending => POLL_PENDING,
+    }
 }
 
 /// Free a write future.
@@ -209,10 +227,9 @@ mod tests {
         let future = liar_io_read(fds[0] as i64, buf.as_mut_ptr(), buf.len() as i64);
 
         let result = liar_io_read_poll(future, ptr::null_mut());
-        assert!(result.is_ready());
-        if let Poll::Ready(ptr) = result {
-            assert_eq!(ptr as isize, 4);
-        }
+        // result is now i64, not Poll enum
+        assert!(result >= 0); // Ready with bytes
+        assert_eq!(result, 4);
 
         liar_io_read_free(future);
 

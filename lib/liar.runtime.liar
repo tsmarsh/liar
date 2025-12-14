@@ -35,9 +35,9 @@
 
 ;; liar_io_read_poll: Poll a read operation
 ;;   future: ptr to ReadFuture
-;;   waker: ptr to Waker
-;;   returns: Poll (Ready with bytes read, or Pending)
-(extern liar_io_read_poll ptr (ptr ptr))
+;;   waker: ptr to Waker (can be nil)
+;;   returns: >= 0 (bytes read), -1 (error), or i64::MIN (pending)
+(extern liar_io_read_poll i64 (ptr ptr))
 
 ;; liar_io_read_free: Free a read future
 ;;   future: ptr to ReadFuture
@@ -52,9 +52,9 @@
 
 ;; liar_io_write_poll: Poll a write operation
 ;;   future: ptr to WriteFuture
-;;   waker: ptr to Waker
-;;   returns: Poll (Ready with bytes written, or Pending)
-(extern liar_io_write_poll ptr (ptr ptr))
+;;   waker: ptr to Waker (can be nil)
+;;   returns: >= 0 (bytes written), -1 (error), or i64::MIN (pending)
+(extern liar_io_write_poll i64 (ptr ptr))
 
 ;; liar_io_write_free: Free a write future
 ;;   future: ptr to WriteFuture
