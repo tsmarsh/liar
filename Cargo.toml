@@ -12,7 +12,6 @@ members = [
     "liar-cert",
     "liar-runtime",
     "cert",
-    "ldn",
 ]
 
 [workspace.package]
