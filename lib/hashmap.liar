@@ -137,3 +137,31 @@
   (if (nil? (. m root))
       0
       (node-contains? (. m root) (hash-key key) 0)))
+
+;;; ============================================================
+;;; Literal Constructors (for codegen)
+;;; ============================================================
+
+(defun hashmap1 (k1 v1) -> ptr
+  (hm-assoc (hash-map) k1 v1))
+
+(defun hashmap2 (k1 v1 k2 v2) -> ptr
+  (hm-assoc (hm-assoc (hash-map) k1 v1) k2 v2))
+
+(defun hashmap3 (k1 v1 k2 v2 k3 v3) -> ptr
+  (hm-assoc (hm-assoc (hm-assoc (hash-map) k1 v1) k2 v2) k3 v3))
+
+(defun hashmap4 (k1 v1 k2 v2 k3 v3 k4 v4) -> ptr
+  (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hash-map) k1 v1) k2 v2) k3 v3) k4 v4))
+
+(defun hashmap5 (k1 v1 k2 v2 k3 v3 k4 v4 k5 v5) -> ptr
+  (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hash-map) k1 v1) k2 v2) k3 v3) k4 v4) k5 v5))
+
+(defun hashmap6 (k1 v1 k2 v2 k3 v3 k4 v4 k5 v5 k6 v6) -> ptr
+  (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hash-map) k1 v1) k2 v2) k3 v3) k4 v4) k5 v5) k6 v6))
+
+(defun hashmap7 (k1 v1 k2 v2 k3 v3 k4 v4 k5 v5 k6 v6 k7 v7) -> ptr
+  (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hash-map) k1 v1) k2 v2) k3 v3) k4 v4) k5 v5) k6 v6) k7 v7))
+
+(defun hashmap8 (k1 v1 k2 v2 k3 v3 k4 v4 k5 v5 k6 v6 k7 v7 k8 v8) -> ptr
+  (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hm-assoc (hash-map) k1 v1) k2 v2) k3 v3) k4 v4) k5 v5) k6 v6) k7 v7) k8 v8))

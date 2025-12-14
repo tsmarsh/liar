@@ -12,23 +12,115 @@ use super::context::CodegenContext;
 use super::expr::generate_expr;
 
 /// Generate code for vector literal
+/// Emits calls to vector1, vector2, etc. from stdlib
 pub fn generate_vector(ctx: &mut CodegenContext, elements: &[Spanned<Expr>]) -> Result<lir::Expr> {
-    let elems: Result<Vec<lir::Expr>> = elements.iter().map(|e| generate_expr(ctx, e)).collect();
-    // Placeholder - real implementation needs persistent vector runtime
-    Ok(lir::Expr::StructLit(elems?))
+    let n = elements.len();
+
+    // All stdlib functions expect (ptr null) as first arg for __env
+    let null_env = lir::Expr::NullPtr;
+
+    if n == 0 {
+        // Empty vector: call (vector)
+        return Ok(lir::Expr::Call {
+            name: "vector".to_string(),
+            args: vec![null_env],
+        });
+    }
+
+    if n <= 8 {
+        // Use fixed-arity constructor: vector1, vector2, etc.
+        let mut args = vec![null_env];
+        for elem in elements {
+            args.push(generate_expr(ctx, elem)?);
+        }
+        return Ok(lir::Expr::Call {
+            name: format!("vector{}", n),
+            args,
+        });
+    }
+
+    // For larger vectors, build incrementally with vec-conj
+    // Start with vector8 for the first 8 elements
+    let mut result = {
+        let mut args = vec![lir::Expr::NullPtr];
+        for elem in &elements[..8] {
+            args.push(generate_expr(ctx, elem)?);
+        }
+        lir::Expr::Call {
+            name: "vector8".to_string(),
+            args,
+        }
+    };
+
+    // Add remaining elements with vec-conj
+    for elem in &elements[8..] {
+        let elem_code = generate_expr(ctx, elem)?;
+        result = lir::Expr::Call {
+            name: "vec-conj".to_string(),
+            args: vec![lir::Expr::NullPtr, result, elem_code],
+        };
+    }
+
+    Ok(result)
 }
 
 /// Generate code for map literal
+/// Emits calls to hashmap1, hashmap2, etc. from stdlib
 pub fn generate_map(
     ctx: &mut CodegenContext,
     pairs: &[(Spanned<Expr>, Spanned<Expr>)],
 ) -> Result<lir::Expr> {
-    let mut lir_pairs = Vec::new();
-    for (k, v) in pairs {
-        lir_pairs.push(generate_expr(ctx, k)?);
-        lir_pairs.push(generate_expr(ctx, v)?);
+    let n = pairs.len();
+
+    // All stdlib functions expect (ptr null) as first arg for __env
+    let null_env = lir::Expr::NullPtr;
+
+    if n == 0 {
+        // Empty map: call (hash-map)
+        return Ok(lir::Expr::Call {
+            name: "hash-map".to_string(),
+            args: vec![null_env],
+        });
     }
-    Ok(lir::Expr::StructLit(lir_pairs))
+
+    if n <= 8 {
+        // Use fixed-arity constructor: hashmap1, hashmap2, etc.
+        let mut args = vec![null_env];
+        for (k, v) in pairs {
+            args.push(generate_expr(ctx, k)?);
+            args.push(generate_expr(ctx, v)?);
+        }
+        return Ok(lir::Expr::Call {
+            name: format!("hashmap{}", n),
+            args,
+        });
+    }
+
+    // For larger maps, build incrementally with hm-assoc
+    // Start with hashmap8 for the first 8 pairs
+    let mut result = {
+        let mut args = vec![lir::Expr::NullPtr];
+        for (k, v) in &pairs[..8] {
+            args.push(generate_expr(ctx, k)?);
+            args.push(generate_expr(ctx, v)?);
+        }
+        lir::Expr::Call {
+            name: "hashmap8".to_string(),
+            args,
+        }
+    };
+
+    // Add remaining pairs with hm-assoc
+    for (k, v) in &pairs[8..] {
+        let key_code = generate_expr(ctx, k)?;
+        let val_code = generate_expr(ctx, v)?;
+        result = lir::Expr::Call {
+            name: "hm-assoc".to_string(),
+            args: vec![lir::Expr::NullPtr, result, key_code, val_code],
+        };
+    }
+
+    Ok(result)
 }
 
 /// Generate code for keyword

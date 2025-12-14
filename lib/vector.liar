@@ -169,6 +169,79 @@
   (vec-from-list (vector) lst))
 
 ;;; ============================================================
+;;; Literal Constructors (for codegen)
+;;; These build directly into the tail for efficiency
+;;; ============================================================
+
+(defun vector1 (a) -> ptr
+  (let ((tail (heap-array 32))
+        (s0 (aset tail 0 a)))
+    (share (PersistentVector 1 5 nil tail 1))))
+
+(defun vector2 (a b) -> ptr
+  (let ((tail (heap-array 32))
+        (s0 (aset tail 0 a))
+        (s1 (aset tail 1 b)))
+    (share (PersistentVector 2 5 nil tail 2))))
+
+(defun vector3 (a b c) -> ptr
+  (let ((tail (heap-array 32))
+        (s0 (aset tail 0 a))
+        (s1 (aset tail 1 b))
+        (s2 (aset tail 2 c)))
+    (share (PersistentVector 3 5 nil tail 3))))
+
+(defun vector4 (a b c d) -> ptr
+  (let ((tail (heap-array 32))
+        (s0 (aset tail 0 a))
+        (s1 (aset tail 1 b))
+        (s2 (aset tail 2 c))
+        (s3 (aset tail 3 d)))
+    (share (PersistentVector 4 5 nil tail 4))))
+
+(defun vector5 (a b c d e) -> ptr
+  (let ((tail (heap-array 32))
+        (s0 (aset tail 0 a))
+        (s1 (aset tail 1 b))
+        (s2 (aset tail 2 c))
+        (s3 (aset tail 3 d))
+        (s4 (aset tail 4 e)))
+    (share (PersistentVector 5 5 nil tail 5))))
+
+(defun vector6 (a b c d e f) -> ptr
+  (let ((tail (heap-array 32))
+        (s0 (aset tail 0 a))
+        (s1 (aset tail 1 b))
+        (s2 (aset tail 2 c))
+        (s3 (aset tail 3 d))
+        (s4 (aset tail 4 e))
+        (s5 (aset tail 5 f)))
+    (share (PersistentVector 6 5 nil tail 6))))
+
+(defun vector7 (a b c d e f g) -> ptr
+  (let ((tail (heap-array 32))
+        (s0 (aset tail 0 a))
+        (s1 (aset tail 1 b))
+        (s2 (aset tail 2 c))
+        (s3 (aset tail 3 d))
+        (s4 (aset tail 4 e))
+        (s5 (aset tail 5 f))
+        (s6 (aset tail 6 g)))
+    (share (PersistentVector 7 5 nil tail 7))))
+
+(defun vector8 (a b c d e f g h) -> ptr
+  (let ((tail (heap-array 32))
+        (s0 (aset tail 0 a))
+        (s1 (aset tail 1 b))
+        (s2 (aset tail 2 c))
+        (s3 (aset tail 3 d))
+        (s4 (aset tail 4 e))
+        (s5 (aset tail 5 f))
+        (s6 (aset tail 6 g))
+        (s7 (aset tail 7 h)))
+    (share (PersistentVector 8 5 nil tail 8))))
+
+;;; ============================================================
 ;;; Protocol Implementations
 ;;; ============================================================
 

@@ -215,6 +215,15 @@
 (defun list5 (a b c d e)
   (cons a (cons b (cons c (cons d (cons e nil))))))
 
+(defun list6 (a b c d e f)
+  (cons a (cons b (cons c (cons d (cons e (cons f nil)))))))
+
+(defun list7 (a b c d e f g)
+  (cons a (cons b (cons c (cons d (cons e (cons f (cons g nil))))))))
+
+(defun list8 (a b c d e f g h)
+  (cons a (cons b (cons c (cons d (cons e (cons f (cons g (cons h nil)))))))))
+
 ;;; ============================================================
 ;;; Sequence operations (work on any Seq)
 ;;; ============================================================

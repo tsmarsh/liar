@@ -411,17 +411,20 @@ impl Inferencer {
                 Ty::Bool
             }
 
-            // Persistent collections (ADR-018)
+            // Persistent collections - compile to stdlib calls returning ptr
             Expr::Vector(elements) => {
+                // Infer element types for consistency checking
                 let elem_ty = self.fresh_var();
                 for elem in elements {
                     let ty = self.infer_expr(elem, env);
                     let _ = self.unify(&ty, &elem_ty, elem.span);
                 }
-                Ty::Named(format!("Vector<{}>", self.apply(&elem_ty)))
+                // Vector literals compile to calls to vector1/vector2/etc. which return ptr
+                Ty::Ptr
             }
 
             Expr::Map(pairs) => {
+                // Infer key/value types for consistency checking
                 let key_ty = self.fresh_var();
                 let val_ty = self.fresh_var();
                 for (k, v) in pairs {
@@ -430,11 +433,8 @@ impl Inferencer {
                     let _ = self.unify(&kt, &key_ty, k.span);
                     let _ = self.unify(&vt, &val_ty, v.span);
                 }
-                Ty::Named(format!(
-                    "Map<{}, {}>",
-                    self.apply(&key_ty),
-                    self.apply(&val_ty)
-                ))
+                // Map literals compile to calls to hashmap1/hashmap2/etc. which return ptr
+                Ty::Ptr
             }
 
             Expr::Keyword(_) => Ty::Named("Keyword".to_string()),
