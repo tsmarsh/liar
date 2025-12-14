@@ -23,6 +23,23 @@
 ;; String ops
 (extern strlen i64 (ptr))
 
+;; Pipes
+(extern pipe i32 (ptr))
+
+;; Sockets
+(extern socket i32 (i32 i32 i32))
+(extern bind i32 (i32 ptr i32))
+(extern listen i32 (i32 i32))
+(extern accept i32 (i32 ptr ptr))
+(extern connect i32 (i32 ptr i32))
+(extern setsockopt i32 (i32 i32 i32 ptr i32))
+(extern getsockname i32 (i32 ptr ptr))
+(extern getpeername i32 (i32 ptr ptr))
+(extern shutdown i32 (i32 i32))
+
+;; For non-blocking mode
+(extern fcntl i32 (i32 i32 i32))
+
 
 ;;; ============================================
 ;;; Constants
@@ -45,6 +62,30 @@
 (defun O_CREAT () 64)
 (defun O_TRUNC () 512)
 (defun O_APPEND () 1024)
+(defun O_NONBLOCK () 2048)
+
+;; fcntl commands
+(defun F_GETFL () 3)
+(defun F_SETFL () 4)
+
+;; Socket domains
+(defun AF_UNIX () 1)
+(defun AF_INET () 2)
+(defun AF_INET6 () 10)
+
+;; Socket types
+(defun SOCK_STREAM () 1)
+(defun SOCK_DGRAM () 2)
+
+;; Socket options
+(defun SOL_SOCKET () 1)
+(defun SO_REUSEADDR () 2)
+(defun SO_REUSEPORT () 15)
+
+;; Shutdown modes
+(defun SHUT_RD () 0)
+(defun SHUT_WR () 1)
+(defun SHUT_RDWR () 2)
 
 
 ;;; ============================================
@@ -268,3 +309,172 @@
   "Read a line from fd into buf. Stops at newline or max-len.
    Returns bytes read (including newline if present)."
   (read-line-loop fd buf 0 max-len))
+
+
+;;; ============================================
+;;; Pipes
+;;; ============================================
+
+(defun make-pipe () -> ptr
+  "Create a pipe. Returns ptr to 2-element i32 array [read-fd, write-fd].
+   Returns nil on error. Caller must free the returned array."
+  (let ((fds (heap-array 2)))
+    (if (nil? fds)
+        nil
+        (if (< (pipe fds) 0)
+            (let ((_ (free fds))) nil)
+            fds))))
+
+(defun pipe-read-fd (pipe-fds: ptr) -> i64
+  "Get the read end of a pipe."
+  (aget pipe-fds 0))
+
+(defun pipe-write-fd (pipe-fds: ptr) -> i64
+  "Get the write end of a pipe."
+  (aget pipe-fds 1))
+
+(defun pipe-close (pipe-fds: ptr) -> i64
+  "Close both ends of a pipe and free the array."
+  (let ((_ (close (pipe-read-fd pipe-fds))))
+    (let ((_ (close (pipe-write-fd pipe-fds))))
+      (free pipe-fds)
+      0)))
+
+
+;;; ============================================
+;;; Non-blocking Mode
+;;; ============================================
+
+(defun set-nonblocking (fd) -> i64
+  "Set a file descriptor to non-blocking mode. Returns 0 on success."
+  (let ((flags (fcntl fd (F_GETFL) 0)))
+    (if (< flags 0)
+        -1
+        (fcntl fd (F_SETFL) (bit-or flags (O_NONBLOCK))))))
+
+(defun set-blocking (fd) -> i64
+  "Set a file descriptor to blocking mode. Returns 0 on success."
+  (let ((flags (fcntl fd (F_GETFL) 0)))
+    (if (< flags 0)
+        -1
+        (fcntl fd (F_SETFL) (bit-and flags (bit-not (O_NONBLOCK)))))))
+
+
+;;; ============================================
+;;; Sockets
+;;; ============================================
+
+(defun tcp-socket () -> i64
+  "Create a TCP socket. Returns fd or -1 on error."
+  (socket (AF_INET) (SOCK_STREAM) 0))
+
+(defun tcp6-socket () -> i64
+  "Create a TCP IPv6 socket. Returns fd or -1 on error."
+  (socket (AF_INET6) (SOCK_STREAM) 0))
+
+(defun udp-socket () -> i64
+  "Create a UDP socket. Returns fd or -1 on error."
+  (socket (AF_INET) (SOCK_DGRAM) 0))
+
+(defun unix-socket () -> i64
+  "Create a Unix domain stream socket. Returns fd or -1 on error."
+  (socket (AF_UNIX) (SOCK_STREAM) 0))
+
+(defun socket-set-reuseaddr (fd) -> i64
+  "Enable SO_REUSEADDR on socket. Returns 0 on success."
+  (let ((one (heap-array 1)))
+    (let ((_ (aset one 0 1)))
+      (let ((result (setsockopt fd (SOL_SOCKET) (SO_REUSEADDR) one 4)))
+        (let ((_ (free one)))
+          result)))))
+
+(defun socket-listen (fd backlog) -> i64
+  "Start listening on socket. Returns 0 on success."
+  (listen fd backlog))
+
+(defun socket-shutdown (fd how) -> i64
+  "Shutdown socket. how: SHUT_RD, SHUT_WR, or SHUT_RDWR."
+  (shutdown fd how))
+
+(defun socket-close (fd) -> i64
+  "Close a socket."
+  (close fd))
+
+;;; ============================================
+;;; Async Socket Operations
+;;; ============================================
+
+(defun accept-async (fd)
+  "Start an async accept. Returns an AcceptFuture ptr."
+  (liar_io_accept fd))
+
+(defun poll-accept (future waker)
+  "Poll an accept future. Returns client fd or negative if pending/error."
+  (liar_io_accept_poll future waker))
+
+(defun free-accept-future (future)
+  (liar_io_accept_free future))
+
+(defun connect-async (fd addr addr-len)
+  "Start an async connect. Returns a ConnectFuture ptr."
+  (liar_io_connect fd addr addr-len))
+
+(defun poll-connect (future waker)
+  "Poll a connect future. Returns 0 (success), -1 (error), or pending."
+  (liar_io_connect_poll future waker))
+
+(defun free-connect-future (future)
+  (liar_io_connect_free future))
+
+(defun accept-blocking (fd) -> i64
+  "Accept a connection, blocking until one arrives. Returns client fd or -1."
+  (let ((future (accept-async fd)))
+    (let ((result (poll-until-ready future poll-accept)))
+      (let ((_ (free-accept-future future)))
+        result))))
+
+(defun connect-blocking (fd addr addr-len) -> i64
+  "Connect to address, blocking until complete. Returns 0 on success, -1 on error."
+  (let ((future (connect-async fd addr addr-len)))
+    (let ((result (poll-until-ready future poll-connect)))
+      (let ((_ (free-connect-future future)))
+        result))))
+
+
+;;; ============================================
+;;; IPv4 Address Helpers
+;;; ============================================
+
+;; sockaddr_in layout (16 bytes):
+;;   u16 sin_family  (offset 0)
+;;   u16 sin_port    (offset 2, network byte order)
+;;   u32 sin_addr    (offset 4, network byte order)
+;;   u8[8] padding   (offset 8)
+
+(defun make-sockaddr-in (port addr) -> ptr
+  "Create a sockaddr_in structure. port in host order, addr as u32.
+   Use INADDR_ANY (0) for any address, or pack-ipv4 for specific.
+   Caller must free the returned buffer."
+  (let ((sa (malloc 16)))
+    (if (nil? sa)
+        nil
+        (let ((_ (store-byte sa 2)))                    ; AF_INET family (low byte)
+          (let ((_ (store-byte (ptr+ sa 1) 0)))         ; AF_INET family (high byte)
+            (let ((_ (store-byte (ptr+ sa 2) (bit-and (bit-shift-right port 8) 255))))  ; port high byte
+              (let ((_ (store-byte (ptr+ sa 3) (bit-and port 255))))                     ; port low byte
+                (let ((_ (store-byte (ptr+ sa 4) (bit-and (bit-shift-right addr 24) 255))))
+                  (let ((_ (store-byte (ptr+ sa 5) (bit-and (bit-shift-right addr 16) 255))))
+                    (let ((_ (store-byte (ptr+ sa 6) (bit-and (bit-shift-right addr 8) 255))))
+                      (let ((_ (store-byte (ptr+ sa 7) (bit-and addr 255))))
+                        sa)))))))))))
+
+(defun INADDR_ANY () 0)
+(defun INADDR_LOOPBACK () 2130706433)  ; 127.0.0.1
+
+(defun pack-ipv4 (a b c d) -> i64
+  "Pack IPv4 address bytes into u32. E.g., (pack-ipv4 192 168 1 1)"
+  (bit-or (bit-shift-left a 24)
+          (bit-or (bit-shift-left b 16)
+                  (bit-or (bit-shift-left c 8) d))))
+
+(defun sockaddr-in-size () 16)

@@ -11,7 +11,7 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use crate::executor::{init_executor, with_executor};
-use crate::io::{ReadFuture, WriteFuture};
+use crate::io::{AcceptFuture, ConnectFuture, ReadFuture, WriteFuture};
 use crate::task::{Poll, PollFn, Task};
 use crate::waker::Waker;
 
@@ -138,6 +138,94 @@ pub extern "C" fn liar_io_write_poll(future: *mut WriteFuture, waker: *mut Waker
 /// Free a write future.
 #[no_mangle]
 pub extern "C" fn liar_io_write_free(future: *mut WriteFuture) {
+    if !future.is_null() {
+        unsafe {
+            drop(Box::from_raw(future));
+        }
+    }
+}
+
+/// Create an async accept operation.
+///
+/// - fd: Listening socket file descriptor.
+///
+/// Returns a pointer to the AcceptFuture.
+#[no_mangle]
+pub extern "C" fn liar_io_accept(fd: i64) -> *mut AcceptFuture {
+    Box::into_raw(AcceptFuture::new(fd as i32))
+}
+
+/// Poll an accept operation.
+///
+/// Returns:
+/// - `>= 0`: Ready with client fd
+/// - `-1`: Error
+/// - `POLL_PENDING` (i64::MIN): Pending
+#[no_mangle]
+pub extern "C" fn liar_io_accept_poll(future: *mut AcceptFuture, waker: *mut Waker) -> i64 {
+    if future.is_null() {
+        return -1;
+    }
+    let future = unsafe { &mut *future };
+    let waker = if waker.is_null() {
+        Waker::null()
+    } else {
+        unsafe { (*waker).clone() }
+    };
+    match future.poll(&waker) {
+        Poll::Ready(ptr) => ptr as i64,
+        Poll::Pending => POLL_PENDING,
+    }
+}
+
+/// Free an accept future.
+#[no_mangle]
+pub extern "C" fn liar_io_accept_free(future: *mut AcceptFuture) {
+    if !future.is_null() {
+        unsafe {
+            drop(Box::from_raw(future));
+        }
+    }
+}
+
+/// Create an async connect operation.
+///
+/// - fd: Socket file descriptor.
+/// - addr: Pointer to sockaddr structure.
+/// - addr_len: Size of the sockaddr structure.
+///
+/// Returns a pointer to the ConnectFuture.
+#[no_mangle]
+pub extern "C" fn liar_io_connect(fd: i64, addr: *const u8, addr_len: i64) -> *mut ConnectFuture {
+    Box::into_raw(ConnectFuture::new(fd as i32, addr, addr_len as u32))
+}
+
+/// Poll a connect operation.
+///
+/// Returns:
+/// - `0`: Ready, connected successfully
+/// - `-1`: Error
+/// - `POLL_PENDING` (i64::MIN): Pending
+#[no_mangle]
+pub extern "C" fn liar_io_connect_poll(future: *mut ConnectFuture, waker: *mut Waker) -> i64 {
+    if future.is_null() {
+        return -1;
+    }
+    let future = unsafe { &mut *future };
+    let waker = if waker.is_null() {
+        Waker::null()
+    } else {
+        unsafe { (*waker).clone() }
+    };
+    match future.poll(&waker) {
+        Poll::Ready(ptr) => ptr as i64,
+        Poll::Pending => POLL_PENDING,
+    }
+}
+
+/// Free a connect future.
+#[no_mangle]
+pub extern "C" fn liar_io_connect_free(future: *mut ConnectFuture) {
     if !future.is_null() {
         unsafe {
             drop(Box::from_raw(future));

@@ -60,6 +60,42 @@
 ;;   future: ptr to WriteFuture
 (extern liar_io_write_free void (ptr))
 
+;; Async accept operations
+;;
+;; liar_io_accept: Create an async accept operation
+;;   fd: listening socket file descriptor (i64)
+;;   returns: ptr to AcceptFuture
+(extern liar_io_accept ptr (i64))
+
+;; liar_io_accept_poll: Poll an accept operation
+;;   future: ptr to AcceptFuture
+;;   waker: ptr to Waker (can be nil)
+;;   returns: >= 0 (client fd), -1 (error), or i64::MIN (pending)
+(extern liar_io_accept_poll i64 (ptr ptr))
+
+;; liar_io_accept_free: Free an accept future
+;;   future: ptr to AcceptFuture
+(extern liar_io_accept_free void (ptr))
+
+;; Async connect operations
+;;
+;; liar_io_connect: Create an async connect operation
+;;   fd: socket file descriptor (i64)
+;;   addr: ptr to sockaddr structure
+;;   addr_len: size of sockaddr (i64)
+;;   returns: ptr to ConnectFuture
+(extern liar_io_connect ptr (i64 ptr i64))
+
+;; liar_io_connect_poll: Poll a connect operation
+;;   future: ptr to ConnectFuture
+;;   waker: ptr to Waker (can be nil)
+;;   returns: 0 (connected), -1 (error), or i64::MIN (pending)
+(extern liar_io_connect_poll i64 (ptr ptr))
+
+;; liar_io_connect_free: Free a connect future
+;;   future: ptr to ConnectFuture
+(extern liar_io_connect_free void (ptr))
+
 ;; Reactor operations
 ;;
 ;; liar_reactor_register_read: Register fd for read readiness
