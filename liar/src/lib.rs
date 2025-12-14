@@ -28,6 +28,7 @@ pub mod eval;
 pub mod expand;
 pub mod infer;
 pub mod lexer;
+pub mod loader;
 pub mod ownership;
 pub mod parser;
 pub mod resolve;
@@ -109,3 +110,39 @@ pub fn compile_expr(source: &str) -> Result<String> {
     let expr = parser.parse_expr()?;
     codegen::generate_expr_standalone(&expr)
 }
+
+/// Compile a pre-parsed program
+///
+/// Used by the module loader to compile merged programs.
+pub fn compile_program(
+    mut program: ast::Program,
+) -> std::result::Result<String, Vec<CompileError>> {
+    // Expand macros
+    expand::expand(&mut program).map_err(|e| vec![e])?;
+
+    // Resolve names
+    resolve::resolve(&program).map_err(|e| vec![e])?;
+
+    // Type inference
+    let mut type_env = TypeEnv::new();
+    infer::infer(&program, &mut type_env).map_err(|e| vec![e])?;
+
+    // Ownership checking
+    ownership::check(&program).map_err(|e| vec![e])?;
+
+    // Closure analysis
+    let capture_info = closures::analyze(&program).map_err(|e| vec![e])?;
+
+    // Escape analysis
+    let escape_info = closures::EscapeAnalyzer::new().analyze(&program);
+
+    // Closure conversion
+    let program = closures::convert(program, capture_info, escape_info, type_env.clone())
+        .map_err(|e| vec![e])?;
+
+    // Code generation
+    codegen::generate_string(&program, &type_env).map_err(|e| vec![e])
+}
+
+// Re-export compile_file from loader
+pub use loader::compile_file;
