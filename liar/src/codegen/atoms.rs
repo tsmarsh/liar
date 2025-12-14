@@ -82,7 +82,7 @@ pub fn generate_atom_swap(
 ) -> Result<lir::Expr> {
     let atom_expr = generate_expr(ctx, atom)?;
     let func_name = match &func.node {
-        Expr::Var(name) => name.clone(),
+        Expr::Var(name) => name.name.clone(),
         _ => {
             return Err(CompileError::codegen(
                 func.span,

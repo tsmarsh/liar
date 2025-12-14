@@ -85,7 +85,11 @@ impl EscapeAnalyzer {
                     self.analyze_expr(&method.body);
                 }
             }
-            Item::Defstruct(_) | Item::Defprotocol(_) | Item::Defmacro(_) | Item::Extern(_) => {}
+            Item::Defstruct(_)
+            | Item::Defprotocol(_)
+            | Item::Defmacro(_)
+            | Item::Extern(_)
+            | Item::Namespace(_) => {}
         }
     }
 
@@ -145,7 +149,7 @@ impl EscapeAnalyzer {
 
                 // Check if this is a known non-storing HOF
                 let is_safe_hof = if let Expr::Var(name) = &func.node {
-                    self.non_storing_hofs.contains(name.as_str())
+                    self.non_storing_hofs.contains(name.name.as_str())
                 } else {
                     false
                 };
@@ -161,7 +165,7 @@ impl EscapeAnalyzer {
                         if let Expr::Var(name) = &arg.node {
                             // Conservative: mark any closure-typed variable as escaping
                             // when passed to a function
-                            self.mark_var_escapes(name);
+                            self.mark_var_escapes(&name.name);
                         }
                     }
                     self.analyze_expr(arg);

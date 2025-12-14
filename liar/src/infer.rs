@@ -184,7 +184,7 @@ impl Inferencer {
             Expr::Nil => Ty::Ptr,
 
             Expr::Var(name) => {
-                if let Some(ty) = env.get(name) {
+                if let Some(ty) = env.get(&name.name) {
                     ty.clone()
                 } else {
                     // Undefined variable - should have been caught by resolve
@@ -195,12 +195,12 @@ impl Inferencer {
             Expr::Call(func, args) => {
                 // Handle builtin operators
                 if let Expr::Var(op) = &func.node {
-                    if let Some(ty) = self.infer_builtin(op, args, env, expr.span) {
+                    if let Some(ty) = self.infer_builtin(&op.name, args, env, expr.span) {
                         return ty;
                     }
 
                     // Check if this is a struct constructor call
-                    if let Some(type_def) = env.types.get(op) {
+                    if let Some(type_def) = env.types.get(&op.name) {
                         // Verify argument count matches field count
                         if args.len() != type_def.fields.len() {
                             self.errors.push(CompileError::type_error(
@@ -222,7 +222,7 @@ impl Inferencer {
                         }
 
                         // Return the struct type
-                        return Ty::Named(op.clone());
+                        return Ty::Named(op.name.clone());
                     }
                 }
 

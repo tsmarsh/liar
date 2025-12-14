@@ -68,6 +68,7 @@ impl<'a> ThreadSafetyChecker<'a> {
             }
             Item::Defmacro(_) => {}
             Item::Extern(_) => {}
+            Item::Namespace(_) => {}
         }
     }
 
@@ -119,7 +120,7 @@ impl<'a> ThreadSafetyChecker<'a> {
             Expr::Call(func, args) => {
                 // Check if this is a parallel operation (pmap, pfilter, etc.)
                 if let Expr::Var(name) = &func.node {
-                    if Self::is_parallel_op(name) {
+                    if Self::is_parallel_op(&name.name) {
                         // First argument should be a Sync/Pure closure
                         if let Some(fn_arg) = args.first() {
                             if let Expr::Lambda(_, _) = &fn_arg.node {

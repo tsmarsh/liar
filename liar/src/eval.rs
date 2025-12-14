@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::ast::Expr;
+use crate::ast::{Expr, QualifiedName};
 use crate::error::{CompileError, Result};
 use crate::span::{Span, Spanned};
 
@@ -59,7 +59,7 @@ impl Value {
                 Expr::Bool(b) => Value::Bool(*b),
                 Expr::String(s) => Value::String(s.clone()),
                 Expr::Nil => Value::Nil,
-                Expr::Var(name) => Value::Symbol(name.clone()),
+                Expr::Var(name) => Value::Symbol(name.name.clone()),
                 Expr::Quote(s) => Value::Symbol(s.clone()),
                 Expr::Keyword(s) => Value::Keyword(s.clone()),
                 Expr::Vector(items) => {
@@ -73,7 +73,7 @@ impl Value {
                 // Check if it's a (list ...) call expression
                 Expr::Call(func, args) => {
                     if let Expr::Var(name) = &func.node {
-                        if name == "list" {
+                        if name.name == "list" {
                             let values: Vec<Value> = args
                                 .iter()
                                 .map(|item| Value::Expr(item.clone()).unwrap_literal())
@@ -99,7 +99,7 @@ impl Value {
             Value::String(s) => Spanned::new(Expr::String(s.clone()), span),
             // Symbols become variable references (identifiers) in code context
             // This is correct for gensym usage in let bindings, function names, etc.
-            Value::Symbol(s) => Spanned::new(Expr::Var(s.clone()), span),
+            Value::Symbol(s) => Spanned::new(Expr::Var(QualifiedName::simple(s.clone())), span),
             Value::Keyword(s) => Spanned::new(Expr::Keyword(s.clone()), span),
             Value::Nil => Spanned::new(Expr::Nil, span),
             Value::List(items) => {
@@ -244,7 +244,7 @@ impl Evaluator {
         match &arg.node {
             // Variable reference - look up in environment
             Expr::Var(name) => {
-                if let Some(val) = env.lookup(name) {
+                if let Some(val) = env.lookup(&name.name) {
                     Ok(val)
                 } else {
                     // Unknown var - keep as expression
@@ -254,7 +254,7 @@ impl Evaluator {
             // Macro call - expand it first
             Expr::Call(func, inner_args) => {
                 if let Expr::Var(name) = &func.node {
-                    if let Some(macro_def) = self.macros.get(name).cloned() {
+                    if let Some(macro_def) = self.macros.get(&name.name).cloned() {
                         // Recursively expand the macro call
                         let result = self.expand_macro(env, &macro_def, inner_args, arg.span)?;
                         return Ok(result);
@@ -280,7 +280,7 @@ impl Evaluator {
             Expr::Keyword(k) => Ok(Value::Keyword(k.clone())),
 
             // Variables
-            Expr::Var(name) => env.lookup(name).ok_or_else(|| {
+            Expr::Var(name) => env.lookup(&name.name).ok_or_else(|| {
                 CompileError::macro_error(expr.span, format!("undefined variable '{}'", name))
             }),
 
@@ -321,12 +321,12 @@ impl Evaluator {
             Expr::Call(func, args) => {
                 // Check for built-in functions first
                 if let Expr::Var(name) = &func.node {
-                    if let Some(result) = self.eval_builtin(env, name, args, expr.span)? {
+                    if let Some(result) = self.eval_builtin(env, &name.name, args, expr.span)? {
                         return Ok(result);
                     }
 
                     // Check if this is a call to another macro
-                    if let Some(macro_def) = self.macros.get(name).cloned() {
+                    if let Some(macro_def) = self.macros.get(&name.name).cloned() {
                         // Expand the nested macro call, passing current env for var resolution
                         return self.expand_macro(env, &macro_def, args, expr.span);
                     }
@@ -909,7 +909,8 @@ impl Evaluator {
                     ));
                 }
                 let struct_name = self.extract_name(env, &args[0])?;
-                let struct_name_expr = Spanned::new(Expr::Var(struct_name), span);
+                let struct_name_expr =
+                    Spanned::new(Expr::Var(QualifiedName::simple(struct_name)), span);
                 let field_values: Vec<Spanned<Expr>> = args[1..]
                     .iter()
                     .map(|arg| self.eval(env, arg).map(|v| v.to_expr(span)))
@@ -1119,11 +1120,11 @@ impl Evaluator {
             Expr::Quote(name) => Ok(name.clone()),
             // Variable reference - look up and extract the name
             Expr::Var(name) => {
-                if let Some(val) = env.lookup(name) {
+                if let Some(val) = env.lookup(&name.name) {
                     self.extract_name_from_value(&val, expr.span)
                 } else {
                     // Treat as a direct name (could be a struct name like Point)
-                    Ok(name.clone())
+                    Ok(name.name.clone())
                 }
             }
             _ => {
@@ -1141,7 +1142,7 @@ impl Evaluator {
             Value::String(s) => Ok(s.clone()),
             // Unwrap Value::Expr containing a variable/identifier
             Value::Expr(e) => match &e.node {
-                Expr::Var(name) => Ok(name.clone()),
+                Expr::Var(name) => Ok(name.name.clone()),
                 Expr::Quote(name) => Ok(name.clone()),
                 _ => Err(CompileError::macro_error(span, "expected a name")),
             },

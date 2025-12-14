@@ -329,7 +329,7 @@ fn expr_to_source(expr: &crate::ast::Expr) -> String {
         Expr::Bool(false) => "false".to_string(),
         Expr::String(s) => format!("{:?}", s),
         Expr::Nil => "nil".to_string(),
-        Expr::Var(name) => name.clone(),
+        Expr::Var(name) => name.to_string(),
         Expr::Quote(s) => format!("'{}", s),
         Expr::Keyword(k) => format!(":{}", k),
         Expr::Vector(items) => {

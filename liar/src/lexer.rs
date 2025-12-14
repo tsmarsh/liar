@@ -83,6 +83,9 @@ pub enum TokenKind {
     // FFI keywords
     Extern, // extern
 
+    // Module system keywords
+    Ns, // ns (namespace declaration)
+
     // Iterator keywords
     Iter,    // iter (create iterator)
     Collect, // collect (materialize iterator)
@@ -473,6 +476,8 @@ impl<'a> Lexer<'a> {
             "gensym" => TokenKind::Gensym,
             // FFI keywords
             "extern" => TokenKind::Extern,
+            // Module system keywords
+            "ns" => TokenKind::Ns,
             // Iterator keywords
             "iter" => TokenKind::Iter,
             "collect" => TokenKind::Collect,

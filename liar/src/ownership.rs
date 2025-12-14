@@ -433,6 +433,9 @@ impl BorrowChecker {
             Item::Extern(_) => {
                 // Extern declarations have no body
             }
+            Item::Namespace(_) => {
+                // Namespace declarations have no body
+            }
         }
     }
 
@@ -478,7 +481,7 @@ impl BorrowChecker {
 
             Expr::Var(name) => {
                 // Using a variable - check ownership
-                self.use_value(name, expr.span);
+                self.use_value(&name.name, expr.span);
             }
 
             Expr::Call(func, args) => {
@@ -491,7 +494,7 @@ impl BorrowChecker {
                     if let Expr::Var(name) = &arg.node {
                         // For now, we don't move on function calls
                         // (pass by reference optimization per ADR-002)
-                        self.use_value(name, arg.span);
+                        self.use_value(&name.name, arg.span);
                     }
                 }
             }
@@ -575,7 +578,7 @@ impl BorrowChecker {
             Expr::Ref(inner) => {
                 // Create a shared borrow
                 if let Expr::Var(name) = &inner.node {
-                    self.borrow_shared(name, expr.span);
+                    self.borrow_shared(&name.name, expr.span);
                     // Don't also check inner as a use - the borrow IS the use
                 } else {
                     self.check_expr(inner);
@@ -585,7 +588,7 @@ impl BorrowChecker {
             Expr::RefMut(inner) => {
                 // Create a mutable borrow
                 if let Expr::Var(name) = &inner.node {
-                    self.borrow_mut(name, expr.span);
+                    self.borrow_mut(&name.name, expr.span);
                     // Don't also check inner as a use - the borrow IS the use
                 } else {
                     self.check_expr(inner);
@@ -621,7 +624,7 @@ impl BorrowChecker {
                 // Creating an atom moves the value into the atom
                 self.check_expr(value);
                 if let Expr::Var(name) = &value.node {
-                    self.move_value(name, value.span);
+                    self.move_value(&name.name, value.span);
                 }
             }
             Expr::AtomDeref(atom) => {
@@ -633,7 +636,7 @@ impl BorrowChecker {
                 self.check_expr(atom);
                 self.check_expr(value);
                 if let Expr::Var(name) = &value.node {
-                    self.move_value(name, value.span);
+                    self.move_value(&name.name, value.span);
                 }
             }
             Expr::Swap(atom, func) => {
@@ -728,14 +731,14 @@ impl BorrowChecker {
                 self.check_expr(coll);
                 // iter consumes the collection
                 if let Expr::Var(name) = &coll.node {
-                    self.move_value(name, coll.span);
+                    self.move_value(&name.name, coll.span);
                 }
             }
             Expr::Collect(iter) => {
                 self.check_expr(iter);
                 // collect consumes the iterator
                 if let Expr::Var(name) = &iter.node {
-                    self.move_value(name, iter.span);
+                    self.move_value(&name.name, iter.span);
                 }
             }
 
@@ -773,7 +776,7 @@ impl BorrowChecker {
 
         // If binding value is a variable, it's moved
         if let Expr::Var(name) = &binding.value.node {
-            self.move_value(name, binding.value.span);
+            self.move_value(&name.name, binding.value.span);
         }
 
         // Define the new binding

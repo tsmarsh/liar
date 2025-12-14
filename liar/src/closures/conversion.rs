@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::ast::{
     Def, Defun, Expr, ExtendProtocol, ExtendProtocolDefault, Item, LetBinding, Param, Program,
+    QualifiedName,
 };
 use crate::error::Result;
 use crate::span::{Span, Spanned};
@@ -81,8 +82,8 @@ fn find_callable_vars_rec(
         Expr::Call(func, args) => {
             // If the function is one of our variables, it's callable
             if let Expr::Var(name) = &func.node {
-                if var_names.contains(name) {
-                    callable.insert(name.clone());
+                if name.is_simple() && var_names.contains(&name.name) {
+                    callable.insert(name.name.clone());
                 }
             }
             // Recurse into function expression and arguments
@@ -293,6 +294,7 @@ impl ClosureConverter {
             Item::Defprotocol(p) => Item::Defprotocol(p),
             Item::Defmacro(m) => Item::Defmacro(m),
             Item::Extern(e) => Item::Extern(e),
+            Item::Namespace(ns) => Item::Namespace(ns),
         };
         Ok(Spanned::new(node, span))
     }
@@ -423,7 +425,7 @@ impl ClosureConverter {
                 // Convert function - if it's a known function name, keep it as Var (direct call)
                 // Otherwise convert recursively (might be a closure call)
                 let new_func = match &func.node {
-                    Expr::Var(name) if self.known_functions.contains(name) => {
+                    Expr::Var(name) if self.known_functions.contains(&name.name) => {
                         // Direct call to known function - keep as Var
                         func
                     }
@@ -642,10 +644,10 @@ impl ClosureConverter {
             }
 
             // Function references used as values get wrapped in ClosureLit
-            Expr::Var(ref name) if self.known_functions.contains(name) => {
+            Expr::Var(ref name) if self.known_functions.contains(&name.name) => {
                 // Function used as a value - wrap in ClosureLit { fn_name, None }
                 Expr::ClosureLit {
-                    fn_name: name.clone(),
+                    fn_name: name.name.clone(),
                     env: None,
                 }
             }
@@ -812,7 +814,7 @@ impl ClosureConverter {
                 .map(|cap| {
                     (
                         Spanned::new(cap.name.clone(), cap.span),
-                        Spanned::new(Expr::Var(cap.name.clone()), cap.span),
+                        Spanned::new(Expr::Var(QualifiedName::simple(cap.name.clone())), cap.span),
                     )
                 })
                 .collect();
@@ -870,7 +872,10 @@ impl ClosureConverter {
             .iter()
             .map(|cap| {
                 let field_access = Expr::Field(
-                    Box::new(Spanned::new(Expr::Var("__env".to_string()), span)),
+                    Box::new(Spanned::new(
+                        Expr::Var(QualifiedName::simple("__env".to_string())),
+                        span,
+                    )),
                     Spanned::new(cap.name.clone(), cap.span),
                 );
                 LetBinding {

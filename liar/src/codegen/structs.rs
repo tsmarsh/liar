@@ -34,11 +34,11 @@ pub fn is_struct_constructor_call(ctx: &CodegenContext, expr: &Expr) -> Option<S
         Expr::Call(func, _args) => {
             if let Expr::Var(name) = &func.node {
                 // Check if it's a struct constructor
-                if ctx.lookup_struct(name).is_some() {
-                    return Some(name.clone());
+                if ctx.lookup_struct(&name.name).is_some() {
+                    return Some(name.name.clone());
                 }
                 // Check if it's share/clone wrapping a struct constructor
-                if name == "share" || name == "clone" || name == "rc-new" {
+                if name.name == "share" || name.name == "clone" || name.name == "rc-new" {
                     if let Some(inner) = _args.first() {
                         return is_struct_constructor_call(ctx, &inner.node);
                     }
@@ -240,7 +240,7 @@ pub fn generate_field_access(
     // First try: lookup from variable type tracking
     // Second try: infer from which struct has this field (for ptr-typed variables)
     let struct_name = if let Expr::Var(var_name) = &obj.node {
-        if let Some(name) = ctx.lookup_var_struct_type(var_name) {
+        if let Some(name) = ctx.lookup_var_struct_type(&var_name.name) {
             name.clone()
         } else {
             // Infer struct type from field name

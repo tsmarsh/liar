@@ -12,7 +12,7 @@ use super::context::CodegenContext;
 fn infer_conversion_return_type(args: &[Spanned<Expr>]) -> lir::ReturnType {
     if let Some(first_arg) = args.first() {
         if let Expr::Var(type_name) = &first_arg.node {
-            return match type_name.as_str() {
+            return match type_name.name.as_str() {
                 "i1" => lir::ReturnType::Scalar(lir::ScalarType::I1),
                 "i8" => lir::ReturnType::Scalar(lir::ScalarType::I8),
                 "i16" => lir::ReturnType::Scalar(lir::ScalarType::I16),
@@ -51,7 +51,7 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
         // Comparison operators return bool
         Expr::Call(func, _args) => {
             if let Expr::Var(op) = &func.node {
-                match op.as_str() {
+                match op.name.as_str() {
                     // Integer comparisons return i1
                     "=" | "==" | "!=" | "<" | ">" | "<=" | ">=" => {
                         return lir::ReturnType::Scalar(lir::ScalarType::I1);
@@ -117,9 +117,9 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
 
         // Variable - look up registered type, special case for 'self'
         Expr::Var(name) => {
-            if let Some(ty) = ctx.lookup_var_type(name) {
+            if let Some(ty) = ctx.lookup_var_type(&name.name) {
                 ty.clone()
-            } else if name == "self" {
+            } else if name.name == "self" {
                 lir::ReturnType::Ptr
             } else {
                 lir::ReturnType::Scalar(lir::ScalarType::I64)
@@ -140,7 +140,7 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
         Expr::Field(obj, field_name) => {
             // Try to infer the struct type from the object
             if let Expr::Var(var_name) = &obj.node {
-                if let Some(struct_name) = ctx.lookup_var_struct_type(var_name) {
+                if let Some(struct_name) = ctx.lookup_var_struct_type(&var_name.name) {
                     if let Some(struct_info) = ctx.lookup_struct(struct_name) {
                         for (name, ty) in &struct_info.fields {
                             if name == &field_name.node {

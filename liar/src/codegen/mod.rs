@@ -233,6 +233,10 @@ fn generate_item(
             Ok(None)
         }
         Item::Extern(ext) => Ok(Some(lir::Item::ExternDecl(generate_extern(ext)?))),
+        Item::Namespace(_) => {
+            // Namespace declarations are metadata for module loading
+            Ok(None)
+        }
     }
 }
 

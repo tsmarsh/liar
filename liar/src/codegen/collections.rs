@@ -253,7 +253,7 @@ pub fn generate_alter(
 ) -> Result<lir::Expr> {
     let ref_code = generate_expr(ctx, ref_expr)?;
     let fn_name = match &fn_expr.node {
-        Expr::Var(name) => name.clone(),
+        Expr::Var(name) => name.name.clone(),
         _ => {
             return Err(CompileError::codegen(
                 fn_expr.span,
@@ -288,7 +288,7 @@ pub fn generate_commute(
     // Same as alter for now
     let ref_code = generate_expr(ctx, ref_expr)?;
     let fn_name = match &fn_expr.node {
-        Expr::Var(name) => name.clone(),
+        Expr::Var(name) => name.name.clone(),
         _ => {
             return Err(CompileError::codegen(
                 fn_expr.span,

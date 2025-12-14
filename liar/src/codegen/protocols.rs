@@ -34,8 +34,8 @@ fn find_callables_in_expr(
         Expr::Call(func, args) => {
             // If the function is a variable that's one of our parameters, it's a closure
             if let Expr::Var(name) = &func.node {
-                if param_names.contains(name) {
-                    closure_params.insert(name.clone());
+                if param_names.contains(&name.name) {
+                    closure_params.insert(name.name.clone());
                 }
             }
             // Also recurse into function and args
@@ -541,13 +541,13 @@ fn generate_runtime_dispatch(
 pub fn infer_struct_type(ctx: &CodegenContext, expr: &Spanned<Expr>) -> Option<String> {
     match &expr.node {
         // Direct variable reference - look up in our tracking table
-        Expr::Var(name) => ctx.lookup_var_struct_type(name).cloned(),
+        Expr::Var(name) => ctx.lookup_var_struct_type(&name.name).cloned(),
 
         // Struct constructor call
         Expr::Call(func, _) => {
             if let Expr::Var(name) = &func.node {
-                if ctx.lookup_struct(name).is_some() {
-                    return Some(name.clone());
+                if ctx.lookup_struct(&name.name).is_some() {
+                    return Some(name.name.clone());
                 }
             }
             None

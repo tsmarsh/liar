@@ -209,6 +209,9 @@ impl Expander {
             Item::Extern(_) => {
                 // Extern declarations have no body to expand
             }
+            Item::Namespace(_) => {
+                // Namespace declarations have no expressions to expand
+            }
         }
         Ok(())
     }
@@ -217,7 +220,7 @@ impl Expander {
         // Check if this is a macro call
         if let Expr::Call(func, args) = &expr.node {
             if let Expr::Var(name) = &func.node {
-                if let Some(macro_def) = self.macros.get(name).cloned() {
+                if let Some(macro_def) = self.macros.get(&name.name).cloned() {
                     // This is a macro call - evaluate it
                     let expanded = self.expand_macro_call(&macro_def, args, expr.span)?;
                     *expr = expanded;
@@ -505,7 +508,11 @@ fn expand_item_with_jit(item: &mut Spanned<Item>, jit_eval: &JitEvaluator) -> Re
         Item::Def(def) => {
             expand_expr_with_jit(&mut def.value, jit_eval)?;
         }
-        Item::Defmacro(_) | Item::Defstruct(_) | Item::Defprotocol(_) | Item::Extern(_) => {}
+        Item::Defmacro(_)
+        | Item::Defstruct(_)
+        | Item::Defprotocol(_)
+        | Item::Extern(_)
+        | Item::Namespace(_) => {}
         Item::ExtendProtocol(extend) => {
             for method in &mut extend.implementations {
                 expand_expr_with_jit(&mut method.body, jit_eval)?;
@@ -526,7 +533,7 @@ fn expand_expr_with_jit(expr: &mut Spanned<Expr>, jit_eval: &JitEvaluator) -> Re
     // Check if this is a macro call
     if let Expr::Call(func, args) = &expr.node {
         if let Expr::Var(name) = &func.node {
-            if let Some(macro_def) = jit_eval.macros.get(name).cloned() {
+            if let Some(macro_def) = jit_eval.macros.get(&name.name).cloned() {
                 // This is a macro call - evaluate it with JIT support
                 let expanded = expand_macro_call_with_jit(&macro_def, args, expr.span, jit_eval)?;
                 *expr = expanded;
@@ -754,8 +761,8 @@ impl<'a, 'ctx> JitEvaluator<'a, 'ctx> {
             Expr::Keyword(k) => Ok(Value::Keyword(k.clone())),
 
             // Variables - look up in environment
-            Expr::Var(name) => env.lookup(name).ok_or_else(|| {
-                CompileError::macro_error(expr.span, format!("undefined variable '{}'", name))
+            Expr::Var(name) => env.lookup(&name.name).ok_or_else(|| {
+                CompileError::macro_error(expr.span, format!("undefined variable '{}'", name.name))
             }),
 
             // Quote
@@ -801,19 +808,20 @@ impl<'a, 'ctx> JitEvaluator<'a, 'ctx> {
             Expr::Call(func, args) => {
                 if let Expr::Var(name) = &func.node {
                     // Try builtins first, using JIT-aware eval for arguments
-                    if let Some(result) = self.eval_builtin(env, name, args, expr.span)? {
+                    if let Some(result) = self.eval_builtin(env, &name.name, args, expr.span)? {
                         return Ok(result);
                     }
 
                     // Check if this is a macro call
-                    if self.macros.contains_key(name) || self.evaluator.has_macro(name) {
+                    if self.macros.contains_key(&name.name) || self.evaluator.has_macro(&name.name)
+                    {
                         // Delegate macro expansion to base evaluator
                         return self.evaluator.eval(env, expr);
                     }
 
                     // Check JIT for user-defined functions
                     let jit = self.jit.borrow();
-                    if jit.has_function(name) {
+                    if jit.has_function(&name.name) {
                         drop(jit);
                         // Evaluate arguments with JIT-aware eval
                         let arg_vals: Result<Vec<Value>> =
@@ -822,7 +830,7 @@ impl<'a, 'ctx> JitEvaluator<'a, 'ctx> {
 
                         // Build expression string with marshalled arguments
                         let arg_strs: Vec<String> = arg_vals.iter().map(value_to_source).collect();
-                        let expr_str = format!("({} {})", name, arg_strs.join(" "));
+                        let expr_str = format!("({} {})", name.name, arg_strs.join(" "));
 
                         // Evaluate via JIT
                         let mut jit = self.jit.borrow_mut();

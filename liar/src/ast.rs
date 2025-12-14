@@ -1,6 +1,124 @@
 //! liar Abstract Syntax Tree
 
 use crate::span::Spanned;
+use std::fmt;
+
+/// Qualified name: namespace/name or just name
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QualifiedName {
+    /// Namespace qualifier (e.g., "vec" in vec/conj)
+    pub qualifier: Option<String>,
+    /// Local name (e.g., "conj")
+    pub name: String,
+}
+
+impl QualifiedName {
+    /// Create an unqualified name
+    pub fn simple(name: String) -> Self {
+        Self {
+            qualifier: None,
+            name,
+        }
+    }
+
+    /// Create a qualified name
+    pub fn qualified(qualifier: String, name: String) -> Self {
+        Self {
+            qualifier: Some(qualifier),
+            name,
+        }
+    }
+
+    /// Parse from string (handles "ns/name" or just "name")
+    /// Only treats "/" as a namespace separator if both parts are non-empty
+    /// and the qualifier looks like an identifier (starts with letter/underscore).
+    /// This preserves operators like "/" and "/." as simple names.
+    pub fn parse(s: &str) -> Self {
+        if let Some(pos) = s.find('/') {
+            let qualifier = &s[..pos];
+            let name = &s[pos + 1..];
+            // Only treat as qualified if:
+            // 1. Both parts are non-empty
+            // 2. Qualifier starts with a letter or underscore (looks like an identifier)
+            if !qualifier.is_empty()
+                && !name.is_empty()
+                && qualifier
+                    .chars()
+                    .next()
+                    .map(|c| c.is_alphabetic() || c == '_')
+                    .unwrap_or(false)
+            {
+                Self::qualified(qualifier.to_string(), name.to_string())
+            } else {
+                Self::simple(s.to_string())
+            }
+        } else {
+            Self::simple(s.to_string())
+        }
+    }
+
+    /// Get the full name as a string
+    pub fn full_name(&self) -> String {
+        match &self.qualifier {
+            Some(q) => format!("{}/{}", q, self.name),
+            None => self.name.clone(),
+        }
+    }
+
+    /// Check if this is an unqualified name
+    pub fn is_simple(&self) -> bool {
+        self.qualifier.is_none()
+    }
+}
+
+impl fmt::Display for QualifiedName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.qualifier {
+            Some(q) => write!(f, "{}/{}", q, self.name),
+            None => write!(f, "{}", self.name),
+        }
+    }
+}
+
+impl PartialEq<str> for QualifiedName {
+    fn eq(&self, other: &str) -> bool {
+        self.qualifier.is_none() && self.name == other
+    }
+}
+
+impl PartialEq<&str> for QualifiedName {
+    fn eq(&self, other: &&str) -> bool {
+        self.qualifier.is_none() && self.name == *other
+    }
+}
+
+/// Require specification in a namespace declaration
+#[derive(Debug, Clone)]
+pub enum RequireSpec {
+    /// [module :as alias] - require with alias
+    Alias {
+        module: Spanned<String>,
+        alias: Spanned<String>,
+    },
+    /// [module :refer [sym1 sym2]] - require with specific symbols
+    Refer {
+        module: Spanned<String>,
+        symbols: Vec<Spanned<String>>,
+    },
+    /// [module :refer :all] - require with all symbols
+    ReferAll { module: Spanned<String> },
+    /// [module] - bare require (just load, use qualified)
+    Bare { module: Spanned<String> },
+}
+
+/// Namespace declaration
+#[derive(Debug, Clone)]
+pub struct Namespace {
+    /// Namespace name (e.g., "my.app")
+    pub name: Spanned<String>,
+    /// Required modules
+    pub requires: Vec<RequireSpec>,
+}
 
 /// A complete liar program
 #[derive(Debug, Clone)]
@@ -11,6 +129,8 @@ pub struct Program {
 /// Top-level items
 #[derive(Debug, Clone)]
 pub enum Item {
+    /// Namespace declaration: (ns name (:require [...]))
+    Namespace(Namespace),
     /// Function definition: (defun name (params...) body)
     Defun(Defun),
     /// Constant definition: (def name value)
@@ -160,8 +280,8 @@ pub enum Expr {
     String(String),
     /// Nil literal
     Nil,
-    /// Variable reference
-    Var(String),
+    /// Variable reference (possibly qualified: namespace/name)
+    Var(QualifiedName),
     /// Function call: (f args...)
     Call(Box<Spanned<Expr>>, Vec<Spanned<Expr>>),
     /// Lambda: (fn (params...) body)

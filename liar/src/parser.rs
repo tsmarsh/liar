@@ -78,9 +78,13 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Item::Extern(self.parse_extern()?)
             }
+            TokenKind::Ns => {
+                self.advance();
+                Item::Namespace(self.parse_namespace()?)
+            }
             _ => return Err(CompileError::parse(
                 self.current_span(),
-                "expected top-level form: defun, def, defstruct, defprotocol, extend-protocol, defmacro, or extern",
+                "expected top-level form: ns, defun, def, defstruct, defprotocol, extend-protocol, defmacro, or extern",
             )),
         };
 
@@ -344,6 +348,96 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse namespace declaration: (ns name (:require [mod :as alias] [mod :refer [a b]] [mod :refer :all]))
+    fn parse_namespace(&mut self) -> Result<Namespace> {
+        let name = self.parse_symbol()?;
+        let mut requires = Vec::new();
+
+        // Parse optional (:require [...] [...])
+        while self.check(TokenKind::LParen) {
+            self.advance();
+
+            // Check for :require keyword
+            if let TokenKind::Keyword(k) = &self.peek().kind {
+                if k == "require" {
+                    self.advance();
+
+                    // Parse require specs: [module ...], [module :as alias], etc.
+                    while self.check(TokenKind::LBracket) {
+                        requires.push(self.parse_require_spec()?);
+                    }
+                } else {
+                    return Err(CompileError::parse(
+                        self.current_span(),
+                        format!("unknown namespace option :{}", k),
+                    ));
+                }
+            } else {
+                return Err(CompileError::parse(
+                    self.current_span(),
+                    "expected :require in namespace declaration",
+                ));
+            }
+
+            self.expect(TokenKind::RParen)?;
+        }
+
+        Ok(Namespace { name, requires })
+    }
+
+    /// Parse a require spec: [module], [module :as alias], [module :refer [a b]], [module :refer :all]
+    fn parse_require_spec(&mut self) -> Result<RequireSpec> {
+        self.expect(TokenKind::LBracket)?;
+        let module = self.parse_symbol()?;
+
+        let spec = if let TokenKind::Keyword(k) = &self.peek().kind {
+            let k = k.clone();
+            self.advance();
+
+            match k.as_str() {
+                "as" => {
+                    let alias = self.parse_symbol()?;
+                    RequireSpec::Alias { module, alias }
+                }
+                "refer" => {
+                    // Check for :all or [symbols]
+                    if let TokenKind::Keyword(k2) = &self.peek().kind {
+                        if k2 == "all" {
+                            self.advance();
+                            RequireSpec::ReferAll { module }
+                        } else {
+                            return Err(CompileError::parse(
+                                self.current_span(),
+                                format!("expected :all or [symbols] after :refer, got :{}", k2),
+                            ));
+                        }
+                    } else {
+                        // Parse symbol list [a b c]
+                        self.expect(TokenKind::LBracket)?;
+                        let mut symbols = Vec::new();
+                        while !self.check(TokenKind::RBracket) {
+                            symbols.push(self.parse_symbol()?);
+                        }
+                        self.expect(TokenKind::RBracket)?;
+                        RequireSpec::Refer { module, symbols }
+                    }
+                }
+                _ => {
+                    return Err(CompileError::parse(
+                        self.current_span(),
+                        format!("unknown require option :{}", k),
+                    ));
+                }
+            }
+        } else {
+            // Bare require: [module]
+            RequireSpec::Bare { module }
+        };
+
+        self.expect(TokenKind::RBracket)?;
+        Ok(spec)
+    }
+
     /// Parse a type annotation
     fn parse_type(&mut self) -> Result<Spanned<Type>> {
         let start = self.current_span();
@@ -500,7 +594,7 @@ impl<'a> Parser<'a> {
             TokenKind::Symbol(s) => {
                 let s = s.clone();
                 self.advance();
-                Expr::Var(s)
+                Expr::Var(QualifiedName::parse(&s))
             }
             TokenKind::LParen => {
                 self.advance();
@@ -772,7 +866,10 @@ impl<'a> Parser<'a> {
         // Field bindings: fieldN = (. temp fieldN)
         for field in field_names {
             let field_access = Expr::Field(
-                Box::new(Spanned::new(Expr::Var(temp_name.clone()), span)),
+                Box::new(Spanned::new(
+                    Expr::Var(QualifiedName::simple(temp_name.clone())),
+                    span,
+                )),
                 field.clone(),
             );
             result.push(LetBinding {
@@ -982,7 +1079,7 @@ mod tests {
         let expr = parser.parse_expr().unwrap();
         match expr.node {
             Expr::Call(func, args) => {
-                assert!(matches!(func.node, Expr::Var(s) if s == "+"));
+                assert!(matches!(func.node, Expr::Var(ref s) if s.name == "+"));
                 assert_eq!(args.len(), 2);
             }
             _ => panic!("expected call"),
@@ -1002,7 +1099,7 @@ mod tests {
         let expr = parser.parse_expr().unwrap();
         match expr.node {
             Expr::AtomDeref(inner) => {
-                assert!(matches!(inner.node, Expr::Var(s) if s == "counter"));
+                assert!(matches!(inner.node, Expr::Var(ref s) if s.name == "counter"));
             }
             _ => panic!("expected atom deref"),
         }
@@ -1179,8 +1276,8 @@ mod tests {
                 fn_expr,
                 args,
             } => {
-                assert!(matches!(ref_expr.node, Expr::Var(ref s) if s == "account"));
-                assert!(matches!(fn_expr.node, Expr::Var(ref s) if s == "-"));
+                assert!(matches!(ref_expr.node, Expr::Var(ref s) if s.name == "account"));
+                assert!(matches!(fn_expr.node, Expr::Var(ref s) if s.name == "-"));
                 assert_eq!(args.len(), 1);
             }
             _ => panic!("expected alter"),
@@ -1314,7 +1411,7 @@ mod tests {
         let expr = parser.parse_expr().unwrap();
         match expr.node {
             Expr::Collect(iter) => {
-                assert!(matches!(iter.node, Expr::Var(ref s) if s == "it"));
+                assert!(matches!(iter.node, Expr::Var(ref s) if s.name == "it"));
             }
             _ => panic!("expected collect"),
         }

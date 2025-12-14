@@ -50,7 +50,7 @@ pub fn generate_expr(ctx: &mut CodegenContext, expr: &Spanned<Expr>) -> Result<l
         Expr::Nil => Ok(lir::Expr::NullPtr),
 
         // Variables
-        Expr::Var(name) => Ok(lir::Expr::LocalRef(name.clone())),
+        Expr::Var(name) => Ok(lir::Expr::LocalRef(name.name.clone())),
 
         // Function calls
         Expr::Call(func, args) => generate_call(ctx, expr, func, args),
@@ -158,30 +158,30 @@ fn generate_call(
 ) -> Result<lir::Expr> {
     // Check for builtin operators
     if let Expr::Var(op) = &func.node {
-        if let Some(result) = generate_builtin(ctx, expr, op, args)? {
+        if let Some(result) = generate_builtin(ctx, expr, &op.name, args)? {
             return Ok(result);
         }
 
         // Check for struct constructor
-        if let Some(struct_info) = ctx.lookup_struct(op).cloned() {
-            return generate_struct_constructor(ctx, expr, op, &struct_info, args);
+        if let Some(struct_info) = ctx.lookup_struct(&op.name).cloned() {
+            return generate_struct_constructor(ctx, expr, &op.name, &struct_info, args);
         }
 
         // Check for protocol method call
-        if ctx.is_protocol_method(op).is_some() {
-            return generate_protocol_call(ctx, expr, op, args);
+        if ctx.is_protocol_method(&op.name).is_some() {
+            return generate_protocol_call(ctx, expr, &op.name, args);
         }
     }
 
     // Get the function name if it's a variable
     if let Expr::Var(name) = &func.node {
         // Check if this is a known function (direct call)
-        if ctx.lookup_func_return_type(name).is_some() {
+        if ctx.lookup_func_return_type(&name.name).is_some() {
             // Arguments are NOT in tail position
             let was_tail = ctx.set_tail_position(false);
 
             // Extern functions don't take __env parameter
-            let mut call_args = if ctx.is_extern(name) {
+            let mut call_args = if ctx.is_extern(&name.name) {
                 Vec::new()
             } else {
                 vec![lir::Expr::NullPtr]
@@ -196,19 +196,19 @@ fn generate_call(
             // (tail calls are terminators and can't be used inside if branches)
             if was_tail && ctx.can_emit_tailcall() {
                 return Ok(lir::Expr::TailCall {
-                    name: name.clone(),
+                    name: name.name.clone(),
                     args: call_args,
                 });
             } else {
                 return Ok(lir::Expr::Call {
-                    name: name.clone(),
+                    name: name.name.clone(),
                     args: call_args,
                 });
             }
         }
 
         // Otherwise, treat it as a closure variable
-        return generate_closure_call(ctx, name, args);
+        return generate_closure_call(ctx, &name.name, args);
     }
 
     // For non-variable function expressions, generate and call as closure

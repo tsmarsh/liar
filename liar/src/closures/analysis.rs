@@ -80,6 +80,8 @@ impl ClosureAnalyzer {
             Item::Defmacro(_) => {}
             // Extern declarations have no body
             Item::Extern(_) => {}
+            // Namespace declarations have no body
+            Item::Namespace(_) => {}
         }
     }
 
@@ -394,11 +396,13 @@ impl ClosureAnalyzer {
 
             Expr::Var(name) => {
                 // If not defined inside the lambda and not a builtin, it's a capture
-                if !local.contains(name)
-                    && !self.is_builtin(name)
-                    && !free.iter().any(|(n, _)| n == name)
+                // Only capture unqualified names (qualified names are module-level)
+                if name.is_simple()
+                    && !local.contains(&name.name)
+                    && !self.is_builtin(&name.name)
+                    && !free.iter().any(|(n, _)| n == &name.name)
                 {
-                    free.push((name.clone(), expr.span));
+                    free.push((name.name.clone(), expr.span));
                 }
             }
 
@@ -651,7 +655,7 @@ impl ClosureAnalyzer {
         match &expr.node {
             Expr::Ref(inner) | Expr::RefMut(inner) => {
                 if let Expr::Var(var_name) = &inner.node {
-                    if var_name == name {
+                    if var_name.name == name {
                         return true;
                     }
                 }

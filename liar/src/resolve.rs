@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{
-    Def, Defmacro, Defprotocol, Defstruct, Defun, Expr, ExtendProtocol, Item, LetBinding, Program,
+    Def, Defmacro, Defprotocol, Defstruct, Defun, Expr, ExtendProtocol, Item, LetBinding,
+    Namespace, Program, QualifiedName, RequireSpec,
 };
 use crate::error::{CompileError, Errors, Result};
 use crate::span::{Span, Spanned};
@@ -59,6 +60,55 @@ impl Scope {
     }
 }
 
+/// Namespace resolution context
+#[derive(Debug, Default)]
+pub struct NamespaceContext {
+    /// Current namespace name (default: "user")
+    pub current: String,
+    /// Alias -> full module name (from :as)
+    pub aliases: HashMap<String, String>,
+    /// Symbol -> source module (from :refer [sym])
+    pub referred: HashMap<String, String>,
+    /// Modules imported with :refer :all
+    pub refer_all: Vec<String>,
+}
+
+impl NamespaceContext {
+    fn new() -> Self {
+        Self {
+            current: "user".to_string(),
+            aliases: HashMap::new(),
+            referred: HashMap::new(),
+            // Auto-import liar.core
+            refer_all: vec!["liar.core".to_string()],
+        }
+    }
+
+    /// Process a namespace declaration
+    fn process_namespace(&mut self, ns: &Namespace) {
+        self.current = ns.name.node.clone();
+
+        for req in &ns.requires {
+            match req {
+                RequireSpec::Alias { module, alias } => {
+                    self.aliases.insert(alias.node.clone(), module.node.clone());
+                }
+                RequireSpec::Refer { module, symbols } => {
+                    for sym in symbols {
+                        self.referred.insert(sym.node.clone(), module.node.clone());
+                    }
+                }
+                RequireSpec::ReferAll { module } => {
+                    self.refer_all.push(module.node.clone());
+                }
+                RequireSpec::Bare { module: _ } => {
+                    // Bare requires just load the module, no imports
+                }
+            }
+        }
+    }
+}
+
 /// Name resolver state
 pub struct Resolver {
     scopes: Vec<Scope>,
@@ -66,6 +116,8 @@ pub struct Resolver {
     next_id: u32,
     /// Map from binding use sites to their definitions
     pub resolutions: HashMap<Span, BindingId>,
+    /// Namespace context for qualified name resolution
+    ns_ctx: NamespaceContext,
 }
 
 /// List of builtin functions that are always in scope
@@ -187,6 +239,7 @@ impl Resolver {
             errors: Errors::new(),
             next_id: 0,
             resolutions: HashMap::new(),
+            ns_ctx: NamespaceContext::new(),
         };
 
         // Define all builtins
@@ -256,6 +309,44 @@ impl Resolver {
         None
     }
 
+    /// Resolve a qualified name (handles namespace/symbol syntax)
+    fn resolve_qualified_name(&mut self, qname: &QualifiedName, span: Span) -> Option<BindingId> {
+        match &qname.qualifier {
+            Some(qualifier) => {
+                // Qualified name: first resolve the namespace alias
+                let _resolved_ns = self
+                    .ns_ctx
+                    .aliases
+                    .get(qualifier)
+                    .cloned()
+                    .unwrap_or_else(|| qualifier.clone());
+
+                // For now, just look up the simple name
+                // TODO: When multi-file loading is implemented, look up in the resolved namespace
+                // For now, qualified references to other modules won't work until Phase 4
+                self.lookup(&qname.name, span)
+            }
+            None => {
+                // Unqualified name: try local scopes first
+                for scope in self.scopes.iter().rev() {
+                    if let Some(info) = scope.get(&qname.name) {
+                        self.resolutions.insert(span, info.id);
+                        return Some(info.id);
+                    }
+                }
+
+                // Try referred symbols (from :refer)
+                if self.ns_ctx.referred.contains_key(&qname.name) {
+                    // Symbol was explicitly imported - look it up
+                    return self.lookup(&qname.name, span);
+                }
+
+                // Fall back to regular lookup (includes builtins)
+                self.lookup(&qname.name, span)
+            }
+        }
+    }
+
     /// Resolve names in a program
     pub fn resolve(
         mut self,
@@ -304,6 +395,10 @@ impl Resolver {
                 Item::Extern(ext) => {
                     self.define(&ext.name.node, ext.name.span, BindingKind::ExternFn);
                 }
+                Item::Namespace(ns) => {
+                    // Process namespace declaration to set up imports
+                    self.ns_ctx.process_namespace(ns);
+                }
             }
         }
 
@@ -342,6 +437,9 @@ impl Resolver {
             Item::Defmacro(defmacro) => self.resolve_defmacro(defmacro),
             Item::Extern(_) => {
                 // Extern declarations have no body to resolve
+            }
+            Item::Namespace(_) => {
+                // Namespace declarations are handled in a separate phase
             }
         }
     }
@@ -414,7 +512,7 @@ impl Resolver {
             }
 
             Expr::Var(name) => {
-                self.lookup(name, expr.span);
+                self.resolve_qualified_name(name, expr.span);
             }
 
             Expr::Call(func, args) => {

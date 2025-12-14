@@ -13,7 +13,7 @@ use super::expr::generate_expr;
 /// Parse a scalar type from an expression (should be a symbol like i8, i64, float, double)
 fn parse_scalar_type(expr: &Spanned<Expr>, type_expr: &Spanned<Expr>) -> Result<lir::ScalarType> {
     if let Expr::Var(name) = &type_expr.node {
-        match name.as_str() {
+        match name.name.as_str() {
             "i1" => Ok(lir::ScalarType::I1),
             "i8" => Ok(lir::ScalarType::I8),
             "i16" => Ok(lir::ScalarType::I16),
@@ -396,9 +396,9 @@ pub fn generate_builtin(
             // Check if wrapping a struct constructor
             if let crate::ast::Expr::Call(func, struct_args) = &inner.node {
                 if let crate::ast::Expr::Var(struct_name) = &func.node {
-                    if ctx.lookup_struct(struct_name).is_some() {
+                    if ctx.lookup_struct(&struct_name.name).is_some() {
                         // Get the type ID for this struct
-                        let type_id = ctx.get_struct_type_id(struct_name).unwrap_or(0);
+                        let type_id = ctx.get_struct_type_id(&struct_name.name).unwrap_or(0);
 
                         // Generate field values, with type_id as the first field
                         let mut field_exprs = vec![lir::Expr::IntLit {
@@ -411,7 +411,7 @@ pub fn generate_builtin(
 
                         ctx.set_needs_malloc();
                         return Ok(Some(lir::Expr::HeapStruct {
-                            struct_name: struct_name.clone(),
+                            struct_name: struct_name.name.clone(),
                             fields: field_exprs,
                         }));
                     }
