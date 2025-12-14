@@ -118,6 +118,10 @@ pub struct Resolver {
     pub resolutions: HashMap<Span, BindingId>,
     /// Namespace context for qualified name resolution
     ns_ctx: NamespaceContext,
+    /// Per-module scopes: module name -> definitions from that module
+    module_scopes: HashMap<String, Scope>,
+    /// Current module being processed
+    current_module: Option<String>,
 }
 
 /// List of builtin functions that are always in scope
@@ -240,14 +244,27 @@ impl Resolver {
             next_id: 0,
             resolutions: HashMap::new(),
             ns_ctx: NamespaceContext::new(),
+            module_scopes: HashMap::new(),
+            current_module: None,
         };
 
-        // Define all builtins
+        // Define all builtins in the global scope
         for &name in BUILTINS {
-            resolver.define(name, Span::default(), BindingKind::Function);
+            resolver.define_builtin(name);
         }
 
         resolver
+    }
+
+    /// Define a builtin (goes in global scope, no duplicate check)
+    fn define_builtin(&mut self, name: &str) {
+        let id = self.fresh_id();
+        let info = BindingInfo {
+            kind: BindingKind::Function,
+            span: Span::default(),
+            id,
+        };
+        self.scopes[0].insert(name.to_string(), info);
     }
 
     fn fresh_id(&mut self) -> BindingId {
@@ -272,23 +289,62 @@ impl Resolver {
         let id = self.fresh_id();
         let info = BindingInfo { kind, span, id };
 
-        // Check for duplicate in current scope only
-        let existing_span = self
-            .scopes
-            .last()
-            .and_then(|s| s.get(name))
-            .map(|info| info.span);
+        // Only add top-level definitions to the module scope (not local/parameter bindings)
+        let is_top_level = matches!(
+            kind,
+            BindingKind::Function
+                | BindingKind::Constant
+                | BindingKind::Struct
+                | BindingKind::Protocol
+                | BindingKind::ProtocolMethod
+                | BindingKind::Macro
+                | BindingKind::ExternFn
+        );
 
-        if let Some(existing) = existing_span {
-            self.errors.push(CompileError::resolve(
-                span,
-                format!(
-                    "duplicate definition of '{}' (previously defined at {}..{})",
-                    name, existing.start, existing.end
-                ),
-            ));
+        if is_top_level {
+            if let Some(ref module) = self.current_module {
+                // When in a module, check for duplicates in the module scope
+                let module_scope = self
+                    .module_scopes
+                    .entry(module.clone())
+                    .or_insert_with(Scope::new);
+
+                if let Some(existing) = module_scope.get(name) {
+                    self.errors.push(CompileError::resolve(
+                        span,
+                        format!(
+                            "duplicate definition of '{}' (previously defined at {}..{})",
+                            name, existing.span.start, existing.span.end
+                        ),
+                    ));
+                }
+
+                module_scope.insert(name.to_string(), info.clone());
+            } else {
+                // When not in a module (standalone program), check for duplicates
+                // in the current scope (skipping builtins in scope[0])
+                let existing_span = if self.scopes.len() > 1 {
+                    self.scopes[1].get(name).map(|e| e.span)
+                } else {
+                    self.current_scope()
+                        .get(name)
+                        .filter(|e| e.span != Span::default()) // Skip builtins
+                        .map(|e| e.span)
+                };
+
+                if let Some(existing) = existing_span {
+                    self.errors.push(CompileError::resolve(
+                        span,
+                        format!(
+                            "duplicate definition of '{}' (previously defined at {}..{})",
+                            name, existing.start, existing.end
+                        ),
+                    ));
+                }
+            }
         }
 
+        // Also add to current scope (for local lookups during body resolution)
         self.current_scope().insert(name.to_string(), info);
         id
     }
@@ -313,18 +369,30 @@ impl Resolver {
     fn resolve_qualified_name(&mut self, qname: &QualifiedName, span: Span) -> Option<BindingId> {
         match &qname.qualifier {
             Some(qualifier) => {
-                // Qualified name: first resolve the namespace alias
-                let _resolved_ns = self
+                // Qualified name: resolve the namespace alias to actual module name
+                let resolved_ns = self
                     .ns_ctx
                     .aliases
                     .get(qualifier)
                     .cloned()
                     .unwrap_or_else(|| qualifier.clone());
 
-                // For now, just look up the simple name
-                // TODO: When multi-file loading is implemented, look up in the resolved namespace
-                // For now, qualified references to other modules won't work until Phase 4
-                self.lookup(&qname.name, span)
+                // Look up in that module's scope
+                if let Some(module_scope) = self.module_scopes.get(&resolved_ns) {
+                    if let Some(info) = module_scope.get(&qname.name) {
+                        self.resolutions.insert(span, info.id);
+                        return Some(info.id);
+                    }
+                }
+
+                self.errors.push(CompileError::resolve(
+                    span,
+                    format!(
+                        "undefined: '{}/{}' (module '{}' has no such binding)",
+                        qualifier, qname.name, resolved_ns
+                    ),
+                ));
+                None
             }
             None => {
                 // Unqualified name: try local scopes first
@@ -335,13 +403,27 @@ impl Resolver {
                     }
                 }
 
-                // Try referred symbols (from :refer)
-                if self.ns_ctx.referred.contains_key(&qname.name) {
-                    // Symbol was explicitly imported - look it up
-                    return self.lookup(&qname.name, span);
+                // Try referred symbols (from :refer [name])
+                if let Some(source_module) = self.ns_ctx.referred.get(&qname.name) {
+                    if let Some(module_scope) = self.module_scopes.get(source_module) {
+                        if let Some(info) = module_scope.get(&qname.name) {
+                            self.resolutions.insert(span, info.id);
+                            return Some(info.id);
+                        }
+                    }
                 }
 
-                // Fall back to regular lookup (includes builtins)
+                // Try refer-all modules (from :refer :all)
+                for module in &self.ns_ctx.refer_all {
+                    if let Some(module_scope) = self.module_scopes.get(module) {
+                        if let Some(info) = module_scope.get(&qname.name) {
+                            self.resolutions.insert(span, info.id);
+                            return Some(info.id);
+                        }
+                    }
+                }
+
+                // Fall back to regular lookup (includes builtins in scope[0])
                 self.lookup(&qname.name, span)
             }
         }
@@ -353,8 +435,16 @@ impl Resolver {
         program: &Program,
     ) -> std::result::Result<ResolvedProgram, Vec<CompileError>> {
         // First pass: collect all top-level definitions (for forward references)
+        // Track current module via namespace declarations
+        // Push a new scope for each module to isolate top-level definitions
         for item in &program.items {
             match &item.node {
+                Item::Namespace(ns) => {
+                    // Switch to new module - push fresh scope, update current_module
+                    self.push_scope(); // New scope for this module's definitions
+                    self.current_module = Some(ns.name.node.clone());
+                    self.ns_ctx.process_namespace(ns);
+                }
                 Item::Defun(defun) => {
                     self.define(&defun.name.node, defun.name.span, BindingKind::Function);
                 }
@@ -395,15 +485,35 @@ impl Resolver {
                 Item::Extern(ext) => {
                     self.define(&ext.name.node, ext.name.span, BindingKind::ExternFn);
                 }
-                Item::Namespace(ns) => {
-                    // Process namespace declaration to set up imports
-                    self.ns_ctx.process_namespace(ns);
-                }
             }
         }
 
         // Second pass: resolve all references within bodies
+        // Pop all module scopes, keep only builtins scope
+        while self.scopes.len() > 1 {
+            self.pop_scope();
+        }
+        self.current_module = None;
+
         for item in &program.items {
+            if let Item::Namespace(ns) = &item.node {
+                // Enter new module context
+                self.push_scope();
+                self.current_module = Some(ns.name.node.clone());
+                self.ns_ctx.process_namespace(ns);
+
+                // Import definitions from this module's scope
+                if let Some(module_scope) = self.module_scopes.get(&ns.name.node) {
+                    let bindings: Vec<_> = module_scope
+                        .bindings
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    for (name, info) in bindings {
+                        self.current_scope().insert(name, info);
+                    }
+                }
+            }
             self.resolve_item(item);
         }
 

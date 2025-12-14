@@ -285,32 +285,8 @@
           (skip-n (- n 1) (rest seq)))))
 
 ;;; ============================================================
-;;; Predicates on sequences
+;;; Predicates on sequences (use protocol methods: any, all, member)
 ;;; ============================================================
-
-;; any - true if pred is true for any element
-(defun any (pred seq: ptr)
-  (if (nil? seq)
-      0  ; false
-      (if (pred (first seq))
-          1  ; true
-          (any pred (rest seq)))))
-
-;; all - true if pred is true for all elements
-(defun all (pred seq: ptr)
-  (if (nil? seq)
-      1  ; true (vacuous)
-      (if (pred (first seq))
-          (all pred (rest seq))
-          0)))  ; false
-
-;; member - true if x is in seq
-(defun member (x seq: ptr)
-  (if (nil? seq)
-      0
-      (if (= x (first seq))
-          1
-          (member x (rest seq)))))
 
 ;;; ============================================================
 ;;; Numeric reductions

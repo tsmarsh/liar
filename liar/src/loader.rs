@@ -129,6 +129,17 @@ impl ModuleLoader {
         Program { items }
     }
 
+    /// Get modules with their namespace names preserved
+    ///
+    /// Returns (namespace, program) pairs in dependency order.
+    /// This allows the resolver to maintain per-module scopes.
+    pub fn into_modules(self) -> Vec<(String, Program)> {
+        self.load_order
+            .into_iter()
+            .filter_map(|ns| self.cache.get(&ns).map(|p| (ns, p.clone())))
+            .collect()
+    }
+
     /// Get the namespace name from a program (if it has one)
     pub fn extract_namespace(program: &Program) -> Option<String> {
         for item in &program.items {
