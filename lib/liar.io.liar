@@ -1,4 +1,7 @@
-;; lib/io.liar - I/O Library
+(ns liar.io
+  (:require [liar.core :refer :all]))
+
+;; liar I/O Library
 ;;
 ;; Provides file I/O operations built on libc.
 ;; For bootstrap, we use blocking operations.

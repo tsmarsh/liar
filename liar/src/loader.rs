@@ -172,8 +172,17 @@ pub fn compile_file(
         // Load dependencies via ModuleLoader
         let mut loader = ModuleLoader::new(search_paths);
 
-        // Load the main module (which loads dependencies)
-        loader.load(&ns, Span::new(0, 0)).map_err(|e| vec![e])?;
+        // Pre-seed the cache with the already-parsed main file
+        // This avoids re-reading and parsing it
+        loader.cache.insert(ns.clone(), program.clone());
+
+        // Load dependencies first (they will be added to load_order)
+        loader
+            .load_dependencies(&program, Span::new(0, 0))
+            .map_err(|e| vec![e])?;
+
+        // Add main module to load_order AFTER dependencies
+        loader.load_order.push(ns);
 
         // Get merged program
         let merged = loader.into_merged_program();

@@ -19,7 +19,7 @@ use crate::eval::Value;
 use crate::span::Span;
 
 /// Embedded stdlib source - loaded automatically by MacroJit
-const STDLIB_SOURCE: &str = include_str!("../../lib/stdlib.liar");
+const STDLIB_SOURCE: &str = include_str!("../../lib/liar.core.liar");
 
 /// JIT context for macro evaluation
 ///

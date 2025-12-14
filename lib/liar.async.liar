@@ -1,3 +1,6 @@
+(ns liar.async
+  (:require [liar.core :refer :all]))
+
 ;; liar Async Library
 ;;
 ;; Provides the Pollable protocol and async combinators for

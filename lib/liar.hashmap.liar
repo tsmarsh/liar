@@ -1,3 +1,7 @@
+(ns liar.hashmap
+  (:require [liar.core :refer :all]
+            [liar.seq :refer :all]))
+
 ;; PersistentHashMap - Hash Array Mapped Trie (HAMT)
 ;;
 ;; A persistent, immutable hash map using bitmap-indexed trie nodes.

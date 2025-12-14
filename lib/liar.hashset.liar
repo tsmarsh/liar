@@ -1,3 +1,7 @@
+(ns liar.hashset
+  (:require [liar.core :refer :all]
+            [liar.seq :refer :all]))
+
 ;; PersistentHashSet - Set backed by HAMT
 ;;
 ;; A persistent, immutable set implemented as a wrapper around HashMap.

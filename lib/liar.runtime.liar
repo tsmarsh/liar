@@ -1,3 +1,5 @@
+(ns liar.runtime)
+
 ;; liar Runtime FFI Declarations
 ;;
 ;; These declarations allow liar code to call into the liar-runtime

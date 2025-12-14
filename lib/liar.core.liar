@@ -1,6 +1,9 @@
+(ns liar.core)
+
 ;; liar Standard Library
 ;;
 ;; Core functions and utilities
+;; Builtins (+, -, *, /, etc.) are auto-imported from Rust runtime
 
 ;; Core
 
@@ -102,9 +105,10 @@
   (fn (x) (f (g (h x)))))
 
 ;; Variadic composition macro - composes any number of functions
-(defmacro comp* (... fns)
-  (if (nil? fns)
-      `identity
-      (if (nil? (rest fns))
-          (first fns)
-          `(fn (x) (,(first fns) ((comp* ,@(rest fns)) x))))))
+;; NOTE: Commented out until variadic syntax is supported
+;; (defmacro comp* (... fns)
+;;   (if (nil? fns)
+;;       `identity
+;;       (if (nil? (rest fns))
+;;           (first fns)
+;;           `(fn (x) (,(first fns) ((comp* ,@(rest fns)) x))))))

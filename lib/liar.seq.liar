@@ -1,3 +1,6 @@
+(ns liar.seq
+  (:require [liar.core :refer :all]))
+
 ;; liar Sequence Library
 ;;
 ;; Core protocols and implementations for sequential data structures
@@ -273,13 +276,13 @@
           nil
           (cons (first seq) (take (- n 1) (rest seq))))))
 
-;; drop - skip first n elements
-(defun drop (n seq: ptr)
+;; skip-n - skip first n elements (renamed to avoid conflict with builtin 'drop' and protocol 'seq-drop')
+(defun skip-n (n seq: ptr)
   (if (= n 0)
       seq
       (if (nil? seq)
           nil
-          (drop (- n 1) (rest seq)))))
+          (skip-n (- n 1) (rest seq)))))
 
 ;;; ============================================================
 ;;; Predicates on sequences

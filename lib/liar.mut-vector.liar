@@ -1,3 +1,7 @@
+(ns liar.mut-vector
+  (:require [liar.core :refer :all]
+            [liar.seq :refer :all]))
+
 ;; liar Mutable Vector Library
 ;;
 ;; A growable mutable array. Extends Countable, Indexable, and Collection.
