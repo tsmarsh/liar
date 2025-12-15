@@ -264,3 +264,34 @@
 (extend-protocol Collection PersistentVector
   (conj [self x] (vec-conj self x))
   (pop [self] self))  ; TODO: implement vec-pop
+
+;; Lookup - index-based access
+(extend-protocol Lookup PersistentVector
+  (get [self key] (vec-nth self key))
+  (get-default [self key default]
+    (if (>= key (. self cnt))
+        default
+        (vec-nth self key))))
+
+;; Associative - update by index
+(extend-protocol Associative PersistentVector
+  (assoc [self key val] (vec-assoc self key val))
+  (dissoc [self key] self)  ;; vectors don't support dissoc
+  (contains-key? [self key] (if (< key (. self cnt)) 1 0)))
+
+;; Emptyable
+(extend-protocol Emptyable PersistentVector
+  (empty [self] (vector)))
+
+;; Seqable - convert to list (TODO: lazy seq)
+(extend-protocol Seqable PersistentVector
+  (seq [self]
+    (if (= 0 (. self cnt))
+        nil
+        (vec-to-list self 0))))
+
+;; Helper: convert vector to list from index
+(defun vec-to-list (v: ptr idx) -> ptr
+  (if (>= idx (. v cnt))
+      nil
+      (cons (vec-nth v idx) (vec-to-list v (+ idx 1)))))

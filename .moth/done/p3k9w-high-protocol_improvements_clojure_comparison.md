@@ -73,23 +73,16 @@ Why critical: Clojure's `seq` is the universal entry point. Vectors, maps, sets,
 
 Why critical: Maps and vectors both support key/index lookup. Unifies `hm-get` and `nth`.
 
-#### 3. **IFn** — Everything is Callable
+#### 3. **Callable** — Function Dispatch Protocol
 ```lisp
 (defprotocol Callable
   (invoke [self args]))
 ```
 
-Why critical: In Clojure, maps, vectors, sets, keywords are all callable:
-- `({:a 1} :a)` → `1`
-- `([1 2 3] 1)` → `2`
-- `(:key map)` → `(get map :key)`
-- `(#{1 2 3} 2)` → `2`
-
-This enables beautiful code:
-```lisp
-(map :name users)           ;; keyword as function
-(filter allowed-ids items)  ;; set as predicate
-```
+Why critical: All function calls dispatch through Callable. Functions implement it; non-callable values error at runtime. This provides:
+- Fast, uniform dispatch at call sites
+- Clear error messages for non-callable values
+- Future extensibility (could extend to maps/keywords if desired)
 
 #### 4. **IMeta / IWithMeta** — Metadata
 ```lisp
@@ -183,23 +176,32 @@ Why important: Vectors can reverse in O(1) by iterating backwards. Current `seq-
 
 ## Implementation Plan
 
-### Phase 1: Core (Required for Bootstrap)
-1. **Seqable** — `seq`
-2. **Lookup** — `get`, `get-default`
-3. **Associative** — `assoc`, `dissoc`, `contains?`
-4. **Named** — `name`, `namespace`
-5. **Meta / WithMeta** — `meta`, `with-meta`
+### Prerequisite: Boxed Cons
 
-### Phase 2: Elegance
-6. **Callable (IFn)** — make collections callable
-7. **Empty** — `empty`
-8. **Deref** — unify `@` syntax
-9. **Reversible** — `rseq`
+Change `Cons` from `(head: i64 tail: ptr)` to `(head: ptr tail: ptr)` so it can hold any boxed value (integers, floats, symbols, keywords, other cons cells, etc.).
 
-### Phase 3: Completeness
-10. **Sorted** — for tree-based collections
-11. **Sequential** — marker
-12. **Equiv** — structural equality protocol
+### Protocols to Add
+
+1. **Seqable** — `seq` (convert anything to a sequence)
+2. **Lookup** — `get`, `get-default` (unified key/index access)
+3. **Associative** — `assoc`, `dissoc`, `contains?` (map-like operations)
+4. **Named** — `name`, `namespace` (for symbols/keywords)
+5. **Meta / WithMeta** — `meta`, `with-meta` (attach source locations, etc.)
+6. **Callable** — `invoke` (protocol for function dispatch; error on non-callable)
+7. **Empty** — `empty` (return empty collection of same type)
+8. **Deref** — `deref` (unify atoms, delays, futures)
+9. **Reversible** — `rseq` (efficient reverse without copying)
+
+### Later (not in scope)
+- **Sorted** — for tree-based collections
+- **Sequential** — marker protocol
+- **Equiv** — structural equality protocol
+
+### Design Notes
+
+**Callable:** Function position always dispatches through Callable. Functions implement it; non-callable values error at runtime. This keeps call sites fast and errors clear. If we later want maps/keywords to be callable, we extend Callable to those types — but it's opt-in, not magic.
+
+**Lookup vs Indexable:** Keep both. `Indexed` (renamed from `Indexable`) is for O(log n) positional access. `Lookup` is for key-based access with default values. Vectors implement both.
 
 ## Code Changes
 
@@ -242,10 +244,8 @@ With Lookup protocol:
 ;; Works on sets (membership)
 (get #{:a :b :c} :b)  ;; => :b
 
-;; And if Callable is implemented:
-({:a 1} :a)           ;; => 1
-([10 20 30] 1)        ;; => 20
-(:a {:a 1})           ;; => 1
+;; With default values
+(get {:a 1} :b 0)     ;; => 0
 ```
 
 ## Example: Metadata for Compiler
@@ -276,13 +276,28 @@ With Lookup protocol:
 (get {:a 1} :b 0)     ;; => 0
 (get [1 2 3] 1)       ;; => 2
 
-;; Callable
-({:a 1} :a)           ;; => 1
-([:a :b :c] 1)        ;; => :b
-(:key {:key 42})      ;; => 42
+;; Associative
+(assoc {:a 1} :b 2)   ;; => {:a 1 :b 2}
+(dissoc {:a 1 :b 2} :a)  ;; => {:b 2}
+(contains? {:a 1} :a) ;; => true
+
+;; Named
+(name :foo)           ;; => "foo"
+(name 'bar)           ;; => "bar"
+(namespace :ns/key)   ;; => "ns"
 
 ;; Meta
 (meta (with-meta '(+ 1 2) {:line 1}))  ;; => {:line 1}
+
+;; Empty
+(empty [1 2 3])       ;; => []
+(empty {:a 1})        ;; => {}
+
+;; Deref
+(deref (atom 42))     ;; => 42
+
+;; Reversible
+(rseq [1 2 3])        ;; => (3 2 1)  ;; O(1) for vectors
 ```
 
 ## Related ADRs

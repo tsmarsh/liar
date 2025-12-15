@@ -118,3 +118,31 @@
 ;; Check if set is empty
 (defun hs-empty? (s: ptr)
   (= 0 (. s cnt)))
+
+;;; ============================================================
+;;; Protocol Implementations
+;;; ============================================================
+
+;; Countable
+(extend-protocol Countable HashSet
+  (count [self] (hs-count self)))
+
+;; Lookup - for sets, get returns the element if present, nil otherwise
+(extend-protocol Lookup HashSet
+  (get [self key]
+    (if (= 1 (hs-contains? self key))
+        key
+        nil))
+  (get-default [self key default]
+    (if (= 1 (hs-contains? self key))
+        key
+        default)))
+
+;; Collection - conj adds element
+(extend-protocol Collection HashSet
+  (conj [self x] (hs-add self x))
+  (pop [self] self))  ;; sets don't have natural pop
+
+;; Emptyable
+(extend-protocol Emptyable HashSet
+  (empty [self] (hash-set)))

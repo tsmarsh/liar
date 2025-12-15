@@ -143,6 +143,32 @@
       (node-contains? (. m root) (hash-key key) 0)))
 
 ;;; ============================================================
+;;; Protocol Implementations
+;;; ============================================================
+
+;; Lookup - key-value access
+(extend-protocol Lookup HashMap
+  (get [self key] (hm-get self key))
+  (get-default [self key default]
+    (if (= 0 (hm-contains? self key))
+        default
+        (hm-get self key))))
+
+;; Associative - map operations
+(extend-protocol Associative HashMap
+  (assoc [self key val] (hm-assoc self key val))
+  (dissoc [self key] self)  ;; TODO: implement node-dissoc
+  (contains-key? [self key] (= 1 (hm-contains? self key))))
+
+;; Countable
+(extend-protocol Countable HashMap
+  (count [self] (hm-count self)))
+
+;; Emptyable
+(extend-protocol Emptyable HashMap
+  (empty [self] (hash-map)))
+
+;;; ============================================================
 ;;; Literal Constructors (for codegen)
 ;;; ============================================================
 

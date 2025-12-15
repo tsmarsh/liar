@@ -57,6 +57,54 @@
   (seq-drop [self n]))   ; skip first n elements
 
 ;;; ============================================================
+;;; New Protocols (Clojure-inspired)
+;;; ============================================================
+
+;; Seqable - convert anything to a sequence
+(defprotocol Seqable
+  (seq [self]))          ; returns a Seq or nil
+
+;; Lookup - key-value access (maps, vectors by index, sets by membership)
+(defprotocol Lookup
+  (get [self key])           ; returns value for key, or nil
+  (get-default [self key default]))  ; returns value for key, or default
+
+;; Associative - map-like operations
+(defprotocol Associative
+  (assoc [self key val])     ; returns collection with key set to val
+  (dissoc [self key])        ; returns collection without key
+  (contains-key? [self key])) ; true if key is present
+
+;; Named - for symbols and keywords
+(defprotocol Named
+  (get-name [self])          ; returns the name as a string ptr
+  (get-namespace [self]))    ; returns the namespace as a string ptr, or nil
+
+;; Meta - get metadata
+(defprotocol Meta
+  (meta [self]))             ; returns metadata map or nil
+
+;; WithMeta - set metadata
+(defprotocol WithMeta
+  (with-meta [self m]))      ; returns copy with new metadata
+
+;; Callable - for function dispatch
+(defprotocol Callable
+  (invoke [self args]))      ; call with args list
+
+;; Emptyable - get empty collection of same type
+(defprotocol Emptyable
+  (empty [self]))            ; returns empty collection of same type
+
+;; Deref - dereference (for atoms, delays, futures)
+(defprotocol Deref
+  (deref [self]))            ; returns the referenced value
+
+;; Reversible - efficient reverse iteration
+(defprotocol Reversible
+  (rseq [self]))             ; returns reverse seq without copying
+
+;;; ============================================================
 ;;; Protocol Defaults - Seq provides Countable, Indexable, and HOFs
 ;;; ============================================================
 
@@ -137,7 +185,7 @@
 ;;; Cons - the fundamental list building block
 ;;; ============================================================
 
-(defstruct Cons (head: i64 tail: ptr))
+(defstruct Cons (head: ptr tail: ptr))
 
 (extend-protocol Seq Cons
   (first [self] (. self head))
@@ -148,6 +196,18 @@
 (extend-protocol Collection Cons
   (conj [self x] (share (Cons x self)))
   (pop [self] (. self tail)))
+
+;; Seqable - Cons is already a Seq, return self
+(extend-protocol Seqable Cons
+  (seq [self] self))
+
+;; Emptyable - empty list is nil
+(extend-protocol Emptyable Cons
+  (empty [self] nil))
+
+;; Reversible - delegate to seq-reverse (O(n) for lists)
+(extend-protocol Reversible Cons
+  (rseq [self] (seq-reverse self)))
 
 ;;; ============================================================
 ;;; MutVector - a mutable, growable vector
@@ -193,6 +253,23 @@
                 (val (aget data (mv-data-idx last-idx)))
                 (s (mv-set-len! data last-idx)))
             val)))))
+
+;; Lookup - get by index
+(extend-protocol Lookup MutVector
+  (get [self key]
+    (let ((len (mv-get-len (. self data))))
+      (if (>= key len)
+          nil
+          (aget (. self data) (mv-data-idx key)))))
+  (get-default [self key default]
+    (let ((len (mv-get-len (. self data))))
+      (if (>= key len)
+          default
+          (aget (. self data) (mv-data-idx key))))))
+
+;; Emptyable - return new empty MutVector
+(extend-protocol Emptyable MutVector
+  (empty [self] (mut-vector)))
 
 ;;; ============================================================
 ;;; List constructors
