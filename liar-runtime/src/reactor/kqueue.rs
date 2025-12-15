@@ -16,6 +16,12 @@ pub struct KqueueReactor {
     registered: HashMap<RawFd, Waker>,
 }
 
+// SAFETY: KqueueReactor is Send because:
+// - kqueue file descriptors are thread-safe at the OS level
+// - The kevent structs we store only use null pointers for udata
+// - The HashMap<RawFd, Waker> is Send (Waker is Send)
+unsafe impl Send for KqueueReactor {}
+
 impl KqueueReactor {
     /// Create a new kqueue reactor.
     pub fn new() -> io::Result<Self> {
