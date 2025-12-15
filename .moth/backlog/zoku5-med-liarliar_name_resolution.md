@@ -2,9 +2,17 @@
 
 Create `lib/liarliar/resolve.liar` - resolve names to bindings with scope tracking.
 
+**Priority:** HIGH (required before type inference and codegen)
+
+## Related ADRs
+
+- [ADR 004: Lexical Scope Ownership](../../doc/adr/004-lexical-ownership.md) — Ownership follows lexical scope
+- [ADR 006: No Redefinition in Same Scope](../../doc/adr/006-no-redefinition-in-scope.md) — Reject shadowing in same scope
+- [ADR 005: Closures Own Captured State](../../doc/adr/005-closure-captures-ownership.md) — Identify captures for closure conversion
+
 ## Overview
 
-Track lexical scopes using hash maps. Detect undefined variables and shadowing.
+Track lexical scopes using hash maps. Detect undefined variables and shadowing. This pass also identifies free variables in lambdas for later closure conversion.
 
 ## Scope Structure
 
@@ -92,3 +100,16 @@ Pre-register: `+`, `-`, `*`, `/`, `=`, `<`, `>`, `<=`, `>=`, `not`, `and`, `or`,
 - Shadowing works correctly
 - Let introduces new bindings
 - Lambda params are in scope for body
+- Free variables in closures are identified
+- Redefinition in same scope -> error (ADR 006)
+
+## Ordering
+
+Depends on: `value.liar`, `symbols.liar`
+Required by: `infer.liar`, `closures.liar`, `ownership.liar`
+
+## Design Notes
+
+The resolver should annotate the AST with binding information rather than transforming it. This keeps the original structure for error messages and debugging.
+
+Consider tracking "binding kind" (parameter, let-binding, defun, etc.) for better error messages and ownership analysis.

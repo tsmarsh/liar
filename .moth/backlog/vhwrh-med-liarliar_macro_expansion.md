@@ -2,9 +2,16 @@
 
 Create `lib/liarliar/expand.liar` - expand macros by pattern matching on list structure.
 
+**Priority:** HIGH (macros are fundamental to liar's expressiveness)
+
+## Related ADRs
+
+- [ADR 019: lIR as Universal Backend](../../doc/adr/019-lir-universal-backend.md) — Macro expansion happens before lIR emission
+- [ADR 020: Toolchain Architecture](../../doc/adr/020-toolchain-architecture.md) — Macros execute at compile time via JIT
+
 ## Overview
 
-Macros receive quoted forms (Cons cells) and return new forms. True homoiconicity.
+Macros receive quoted forms (Cons cells) and return new forms. True homoiconicity — the self-hosted compiler manipulates its own AST representation.
 
 ## Main Expander
 
@@ -71,3 +78,18 @@ Macros receive quoted forms (Cons cells) and return new forms. True homoiconicit
 - `` `(a ,b c)`` with b=2 -> `(a 2 c)`
 - `` `(a ,@xs c)`` with xs=(1 2) -> `(a 1 2 c)`
 - `(defmacro unless ...)` then `(unless cond a b)` expands
+- `(gensym)` produces unique symbols
+- Nested quasiquotes work correctly
+
+## Ordering
+
+Depends on: `value.liar`, `symbols.liar`, `reader.liar`
+Required by: `resolve.liar` (expansion happens before resolution)
+
+## Design Notes
+
+Macro expansion happens in a separate phase before name resolution. This means macros can introduce new bindings and forms that resolution will then process.
+
+For bootstrap, we may need to handle a limited set of core macros specially (like `defmacro` itself). Full macro evaluation requires the JIT, which requires the compiler, creating a circular dependency. Break this by interpreting a minimal subset.
+
+The `gensym` implementation needs a counter in the expansion context to ensure uniqueness across the entire compilation unit.

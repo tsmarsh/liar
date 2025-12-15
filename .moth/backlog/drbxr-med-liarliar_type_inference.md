@@ -2,9 +2,18 @@
 
 Create `lib/liarliar/infer.liar` - Hindley-Milner type inference with unification.
 
+**Priority:** HIGH (enables type-directed codegen per ADR 024)
+
+## Related ADRs
+
+- [ADR 024: Type-Directed Arithmetic Codegen](../../doc/adr/024-type-directed-arithmetic-codegen.md) — Type info drives codegen decisions
+- [ADR 017: Numeric Type Promotion](../../doc/adr/017-type-promotion.md) — Mixed-type arithmetic rules
+- [ADR 015: Numeric Primitives](../../doc/adr/015-numeric-primitives.md) — Primitive type definitions
+- [ADR 010: Closure Color Tracking](../../doc/adr/010-closure-color.md) — Infer closure threading color
+
 ## Overview
 
-Infer types for all expressions. Use type variables and unification to resolve constraints.
+Infer types for all expressions. Use type variables and unification to resolve constraints. Critical for ADR 024 — the more type info we have, the better code we can emit.
 
 ## Type Representation
 
@@ -95,3 +104,18 @@ Infer types for all expressions. Use type variables and unification to resolve c
 - `(fn (x) (+ x 1))` -> fn(int)->int
 - `(if true 1 2)` -> int
 - Type error: `(+ 1 "hello")`
+- Closure color inference (ADR 010)
+- Polymorphic function instantiation
+
+## Ordering
+
+Depends on: `value.liar`, `symbols.liar`, `resolve.liar`
+Required by: `codegen.liar`, `ownership.liar`
+
+## Design Notes
+
+For ADR 024 (type-directed codegen), the key insight is: when inference produces a concrete type like `i64`, codegen can emit primitive lIR `add`. When it produces a type variable or protocol type, codegen must emit dispatch.
+
+The type system should track closure color (ADR 010) as part of function types. A `let`-closure has different type than a `plet`-closure even if they have the same parameter/return types.
+
+Consider bidirectional type checking for better inference in presence of type annotations.

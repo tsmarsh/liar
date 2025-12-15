@@ -2,11 +2,18 @@
 
 Create `lib/liarliar/reader.liar` - a full reader written in liar itself.
 
-This is HIGH priority because it proves the toolchain works and produces native structures directly.
+This is **HIGH priority** because it proves the toolchain works and produces native structures directly.
+
+## Related ADRs
+
+- [ADR 019: lIR as Universal Backend](../../doc/adr/019-lir-universal-backend.md) — Reader output becomes lIR input
+- [ADR 020: Toolchain Architecture](../../doc/adr/020-toolchain-architecture.md) — Self-hosting bootstrap path
+- [ADR 015: Numeric Primitives](../../doc/adr/015-numeric-primitives.md) — Number literal parsing
+- [ADR 025: Explicit Arithmetic Names](../../doc/adr/025-explicit-arithmetic-names.md) — `+` is just a symbol, not special
 
 ## Overview
 
-A character-by-character parser using `load-byte` and `ptr+` that produces native tagged Cons cells.
+A character-by-character parser using `load-byte` and `ptr+` that produces native tagged Cons cells. This is the front door of the self-hosted compiler — source text goes in, AST comes out.
 
 ## Lexer State
 
@@ -24,16 +31,19 @@ A character-by-character parser using `load-byte` and `ptr+` that produces nativ
 
 ## Character Classification
 
+Per ADR 025, arithmetic operators (`+`, `-`, `*`, `/`) are just regular symbol characters with no special meaning. The standard prelude defines them as macros/functions.
+
 ```clojure
 (defun whitespace? (c) (or (= c 32) (= c 10) (= c 9) (= c 13)))
 (defun digit? (c) (and (>= c 48) (<= c 57)))
 (defun symbol-start? (c)
   (or (and (>= c 97) (<= c 122))   ;; a-z
       (and (>= c 65) (<= c 90))    ;; A-Z
-      (= c 95) (= c 43) (= c 45)   ;; _ + -
-      (= c 42) (= c 47) (= c 60)   ;; * / <
-      (= c 62) (= c 61) (= c 63)   ;; > = ?
-      (= c 33)))                    ;; !
+      (= c 95)                      ;; _
+      (= c 43) (= c 45)             ;; + - (just symbols per ADR 025)
+      (= c 42) (= c 47)             ;; * / (just symbols per ADR 025)
+      (= c 60) (= c 62) (= c 61)    ;; < > =
+      (= c 63) (= c 33)))           ;; ? !
 ```
 
 ## Main Parser
@@ -80,5 +90,19 @@ A character-by-character parser using `load-byte` and `ptr+` that produces nativ
 ## Dependencies
 
 - `lib/liarliar/value.liar` - Tagged value constructors
+- `lib/liarliar/symbols.liar` - Symbol interning
 - Builtins: `load-byte`, `ptr+`, `malloc`
 - `liar.io` - `slurp` for reading files
+
+## Ordering
+
+Depends on: `value.liar`, `symbols.liar`
+Required by: `main.liar` (entry point)
+
+## Design Notes
+
+The reader should be streaming-capable (not require entire file in memory) for future REPL integration. Current design with Lexer struct supports this.
+
+Error handling: accumulate errors with source positions rather than failing on first error. This enables better IDE integration later.
+
+Float parsing can be deferred — integer-only is sufficient for bootstrap.

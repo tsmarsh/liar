@@ -2,9 +2,16 @@
 
 Create `lib/liarliar/strings.liar` - efficient string building for code generation.
 
+**Priority:** HIGH (required for codegen output)
+
+## Related ADRs
+
+- [ADR 019: lIR as Universal Backend](../../doc/adr/019-lir-universal-backend.md) — Output is lIR text
+- [ADR 020: Toolchain Architecture](../../doc/adr/020-toolchain-architecture.md) — Compiler emits lIR source
+
 ## Overview
 
-StringBuilder for constructing lIR output. Needed because string concatenation would be O(n^2).
+StringBuilder for constructing lIR output. Needed because string concatenation would be O(n^2). The self-hosted compiler's output is lIR source text, so this is performance-critical.
 
 ## Data Structure
 
@@ -63,3 +70,15 @@ StringBuilder for constructing lIR output. Needed because string concatenation w
 - Append integers
 - Handle growth correctly
 - Final string is null-terminated
+- Large output (> initial capacity) works
+
+## Ordering
+
+Depends on: Builtins only (no liarliar deps)
+Required by: `codegen.liar`
+
+## Design Notes
+
+Initial capacity of 1024 is reasonable for small programs. For compiling the compiler itself, may need larger default or smarter growth strategy (1.5x instead of 2x to reduce memory pressure).
+
+Consider adding `sb-append-char` for single characters — avoids creating string for common case of emitting `(`, `)`, ` `.

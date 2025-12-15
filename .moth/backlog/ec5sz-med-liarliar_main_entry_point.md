@@ -2,9 +2,16 @@
 
 Create `lib/liarliar/main.liar` - orchestrate the compiler pipeline.
 
+**Priority:** HIGH (final integration point)
+
+## Related ADRs
+
+- [ADR 019: lIR as Universal Backend](../../doc/adr/019-lir-universal-backend.md) — Output is lIR
+- [ADR 020: Toolchain Architecture](../../doc/adr/020-toolchain-architecture.md) — Bootstrap path defined here
+
 ## Overview
 
-Wire together all compiler passes. Read file, compile, write lIR output.
+Wire together all compiler passes. Read file, compile, write lIR output. This is the self-hosted liar compiler.
 
 ## Main Function
 
@@ -124,3 +131,46 @@ lair lib/liarliar/main.liar.lir -o liarliar2
 ./liarliar2 test.liar > test2.lir
 diff test1.lir test2.lir  # Should be identical
 ```
+
+## Ordering
+
+Depends on: ALL other liarliar modules
+This is the final integration point.
+
+## Pipeline Order
+
+Per ADR 020, the compilation pipeline is:
+
+```
+source text
+    ↓ reader.liar
+AST (tagged Cons cells)
+    ↓ expand.liar
+expanded AST
+    ↓ resolve.liar
+resolved AST (with binding info)
+    ↓ infer.liar
+typed AST
+    ↓ closures.liar
+closure-converted AST
+    ↓ ownership.liar (optional for bootstrap)
+ownership-checked AST
+    ↓ codegen.liar
+lIR source text
+    ↓ lair (external)
+native executable
+```
+
+## Design Notes
+
+Error handling: accumulate errors from all passes rather than failing early. This gives users all errors at once, not one at a time.
+
+The compiler context (`CompilerCtx`) threads through all passes, accumulating:
+- Symbol table (interned symbols)
+- Type environment (inferred types)
+- Struct definitions
+- Protocol definitions
+- Macro definitions
+- Errors
+
+For bootstrap, ownership checking can be disabled or simplified. The priority is getting the compiler to compile itself — safety can be added incrementally.

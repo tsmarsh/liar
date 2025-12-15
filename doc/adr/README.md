@@ -26,3 +26,7 @@ This directory contains the Architecture Decision Records (ADRs) for liar.
 | [018](018-collections.md) | Collections — Persistent vs Conventional | Accepted |
 | [019](019-lir-universal-backend.md) | lIR as Universal Backend | Accepted |
 | [020](020-toolchain-architecture.md) | Toolchain Architecture | Accepted |
+| [021](021-lIR-safety-features.md) | lIR Safety Features | Accepted |
+| [023](023-compile-time-reflection.md) | Compile-Time Reflection | Accepted |
+| [024](024-type-directed-arithmetic-codegen.md) | Type-Directed Arithmetic Codegen | Proposed |
+| [025](025-explicit-arithmetic-names.md) | Explicit Arithmetic Names | Proposed |

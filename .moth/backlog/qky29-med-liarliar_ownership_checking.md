@@ -2,9 +2,18 @@
 
 Create `lib/liarliar/ownership.liar` - borrow checking for memory safety.
 
+**Priority:** MEDIUM (can bootstrap without full borrow checking initially)
+
+## Related ADRs
+
+- [ADR 004: Lexical Scope Ownership](../../doc/adr/004-lexical-ownership.md) — Ownership follows lexical scope
+- [ADR 005: Closures Own Captured State](../../doc/adr/005-closure-captures-ownership.md) — Closure capture ownership
+- [ADR 003: Mutable Reference with & Sigil](../../doc/adr/003-mutable-reference-sigil.md) — Borrow syntax
+- [ADR 007: Aliasing Allowed](../../doc/adr/007-aliasing-allowed.md) — When aliasing is permitted
+
 ## Overview
 
-Track ownership state per binding. Prevent use-after-move and aliasing violations.
+Track ownership state per binding. Prevent use-after-move and aliasing violations. This is what makes liar memory-safe without garbage collection.
 
 ## Ownership States
 
@@ -92,3 +101,26 @@ Track ownership state per binding. Prevent use-after-move and aliasing violation
 - Multiple immutable borrows -> OK
 - Mutable + immutable borrow -> error
 - Borrow escapes scope -> error
+- Closure capture moves value -> original binding invalid (ADR 005)
+- Aliased immutable values -> OK (ADR 007)
+
+## Ordering
+
+Depends on: `value.liar`, `resolve.liar`, `infer.liar`, `closures.liar`
+Required by: `codegen.liar` (optional for initial bootstrap)
+
+## Design Notes
+
+For bootstrap, ownership checking can be simplified or even disabled. The goal is to compile the compiler — we can trust ourselves to write correct code initially. Full ownership checking can be added incrementally.
+
+Key insight from ADR 007: aliasing of immutable values is always safe. This means most liar code (which is immutable by default per ADR 001) won't trigger ownership errors.
+
+The tricky cases are:
+1. Mutable captures in closures (ADR 005)
+2. Mutable borrows (`&x`)
+3. Values passed to functions (moved by default)
+
+Consider implementing in phases:
+1. Move tracking only (catch use-after-move)
+2. Borrow tracking (catch lifetime errors)
+3. Mutable borrow exclusivity (catch aliasing errors)

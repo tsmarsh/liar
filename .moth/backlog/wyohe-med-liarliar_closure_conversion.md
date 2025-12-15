@@ -2,12 +2,21 @@
 
 Create `lib/liarliar/closures.liar` - analyze captures and lift lambdas.
 
+**Priority:** HIGH (closures are core to liar's programming model)
+
+## Related ADRs
+
+- [ADR 005: Closures Own Captured State](../../doc/adr/005-closure-captures-ownership.md) — Capture semantics
+- [ADR 010: Closure Color Tracking](../../doc/adr/010-closure-color.md) — let vs plet closure distinction
+- [ADR 004: Lexical Scope Ownership](../../doc/adr/004-lexical-ownership.md) — Ownership model for captures
+
 ## Overview
 
 1. Find free variables in lambda bodies
-2. Determine capture mode (move/borrow/clone)
+2. Determine capture mode (move/borrow/clone) per ADR 005
 3. Generate environment structs
 4. Lift lambdas to top-level functions
+5. Track closure color (let/plet/pure) per ADR 010
 
 ## Free Variable Detection
 
@@ -94,7 +103,25 @@ Create `lib/liarliar/closures.liar` - analyze captures and lift lambdas.
 
 ## Test Cases
 
-- `(fn (x) (+ x 1))` - No captures
-- `(let ((y 1)) (fn (x) (+ x y)))` - Captures y
-- Returning closure -> heap allocated
-- Local closure -> stack allocated
+- `(fn (x) (+ x 1))` - No captures (pure)
+- `(let ((y 1)) (fn (x) (+ x y)))` - Captures y (let-closure)
+- `(plet ((y (atom 0))) (fn (x) ...))` - plet-closure
+- Returning closure -> heap allocated (escapes)
+- Local closure -> stack allocated (doesn't escape)
+- Mutable capture -> move semantics (ADR 005)
+
+## Ordering
+
+Depends on: `value.liar`, `symbols.liar`, `resolve.liar`
+Required by: `codegen.liar`
+
+## Design Notes
+
+Per ADR 005, when a closure captures a mutable value and escapes, the value moves into the closure. The original binding becomes invalid. This must be tracked and enforced.
+
+Per ADR 010, closure color flows through function return types. A function returning a let-closure has a different type signature than one returning a plet-closure, even if parameter/return types match.
+
+Escape analysis is the key optimization. Non-escaping closures can:
+- Stack allocate the environment struct
+- Use borrow instead of move for captures
+- Potentially be inlined at call sites
