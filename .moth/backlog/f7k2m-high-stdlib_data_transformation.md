@@ -276,45 +276,24 @@ For nested data access (useful for AST manipulation):
 ((partial1 add 10) 5)  ;; => 15
 ```
 
-## New Protocols to Consider
+## Protocols (from p3k9w - DONE)
 
-Some functions might be better as protocol methods for type-specific optimization:
+The following protocols are now available from p3k9w:
+- `Lookup` (get, get-default)
+- `Associative` (assoc, dissoc, contains-key?)
+- `Seqable` (seq)
+- `Emptyable` (empty)
+- `Reversible` (rseq)
 
-```lisp
-;; Zippable - types that can be zipped
-(defprotocol Zippable
-  (zip [self other])
-  (zip-with [self other f]))
-
-;; Flattenable - types that can be flattened
-(defprotocol Flattenable
-  (flatten [self]))
-
-;; Partitionable - types that support chunking
-(defprotocol Partitionable
-  (partition [self n])
-  (partition-by [self f]))
-
-;; Associative - types with key-value access (maps, vectors by index)
-(defprotocol Associative
-  (get [self key])
-  (assoc [self key val])
-  (dissoc [self key])
-  (keys [self])
-  (vals [self]))
-
-;; NestedAssociative - nested access
-(defprotocol NestedAssociative
-  (get-in [self keys])
-  (assoc-in [self keys val])
-  (update-in [self keys f]))
-```
-
-Default implementations can be provided via `extend-protocol-default` for any Seq, just like `Countable` defaults to walking the sequence.
+Functions like `get-in`, `assoc-in`, `update-in` can be built on these.
 
 ## Ordering
 
-Depends on: `liar.seq` (Cons, protocols), `liar.hashmap`
+Depends on:
+- p3k9w (protocol improvements) - **DONE**
+- n5nax (instance? builtin) - needed for cons?, flatten, mapcat
+- mp42s (variadic macros) - needed for threading macros ->, ->>
+
 Required by: `liarliar` (self-hosted compiler)
 
 ## Implementation Notes
