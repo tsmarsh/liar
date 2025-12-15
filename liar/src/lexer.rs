@@ -84,7 +84,8 @@ pub enum TokenKind {
     Extern, // extern
 
     // Module system keywords
-    Ns, // ns (namespace declaration)
+    Ns,         // ns (namespace declaration)
+    WhenTarget, // when-target (conditional compilation)
 
     // Iterator keywords
     Iter,    // iter (create iterator)
@@ -478,6 +479,7 @@ impl<'a> Lexer<'a> {
             "extern" => TokenKind::Extern,
             // Module system keywords
             "ns" => TokenKind::Ns,
+            "when-target" => TokenKind::WhenTarget,
             // Iterator keywords
             "iter" => TokenKind::Iter,
             "collect" => TokenKind::Collect,

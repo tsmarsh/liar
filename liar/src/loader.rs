@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::ast::{Item, Program, RequireSpec};
+use crate::ast::{Item, Program, RequireSpec, Target};
 use crate::error::{CompileError, Result};
 use crate::parser::Parser;
 use crate::span::Span;
@@ -203,6 +203,62 @@ pub fn compile_file(
     } else {
         // No namespace - compile as a standalone file
         crate::compile(&source)
+    }
+}
+
+/// Compile a file with module resolution for a specific target
+///
+/// Loads the file and all its dependencies, then compiles them together
+/// with target-aware conditional compilation.
+pub fn compile_file_with_target(
+    path: &Path,
+    lib_paths: &[PathBuf],
+    target: Target,
+) -> std::result::Result<String, Vec<CompileError>> {
+    // Build search paths: file's directory + lib paths
+    let mut search_paths = Vec::new();
+    if let Some(parent) = path.parent() {
+        search_paths.push(parent.to_path_buf());
+    }
+    search_paths.extend(lib_paths.iter().cloned());
+
+    // Read and parse the main file
+    let source = fs::read_to_string(path).map_err(|e| {
+        vec![CompileError::resolve(
+            Span::new(0, 0),
+            format!("Failed to read {}: {}", path.display(), e),
+        )]
+    })?;
+
+    let mut parser = Parser::new(&source).map_err(|e| vec![e])?;
+    let program = parser.parse_program().map_err(|e| vec![e])?;
+
+    // Check if this file has a namespace
+    let namespace = ModuleLoader::extract_namespace(&program);
+
+    if let Some(ns) = namespace {
+        // Load dependencies via ModuleLoader
+        let mut loader = ModuleLoader::new(search_paths);
+
+        // Pre-seed the cache with the already-parsed main file
+        loader.cache.insert(ns.clone(), program.clone());
+
+        // Load dependencies first
+        loader
+            .load_dependencies(&program, Span::new(0, 0))
+            .map_err(|e| vec![e])?;
+
+        // Add main module to load_order AFTER dependencies
+        loader.load_order.push(ns);
+
+        // Get merged program
+        let merged = loader.into_merged_program();
+
+        // Compile with target
+        crate::compile_program_with_target(merged, target)
+    } else {
+        // No namespace - compile as a standalone file with target
+        crate::compile_with_target(&source, target)
     }
 }
 

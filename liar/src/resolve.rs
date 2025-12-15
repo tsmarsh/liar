@@ -485,6 +485,9 @@ impl Resolver {
                 Item::Extern(ext) => {
                     self.define(&ext.name.node, ext.name.span, BindingKind::ExternFn);
                 }
+                Item::WhenTarget(_) => {
+                    // WhenTarget should be flattened before name resolution
+                }
             }
         }
 
@@ -550,6 +553,9 @@ impl Resolver {
             }
             Item::Namespace(_) => {
                 // Namespace declarations are handled in a separate phase
+            }
+            Item::WhenTarget(_) => {
+                // WhenTarget should be flattened before name resolution
             }
         }
     }

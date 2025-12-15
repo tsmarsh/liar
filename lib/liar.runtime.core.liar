@@ -1,0 +1,230 @@
+(ns liar.runtime.core
+  (:require [liar.core :refer :all]))
+
+;; liar Runtime Core
+;;
+;; This module implements the platform-independent parts of the async runtime:
+;; - Task state management
+;; - Task queue
+;; - Executor loop
+;;
+;; The platform-specific reactor is provided by liar.runtime.linux or
+;; liar.runtime.macos, selected via when-target conditional compilation.
+
+;; ============================================================
+;; Memory Management (libc)
+;; ============================================================
+
+(extern malloc ptr (i64))
+(extern free void (ptr))
+(extern memset ptr (ptr i32 i64))
+
+;; ============================================================
+;; Task States
+;; ============================================================
+
+;; Task state constants
+(def TASK_READY 0)
+(def TASK_WAITING 1)
+(def TASK_COMPLETED 2)
+
+;; Poll result constants
+(def POLL_READY 1)
+(def POLL_PENDING 0)
+
+;; ============================================================
+;; Task Structure
+;; ============================================================
+
+;; A task represents a suspended async computation.
+;;
+;; Fields:
+;;   state: TASK_READY | TASK_WAITING | TASK_COMPLETED
+;;   pollable: ptr to the Pollable being polled
+;;   poll_fn: function ptr that polls the Pollable
+;;   result: i64 result value when completed
+;;   next: ptr to next task in queue (linked list)
+;;   fd: file descriptor if waiting on I/O (or -1)
+
+(defstruct Task
+  (state: i64
+   pollable: ptr
+   poll-fn: ptr
+   result: i64
+   next: ptr
+   fd: i64))
+
+;; ============================================================
+;; Task Queue
+;; ============================================================
+
+;; Simple FIFO queue for ready tasks
+;;
+;; Fields:
+;;   head: ptr to first task
+;;   tail: ptr to last task
+
+(defstruct TaskQueue
+  (head: ptr
+   tail: ptr))
+
+;; Create a new empty task queue
+(defun task-queue-new () -> ptr
+  (let ((q (malloc 16)))
+    (store-byte q 0 0)   ; head = null
+    (store-byte (ptr+ q 8) 0 0) ; tail = null
+    q))
+
+;; Check if queue is empty
+(defun task-queue-empty? (q: ptr) -> i64
+  (= (load-byte q 0) 0))
+
+;; Push a task to the back of the queue
+(defun task-queue-push (q: ptr task: ptr)
+  (let ((tail-ptr (ptr+ q 8)))
+    (if (task-queue-empty? q)
+        (do
+          (store-byte q 0 task)       ; head = task
+          (store-byte tail-ptr 0 task)) ; tail = task
+        (do
+          ;; Link current tail to new task
+          (let ((old-tail (load-byte tail-ptr 0)))
+            (store-byte (ptr+ old-tail 32) 0 task)) ; old-tail.next = task
+          (store-byte tail-ptr 0 task))))) ; tail = task
+
+;; Pop a task from the front of the queue
+;; Returns nil if empty
+(defun task-queue-pop (q: ptr) -> ptr
+  (if (task-queue-empty? q)
+      nil
+      (let ((head (load-byte q 0))
+            (next (load-byte (ptr+ head 32) 0)))
+        (store-byte q 0 next) ; head = head.next
+        (if (= next 0)
+            (store-byte (ptr+ q 8) 0 0) ; tail = null if now empty
+            nil)
+        head)))
+
+;; ============================================================
+;; Waker
+;; ============================================================
+
+;; A Waker is used to wake up a task when I/O is ready.
+;; It holds a pointer to the task to wake.
+
+(defstruct Waker
+  (task: ptr))
+
+;; Create a waker for a task
+(defun waker-new (task: ptr) -> ptr
+  (let ((w (malloc 8)))
+    (store-byte w 0 task)
+    w))
+
+;; Wake a task by marking it ready
+(defun waker-wake (w: ptr)
+  (let ((task (load-byte w 0)))
+    (if (> task 0)
+        (store-byte task 0 TASK_READY) ; task.state = READY
+        nil)))
+
+;; ============================================================
+;; Executor
+;; ============================================================
+
+;; Global executor state
+;; In a real implementation, this would be thread-local or passed explicitly
+
+(defstruct Executor
+  (ready-queue: ptr
+   reactor: ptr
+   running: i64))
+
+;; Create a new executor
+(defun executor-new (reactor: ptr) -> ptr
+  (let ((ex (malloc 24)))
+    (store-byte ex 0 (task-queue-new)) ; ready-queue
+    (store-byte (ptr+ ex 8) 0 reactor) ; reactor
+    (store-byte (ptr+ ex 16) 0 1)      ; running = true
+    ex))
+
+;; Spawn a new task on the executor
+(defun executor-spawn (ex: ptr pollable: ptr poll-fn: ptr) -> ptr
+  (let ((task (malloc 48)))  ; sizeof(Task) = 6 * 8 = 48
+    (store-byte task 0 TASK_READY)        ; state = READY
+    (store-byte (ptr+ task 8) 0 pollable)  ; pollable
+    (store-byte (ptr+ task 16) 0 poll-fn)  ; poll-fn
+    (store-byte (ptr+ task 24) 0 0)        ; result = 0
+    (store-byte (ptr+ task 32) 0 0)        ; next = null
+    (store-byte (ptr+ task 40) 0 -1)       ; fd = -1 (not waiting on I/O)
+    ;; Add to ready queue
+    (task-queue-push (load-byte ex 0) task)
+    task))
+
+;; Run the executor until all tasks complete
+;; This is the main event loop
+(defun executor-run (ex: ptr)
+  (let ((ready-queue (load-byte ex 0))
+        (reactor (load-byte (ptr+ ex 8) 0)))
+    ;; Main loop
+    (executor-loop ex ready-queue reactor)))
+
+;; Executor main loop - polls tasks and reactor
+(defun executor-loop (ex: ptr ready-queue: ptr reactor: ptr)
+  (if (= (load-byte (ptr+ ex 16) 0) 0) ; running == false
+      nil
+      (do
+        ;; Process all ready tasks
+        (executor-process-ready ex ready-queue)
+        ;; Poll reactor for I/O events (implemented by platform-specific module)
+        ;; reactor-poll will call waker-wake for ready fds
+        ;; Continue loop
+        (executor-loop ex ready-queue reactor))))
+
+;; Process ready tasks
+(defun executor-process-ready (ex: ptr ready-queue: ptr)
+  (let ((task (task-queue-pop ready-queue)))
+    (if (= task 0)
+        nil ; No more ready tasks
+        (do
+          (executor-poll-task ex task)
+          (executor-process-ready ex ready-queue)))))
+
+;; Poll a single task
+(defun executor-poll-task (ex: ptr task: ptr)
+  (let ((pollable (load-byte (ptr+ task 8) 0))
+        (poll-fn (load-byte (ptr+ task 16) 0))
+        (waker (waker-new task)))
+    ;; Call poll function: poll-fn(pollable, waker)
+    ;; Result: > 0 = ready with value, 0 = pending
+    (let ((result (call-indirect poll-fn pollable waker)))
+      (if (> result 0)
+          (do
+            ;; Task completed
+            (store-byte task 0 TASK_COMPLETED) ; state = COMPLETED
+            (store-byte (ptr+ task 24) 0 result)) ; result = result
+          (do
+            ;; Task still pending - mark as waiting
+            (store-byte task 0 TASK_WAITING))))))
+
+;; Block until a specific task completes
+(defun executor-block-on (ex: ptr task: ptr) -> i64
+  (executor-block-loop ex task))
+
+(defun executor-block-loop (ex: ptr task: ptr) -> i64
+  (let ((state (load-byte task 0)))
+    (if (= state TASK_COMPLETED)
+        (load-byte (ptr+ task 24) 0) ; return result
+        (do
+          ;; Run executor for a bit
+          (executor-run-step ex)
+          (executor-block-loop ex task)))))
+
+;; Run one iteration of the executor
+(defun executor-run-step (ex: ptr)
+  (let ((ready-queue (load-byte ex 0))
+        (reactor (load-byte (ptr+ ex 8) 0)))
+    ;; Process ready tasks
+    (executor-process-ready ex ready-queue)
+    ;; Poll reactor
+    nil))

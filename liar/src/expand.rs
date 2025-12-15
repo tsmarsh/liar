@@ -14,7 +14,7 @@ use std::collections::HashMap;
 #[cfg(feature = "jit-macros")]
 use std::cell::RefCell;
 
-use crate::ast::{Defstruct, Expr, Item, Program};
+use crate::ast::{Defstruct, Expr, Item, Program, Target};
 use crate::error::{CompileError, Result};
 use crate::eval::{Env, Evaluator, MacroDef, StructInfo, Value};
 use crate::span::{Span, Spanned};
@@ -26,21 +26,46 @@ use inkwell::context::Context;
 
 /// Convenience function to expand macros in a program
 pub fn expand(program: &mut Program) -> Result<()> {
-    Expander::new().expand_program(program, None)
+    expand_with_target(program, Target::host())
+}
+
+/// Expand macros with a specific target for conditional compilation
+pub fn expand_with_target(program: &mut Program, target: Target) -> Result<()> {
+    Expander::new(target).expand_program(program, None)
 }
 
 /// Expand macros with access to source (enables JIT when feature is enabled)
 #[cfg(not(feature = "jit-macros"))]
 pub fn expand_with_source(program: &mut Program, _source: &str) -> Result<()> {
-    Expander::new().expand_program(program, None)
+    expand_with_source_and_target(program, _source, Target::host())
+}
+
+/// Expand macros with access to source and specific target
+#[cfg(not(feature = "jit-macros"))]
+pub fn expand_with_source_and_target(
+    program: &mut Program,
+    _source: &str,
+    target: Target,
+) -> Result<()> {
+    Expander::new(target).expand_program(program, None)
 }
 
 /// Expand macros with access to source (JIT-enabled version)
 #[cfg(feature = "jit-macros")]
 pub fn expand_with_source(program: &mut Program, source: &str) -> Result<()> {
+    expand_with_source_and_target(program, source, Target::host())
+}
+
+/// Expand macros with access to source and specific target (JIT-enabled version)
+#[cfg(feature = "jit-macros")]
+pub fn expand_with_source_and_target(
+    program: &mut Program,
+    source: &str,
+    target: Target,
+) -> Result<()> {
     // Create LLVM context that lives for the duration of expansion
     let context = Context::create();
-    let mut expander = Expander::new();
+    let mut expander = Expander::new(target);
     expander.expand_program_with_jit(program, source, &context)
 }
 
@@ -48,19 +73,21 @@ pub fn expand_with_source(program: &mut Program, source: &str) -> Result<()> {
 pub struct Expander {
     macros: HashMap<String, MacroDef>,
     evaluator: Evaluator,
+    target: Target,
 }
 
 impl Default for Expander {
     fn default() -> Self {
-        Self::new()
+        Self::new(Target::host())
     }
 }
 
 impl Expander {
-    pub fn new() -> Self {
+    pub fn new(target: Target) -> Self {
         Self {
             macros: HashMap::new(),
             evaluator: Evaluator::new(),
+            target,
         }
     }
 
@@ -108,7 +135,10 @@ impl Expander {
     /// Expand all macros in a program (non-JIT version)
     #[allow(unused_variables)]
     pub fn expand_program(&mut self, program: &mut Program, source: Option<&str>) -> Result<()> {
-        // First, collect all macro definitions
+        // First, filter and flatten when-target blocks based on current target
+        self.flatten_when_target(program);
+
+        // Collect all macro definitions
         self.collect_macros(program);
 
         // Expand macros in all items
@@ -124,6 +154,28 @@ impl Expander {
         Ok(())
     }
 
+    /// Flatten when-target blocks: include items if target matches, drop otherwise
+    fn flatten_when_target(&self, program: &mut Program) {
+        let mut new_items = Vec::new();
+
+        for item in std::mem::take(&mut program.items) {
+            match item.node {
+                Item::WhenTarget(ref when_target) => {
+                    if when_target.target == self.target {
+                        // Target matches: include all items from this block
+                        new_items.extend(when_target.items.clone());
+                    }
+                    // Target doesn't match: drop the entire block
+                }
+                _ => {
+                    new_items.push(item);
+                }
+            }
+        }
+
+        program.items = new_items;
+    }
+
     /// Expand all macros with JIT support for calling user-defined functions
     #[cfg(feature = "jit-macros")]
     pub fn expand_program_with_jit(
@@ -132,7 +184,10 @@ impl Expander {
         source: &str,
         context: &Context,
     ) -> Result<()> {
-        // First, collect all macro definitions
+        // First, filter and flatten when-target blocks based on current target
+        self.flatten_when_target(program);
+
+        // Collect all macro definitions
         self.collect_macros(program);
 
         // Register structs
@@ -211,6 +266,10 @@ impl Expander {
             }
             Item::Namespace(_) => {
                 // Namespace declarations have no expressions to expand
+            }
+            Item::WhenTarget(_) => {
+                // WhenTarget should have been flattened before this point
+                // This is unreachable if flatten_when_target was called first
             }
         }
         Ok(())
@@ -512,7 +571,8 @@ fn expand_item_with_jit(item: &mut Spanned<Item>, jit_eval: &JitEvaluator) -> Re
         | Item::Defstruct(_)
         | Item::Defprotocol(_)
         | Item::Extern(_)
-        | Item::Namespace(_) => {}
+        | Item::Namespace(_)
+        | Item::WhenTarget(_) => {}
         Item::ExtendProtocol(extend) => {
             for method in &mut extend.implementations {
                 expand_expr_with_jit(&mut method.body, jit_eval)?;
@@ -971,7 +1031,7 @@ mod tests {
     fn parse_and_expand(source: &str) -> Result<Program> {
         let mut parser = Parser::new(source)?;
         let mut program = parser.parse_program()?;
-        let mut expander = Expander::new();
+        let mut expander = Expander::new(Target::host());
         expander.expand_program(&mut program, Some(source))?;
         Ok(program)
     }
@@ -1200,7 +1260,7 @@ mod tests {
 
         // Use the JIT-aware expansion
         let context = inkwell::context::Context::create();
-        let mut expander = Expander::new();
+        let mut expander = Expander::new(Target::host());
         expander
             .expand_program_with_jit(&mut program, source, &context)
             .unwrap();
@@ -1227,7 +1287,7 @@ mod tests {
 
         // Use the JIT-aware expansion
         let context = inkwell::context::Context::create();
-        let mut expander = Expander::new();
+        let mut expander = Expander::new(Target::host());
         expander
             .expand_program_with_jit(&mut program, source, &context)
             .unwrap();
@@ -1253,7 +1313,7 @@ mod tests {
         let mut program = parser.parse_program().unwrap();
 
         let context = inkwell::context::Context::create();
-        let mut expander = Expander::new();
+        let mut expander = Expander::new(Target::host());
         expander
             .expand_program_with_jit(&mut program, source, &context)
             .unwrap();

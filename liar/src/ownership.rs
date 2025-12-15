@@ -436,6 +436,9 @@ impl BorrowChecker {
             Item::Namespace(_) => {
                 // Namespace declarations have no body
             }
+            Item::WhenTarget(_) => {
+                // WhenTarget should be flattened before ownership checking
+            }
         }
     }
 

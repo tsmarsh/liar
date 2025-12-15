@@ -295,6 +295,8 @@ impl ClosureConverter {
             Item::Defmacro(m) => Item::Defmacro(m),
             Item::Extern(e) => Item::Extern(e),
             Item::Namespace(ns) => Item::Namespace(ns),
+            // WhenTarget should be flattened before closure conversion
+            Item::WhenTarget(wt) => Item::WhenTarget(wt),
         };
         Ok(Spanned::new(node, span))
     }

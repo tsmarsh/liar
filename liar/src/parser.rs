@@ -1,6 +1,6 @@
 //! Parser - S-expression parsing to AST
 
-use crate::ast::*;
+use crate::ast::{Target, WhenTarget, *};
 use crate::error::{CompileError, Result};
 use crate::lexer::{Lexer, Token, TokenKind};
 use crate::span::{Span, Spanned};
@@ -82,9 +82,13 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Item::Namespace(self.parse_namespace()?)
             }
+            TokenKind::WhenTarget => {
+                self.advance();
+                Item::WhenTarget(self.parse_when_target()?)
+            }
             _ => return Err(CompileError::parse(
                 self.current_span(),
-                "expected top-level form: ns, defun, def, defstruct, defprotocol, extend-protocol, defmacro, or extern",
+                "expected top-level form: ns, defun, def, defstruct, defprotocol, extend-protocol, defmacro, extern, or when-target",
             )),
         };
 
@@ -383,6 +387,40 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Namespace { name, requires })
+    }
+
+    /// Parse when-target conditional compilation: (when-target :linux item1 item2 ...)
+    fn parse_when_target(&mut self) -> Result<WhenTarget> {
+        // Expect a keyword for the target platform
+        let target = match &self.peek().kind {
+            TokenKind::Keyword(k) => {
+                let target = Target::parse(k).ok_or_else(|| {
+                    CompileError::parse(
+                        self.current_span(),
+                        format!(
+                            "unknown target '{}', expected :linux, :macos, :windows, or :wasi",
+                            k
+                        ),
+                    )
+                })?;
+                self.advance();
+                target
+            }
+            _ => {
+                return Err(CompileError::parse(
+                    self.current_span(),
+                    "expected target keyword (:linux, :macos, :windows, or :wasi)",
+                ))
+            }
+        };
+
+        // Parse contained items until closing paren
+        let mut items = Vec::new();
+        while !self.check(TokenKind::RParen) {
+            items.push(self.parse_item()?);
+        }
+
+        Ok(WhenTarget { target, items })
     }
 
     /// Parse a require spec: [module], [module :as alias], [module :refer [a b]], [module :refer :all]

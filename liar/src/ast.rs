@@ -147,6 +147,8 @@ pub enum Item {
     Defmacro(Defmacro),
     /// External function declaration: (extern name ret-type (param-types...))
     Extern(Extern),
+    /// Conditional compilation: (when-target :linux items...)
+    WhenTarget(WhenTarget),
 }
 
 /// Function definition
@@ -243,6 +245,57 @@ pub struct Extern {
     pub return_type: Spanned<Type>,
     pub param_types: Vec<Spanned<Type>>,
     pub varargs: bool,
+}
+
+/// Target platform for conditional compilation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Target {
+    Linux,
+    Macos,
+    Windows,
+    Wasi,
+}
+
+impl Target {
+    /// Parse a target from a keyword string (without the colon)
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "linux" => Some(Target::Linux),
+            "macos" => Some(Target::Macos),
+            "windows" => Some(Target::Windows),
+            "wasi" => Some(Target::Wasi),
+            _ => None,
+        }
+    }
+
+    /// Get the target name as a string
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Target::Linux => "linux",
+            Target::Macos => "macos",
+            Target::Windows => "windows",
+            Target::Wasi => "wasi",
+        }
+    }
+
+    /// Detect the current host target
+    pub fn host() -> Self {
+        #[cfg(target_os = "linux")]
+        return Target::Linux;
+        #[cfg(target_os = "macos")]
+        return Target::Macos;
+        #[cfg(target_os = "windows")]
+        return Target::Windows;
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        return Target::Linux; // fallback
+    }
+}
+
+/// Conditional compilation block: (when-target :linux item1 item2 ...)
+#[derive(Debug, Clone)]
+pub struct WhenTarget {
+    pub target: Target,
+    pub items: Vec<Spanned<Item>>,
 }
 
 /// Type annotation

@@ -244,6 +244,10 @@ fn generate_item(
             // Namespace declarations are metadata for module loading
             Ok(None)
         }
+        Item::WhenTarget(_) => {
+            // WhenTarget should be flattened before codegen
+            Ok(None)
+        }
     }
 }
 

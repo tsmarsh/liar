@@ -1,5 +1,6 @@
 //! liarc - liar compiler binary
 
+use liar::Target;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -8,8 +9,10 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: liarc <file.liar> [--lib <path>]...");
+        eprintln!("Usage: liarc <file.liar> [--lib <path>]... [--target <platform>]");
         eprintln!("       liarc -e <expression>");
+        eprintln!();
+        eprintln!("Targets: linux, macos, windows, wasi");
         process::exit(1);
     }
 
@@ -28,14 +31,14 @@ fn main() {
             }
         }
     } else {
-        // Compile file with optional library paths
+        // Compile file with optional library paths and target
         let path = &args[1];
 
-        // Parse --lib options
-        let lib_paths = parse_lib_paths(&args[2..]);
+        // Parse options
+        let (lib_paths, target) = parse_options(&args[2..]);
 
-        // Check if the file uses namespaces by trying to compile with module resolution
-        let result = liar::compile_file(Path::new(path), &lib_paths);
+        // Compile with target-aware module resolution
+        let result = liar::loader::compile_file_with_target(Path::new(path), &lib_paths, target);
 
         match result {
             Ok(lir) => print!("{}", lir),
@@ -49,10 +52,12 @@ fn main() {
     }
 }
 
-/// Parse --lib arguments from command line
-fn parse_lib_paths(args: &[String]) -> Vec<PathBuf> {
+/// Parse --lib and --target arguments from command line
+fn parse_options(args: &[String]) -> (Vec<PathBuf>, Target) {
     let mut lib_paths = Vec::new();
+    let mut target = Target::host();
     let mut i = 0;
+
     while i < args.len() {
         if args[i] == "--lib" {
             if i + 1 < args.len() {
@@ -60,6 +65,20 @@ fn parse_lib_paths(args: &[String]) -> Vec<PathBuf> {
                 i += 2;
             } else {
                 eprintln!("Error: --lib requires a path argument");
+                process::exit(1);
+            }
+        } else if args[i] == "--target" {
+            if i + 1 < args.len() {
+                target = Target::parse(&args[i + 1]).unwrap_or_else(|| {
+                    eprintln!(
+                        "Error: unknown target '{}', expected: linux, macos, windows, wasi",
+                        &args[i + 1]
+                    );
+                    process::exit(1);
+                });
+                i += 2;
+            } else {
+                eprintln!("Error: --target requires a platform argument");
                 process::exit(1);
             }
         } else {
@@ -73,5 +92,5 @@ fn parse_lib_paths(args: &[String]) -> Vec<PathBuf> {
         lib_paths.push(default_lib);
     }
 
-    lib_paths
+    (lib_paths, target)
 }

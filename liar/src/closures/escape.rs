@@ -89,7 +89,8 @@ impl EscapeAnalyzer {
             | Item::Defprotocol(_)
             | Item::Defmacro(_)
             | Item::Extern(_)
-            | Item::Namespace(_) => {}
+            | Item::Namespace(_)
+            | Item::WhenTarget(_) => {}
         }
     }
 

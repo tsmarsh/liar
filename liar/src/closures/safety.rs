@@ -69,6 +69,7 @@ impl<'a> ThreadSafetyChecker<'a> {
             Item::Defmacro(_) => {}
             Item::Extern(_) => {}
             Item::Namespace(_) => {}
+            Item::WhenTarget(_) => {}
         }
     }
 

@@ -1,0 +1,108 @@
+(ns liar.runtime2
+  (:require [liar.core :refer :all]
+            [liar.runtime.core :refer :all]))
+
+;; liar Runtime v2 - Self-hosted Async Runtime
+;;
+;; This module provides the unified interface to the async runtime,
+;; selecting the appropriate reactor implementation based on target platform.
+;;
+;; The executor and task queue are platform-independent (in liar.runtime.core).
+;; Only the reactor syscalls differ between platforms.
+
+;; ============================================================
+;; Platform-Specific Reactor Import
+;; ============================================================
+
+;; Import the Linux reactor when targeting Linux
+(when-target :linux
+  (extern epoll_create1 i32 (i32))
+  (extern epoll_ctl i32 (i32 i32 i32 ptr))
+  (extern epoll_wait i32 (i32 ptr i32 i32)))
+
+;; Import the macOS reactor when targeting macOS
+(when-target :macos
+  (extern kqueue i32 ())
+  (extern kevent i32 (i32 ptr i32 ptr i32 ptr)))
+
+;; Common libc functions
+(extern close i32 (i32))
+(extern fcntl i32 (i32 i32 ...))
+(extern read i64 (i32 ptr i64))
+(extern write i64 (i32 ptr i64))
+
+;; ============================================================
+;; Global Runtime State
+;; ============================================================
+
+;; The global executor and reactor
+;; Initialized by runtime-init
+
+(def global-executor nil)
+(def global-reactor nil)
+
+;; ============================================================
+;; Runtime Initialization
+;; ============================================================
+
+;; Initialize the runtime
+;; Must be called before using any async operations
+;; returns: 0 on success, -1 on error
+(defun runtime-init () -> i32
+  0) ;; TODO: Create reactor and executor
+
+;; Shutdown the runtime
+(defun runtime-shutdown ()
+  nil) ;; TODO: Cleanup
+
+;; ============================================================
+;; Task Spawning API
+;; ============================================================
+
+;; Spawn a new async task
+;; pollable: ptr to the Pollable being polled
+;; poll_fn: function pointer fn(pollable, waker) -> i64
+;; returns: ptr to Task
+(defun spawn (pollable: ptr poll-fn: ptr) -> ptr
+  nil) ;; TODO: Use global executor
+
+;; Block until a task completes
+;; task: ptr to Task
+;; returns: result value
+(defun block-on (task: ptr) -> i64
+  0) ;; TODO: Use global executor
+
+;; ============================================================
+;; Async I/O Operations
+;; ============================================================
+
+;; Create an async read future
+;; fd: file descriptor
+;; buf: buffer pointer
+;; len: max bytes to read
+;; returns: ptr to ReadFuture
+(defun async-read (fd: i64 buf: ptr len: i64) -> ptr
+  nil) ;; TODO
+
+;; Create an async write future
+;; fd: file descriptor
+;; buf: buffer pointer
+;; len: bytes to write
+;; returns: ptr to WriteFuture
+(defun async-write (fd: i64 buf: ptr len: i64) -> ptr
+  nil) ;; TODO
+
+;; ============================================================
+;; Blocking I/O Wrappers
+;; ============================================================
+
+;; These provide synchronous blocking semantics over async operations.
+;; They spin-poll until the operation completes.
+
+;; Blocking read
+(defun read-blocking (fd: i64 buf: ptr len: i64) -> i64
+  (read fd buf len))
+
+;; Blocking write
+(defun write-blocking (fd: i64 buf: ptr len: i64) -> i64
+  (write fd buf len))

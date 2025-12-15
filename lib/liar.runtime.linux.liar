@@ -1,0 +1,209 @@
+(ns liar.runtime.linux
+  (:require [liar.core :refer :all]
+            [liar.runtime.core :refer :all]))
+
+;; liar Runtime - Linux Reactor (epoll)
+;;
+;; This module implements the Linux-specific reactor using epoll.
+;; It is only included when compiling with --target linux.
+
+;; ============================================================
+;; epoll Constants
+;; ============================================================
+
+;; epoll_create1 flags
+(def EPOLL_CLOEXEC 524288)  ; 0x80000 - O_CLOEXEC
+
+;; epoll events
+(def EPOLLIN 1)      ; Read ready
+(def EPOLLOUT 4)     ; Write ready
+(def EPOLLERR 8)     ; Error
+(def EPOLLHUP 16)    ; Hang up
+(def EPOLLET 2147483648)  ; Edge triggered (1 << 31)
+(def EPOLLONESHOT 1073741824)  ; One shot (1 << 30)
+
+;; epoll_ctl operations
+(def EPOLL_CTL_ADD 1)
+(def EPOLL_CTL_DEL 2)
+(def EPOLL_CTL_MOD 3)
+
+;; Error codes
+(def EAGAIN 11)
+(def EWOULDBLOCK 11)  ; Same as EAGAIN on Linux
+(def EINPROGRESS 115)
+
+;; ============================================================
+;; epoll Syscall FFI
+;; ============================================================
+
+;; Create an epoll file descriptor
+;; flags: EPOLL_CLOEXEC or 0
+;; returns: epoll fd on success, -1 on error
+(extern epoll_create1 i32 (i32))
+
+;; Control an epoll instance
+;; epfd: epoll file descriptor
+;; op: EPOLL_CTL_ADD, EPOLL_CTL_DEL, or EPOLL_CTL_MOD
+;; fd: file descriptor to operate on
+;; event: pointer to epoll_event struct
+;; returns: 0 on success, -1 on error
+(extern epoll_ctl i32 (i32 i32 i32 ptr))
+
+;; Wait for events on an epoll instance
+;; epfd: epoll file descriptor
+;; events: pointer to array of epoll_event structs
+;; maxevents: max number of events to return
+;; timeout: timeout in milliseconds (-1 = block forever, 0 = return immediately)
+;; returns: number of ready fds, 0 on timeout, -1 on error
+(extern epoll_wait i32 (i32 ptr i32 i32))
+
+;; close(2) - close a file descriptor
+(extern close i32 (i32))
+
+;; ============================================================
+;; epoll_event Structure
+;; ============================================================
+
+;; struct epoll_event {
+;;     uint32_t events;     // offset 0, 4 bytes
+;;     epoll_data_t data;   // offset 4, 8 bytes (union, we use ptr)
+;; }
+;; Total size: 12 bytes (but 16 with padding on 64-bit)
+
+(def EPOLL_EVENT_SIZE 16)
+
+;; Create an epoll_event struct
+;; events: EPOLLIN | EPOLLOUT | etc.
+;; data: user data (typically a waker pointer)
+;; returns: pointer to epoll_event
+(defun epoll-event-new (events: i32 data: ptr) -> ptr
+  (let ((ev (malloc EPOLL_EVENT_SIZE)))
+    (memset ev 0 EPOLL_EVENT_SIZE)
+    ;; Store events as u32 at offset 0
+    (store-byte ev 0 events)
+    ;; Store data pointer at offset 8 (after 4-byte events + 4-byte padding)
+    (store-byte (ptr+ ev 8) 0 data)
+    ev))
+
+;; Get events from epoll_event
+(defun epoll-event-events (ev: ptr) -> i32
+  (load-byte ev 0))
+
+;; Get data from epoll_event
+(defun epoll-event-data (ev: ptr) -> ptr
+  (load-byte (ptr+ ev 8) 0))
+
+;; ============================================================
+;; Reactor Structure
+;; ============================================================
+
+;; The reactor manages the epoll instance and tracks registered fds.
+;;
+;; Fields:
+;;   epoll_fd: the epoll file descriptor
+;;   events: pre-allocated array for epoll_wait results
+;;   max_events: size of events array
+
+(defstruct Reactor
+  (epoll-fd: i32
+   events: ptr
+   max-events: i32))
+
+(def DEFAULT_MAX_EVENTS 64)
+
+;; Create a new reactor
+(defun reactor-new () -> ptr
+  (let ((epfd (epoll_create1 EPOLL_CLOEXEC)))
+    (if (< epfd 0)
+        nil  ; Failed to create epoll
+        (let ((r (malloc 24))
+              (events (malloc (* DEFAULT_MAX_EVENTS EPOLL_EVENT_SIZE))))
+          (store-byte r 0 epfd)             ; epoll-fd
+          (store-byte (ptr+ r 8) 0 events)   ; events buffer
+          (store-byte (ptr+ r 16) 0 DEFAULT_MAX_EVENTS) ; max-events
+          r))))
+
+;; Destroy a reactor
+(defun reactor-destroy (r: ptr)
+  (let ((epfd (load-byte r 0))
+        (events (load-byte (ptr+ r 8) 0)))
+    (close epfd)
+    (free events)
+    (free r)))
+
+;; ============================================================
+;; Reactor Operations
+;; ============================================================
+
+;; Register a file descriptor for read readiness
+;; fd: file descriptor to watch
+;; waker: waker to call when ready
+;; returns: 0 on success, -1 on error
+(defun reactor-register-read (r: ptr fd: i32 waker: ptr) -> i32
+  (let ((epfd (load-byte r 0))
+        (ev (epoll-event-new (+ EPOLLIN EPOLLET) waker)))
+    (let ((result (epoll_ctl epfd EPOLL_CTL_ADD fd ev)))
+      (free ev)
+      result)))
+
+;; Register a file descriptor for write readiness
+;; fd: file descriptor to watch
+;; waker: waker to call when ready
+;; returns: 0 on success, -1 on error
+(defun reactor-register-write (r: ptr fd: i32 waker: ptr) -> i32
+  (let ((epfd (load-byte r 0))
+        (ev (epoll-event-new (+ EPOLLOUT EPOLLET) waker)))
+    (let ((result (epoll_ctl epfd EPOLL_CTL_ADD fd ev)))
+      (free ev)
+      result)))
+
+;; Deregister a file descriptor
+;; fd: file descriptor to stop watching
+;; returns: 0 on success, -1 on error
+(defun reactor-deregister (r: ptr fd: i32) -> i32
+  (let ((epfd (load-byte r 0)))
+    (epoll_ctl epfd EPOLL_CTL_DEL fd nil)))
+
+;; Poll the reactor for events
+;; timeout: timeout in milliseconds (-1 = block, 0 = poll)
+;; This wakes tasks when their I/O is ready
+(defun reactor-poll (r: ptr timeout: i32)
+  (let ((epfd (load-byte r 0))
+        (events (load-byte (ptr+ r 8) 0))
+        (max-events (load-byte (ptr+ r 16) 0)))
+    (let ((n (epoll_wait epfd events max-events timeout)))
+      (if (> n 0)
+          (reactor-process-events r events n)
+          nil))))
+
+;; Process events returned by epoll_wait
+(defun reactor-process-events (r: ptr events: ptr n: i32)
+  (reactor-process-events-loop events n 0))
+
+(defun reactor-process-events-loop (events: ptr n: i32 i: i32)
+  (if (>= i n)
+      nil
+      (let ((ev (ptr+ events (* i EPOLL_EVENT_SIZE)))
+            (waker (epoll-event-data ev)))
+        (if (> waker 0)
+            (waker-wake waker)
+            nil)
+        (reactor-process-events-loop events n (+ i 1)))))
+
+;; ============================================================
+;; Non-blocking I/O Helpers
+;; ============================================================
+
+;; fcntl constants for making fd non-blocking
+(def F_GETFL 3)
+(def F_SETFL 4)
+(def O_NONBLOCK 2048)
+
+(extern fcntl i32 (i32 i32 ...))
+
+;; Set a file descriptor to non-blocking mode
+(defun set-nonblocking (fd: i32) -> i32
+  (let ((flags (fcntl fd F_GETFL)))
+    (if (< flags 0)
+        -1
+        (fcntl fd F_SETFL (+ flags O_NONBLOCK)))))

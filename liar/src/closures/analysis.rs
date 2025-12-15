@@ -82,6 +82,8 @@ impl ClosureAnalyzer {
             Item::Extern(_) => {}
             // Namespace declarations have no body
             Item::Namespace(_) => {}
+            // WhenTarget should be flattened before closure analysis
+            Item::WhenTarget(_) => {}
         }
     }
 
