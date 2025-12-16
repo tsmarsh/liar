@@ -297,6 +297,11 @@ impl ClosureAnalyzer {
                 self.analyze_expr(iter);
             }
 
+            // Type predicates
+            Expr::Instance(obj, _) => {
+                self.analyze_expr(obj);
+            }
+
             // Byte arrays and regex are literals - no captures
             Expr::ByteArray(_) | Expr::Regex { .. } => {}
 
@@ -580,6 +585,11 @@ impl ClosureAnalyzer {
             }
             Expr::Collect(iter) => {
                 self.find_free_vars_lambda_inner(iter, local, free);
+            }
+
+            // Type predicates
+            Expr::Instance(obj, _) => {
+                self.find_free_vars_lambda_inner(obj, local, free);
             }
 
             // Byte arrays and regex are literals - no free vars

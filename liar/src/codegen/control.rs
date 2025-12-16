@@ -207,14 +207,24 @@ fn generate_cleanup(bindings_needing_cleanup: &[String]) -> lir::Expr {
     }
 }
 
-/// Check if an expression will generate multi-block code (if expression)
+/// Check if an expression will generate multi-block code (if expression, instance?, etc.)
+/// This recursively checks all subexpressions because any multiblock code generation
+/// within a let body means bindings must be emitted before the branches.
 fn will_generate_multiblock(expr: &Expr) -> bool {
     match expr {
         Expr::If(_, _, _) => true,
+        Expr::Instance(_, _) => true,
         Expr::Let(_, body) | Expr::Plet(_, body) => will_generate_multiblock(&body.node),
-        Expr::Do(exprs) => exprs
-            .last()
-            .is_some_and(|e| will_generate_multiblock(&e.node)),
+        Expr::Do(exprs) => exprs.iter().any(|e| will_generate_multiblock(&e.node)),
+        Expr::Call(func, args) => {
+            will_generate_multiblock(&func.node)
+                || args.iter().any(|a| will_generate_multiblock(&a.node))
+        }
+        Expr::Field(obj, _) => will_generate_multiblock(&obj.node),
+        Expr::Set(_, value) => will_generate_multiblock(&value.node),
+        Expr::Ref(inner) | Expr::RefMut(inner) | Expr::Deref(inner) => {
+            will_generate_multiblock(&inner.node)
+        }
         _ => false,
     }
 }

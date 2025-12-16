@@ -91,6 +91,9 @@ pub enum TokenKind {
     Iter,    // iter (create iterator)
     Collect, // collect (materialize iterator)
 
+    // Type predicates
+    Instance, // instance?
+
     // Conventional collections
     LAngleBracket, // <[ (start conventional vector)
     LAngleBrace,   // <{ (start conventional map)
@@ -483,6 +486,8 @@ impl<'a> Lexer<'a> {
             // Iterator keywords
             "iter" => TokenKind::Iter,
             "collect" => TokenKind::Collect,
+            // Type predicates
+            "instance?" => TokenKind::Instance,
             _ => TokenKind::Symbol(s),
         }
     }

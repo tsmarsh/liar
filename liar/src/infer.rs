@@ -562,6 +562,13 @@ impl Inferencer {
                 self.fresh_var()
             }
 
+            // Type predicates
+            Expr::Instance(obj, _) => {
+                // instance? returns a boolean (i64: 0 or 1)
+                let _obj_ty = self.infer_expr(obj, env);
+                Ty::I64
+            }
+
             // Byte arrays and regex
             Expr::ByteArray(_) => {
                 // Byte arrays have type ByteArray

@@ -808,6 +808,11 @@ impl Resolver {
                 self.resolve_expr(iter);
             }
 
+            // Type predicates
+            Expr::Instance(obj, _) => {
+                self.resolve_expr(obj);
+            }
+
             // Byte arrays and regex are literals - no resolution needed
             Expr::ByteArray(_) | Expr::Regex { .. } => {}
 

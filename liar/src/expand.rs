@@ -473,6 +473,10 @@ impl Expander {
                 self.expand_expr(iter)?;
             }
 
+            Expr::Instance(obj, _) => {
+                self.expand_expr(obj)?;
+            }
+
             Expr::Boxed(inner) => {
                 self.expand_expr(inner)?;
             }
@@ -685,6 +689,10 @@ fn expand_subexprs_with_jit(expr: &mut Spanned<Expr>, jit_eval: &JitEvaluator) -
         | Expr::Async(inner)
         | Expr::Await(inner) => {
             expand_expr_with_jit(inner, jit_eval)?;
+        }
+
+        Expr::Instance(obj, _) => {
+            expand_expr_with_jit(obj, jit_eval)?;
         }
 
         Expr::Swap(atom, func) | Expr::Reset(atom, func) => {

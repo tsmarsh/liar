@@ -428,6 +428,11 @@ pub enum Expr {
     /// Materialize iterator to collection: (collect iter)
     Collect(Box<Spanned<Expr>>),
 
+    // Type predicates
+    /// Type check: (instance? expr Type)
+    /// Returns 1 if expr's runtime type_id matches Type, else 0
+    Instance(Box<Spanned<Expr>>, Spanned<String>),
+
     // Byte arrays and regex
     /// Byte array literal: #[1 2 3] or #[0x61 0x62 0x63]
     ByteArray(Vec<u8>),

@@ -295,6 +295,11 @@ impl<'a> ThreadSafetyChecker<'a> {
                 self.check_expr(iter);
             }
 
+            // Type predicates
+            Expr::Instance(obj, _) => {
+                self.check_expr(obj);
+            }
+
             // Literals and simple expressions
             Expr::Int(_)
             | Expr::Float(_)

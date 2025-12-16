@@ -797,6 +797,13 @@ impl<'a> Parser<'a> {
                 let iter = self.parse_expr()?;
                 Ok(Expr::Collect(Box::new(iter)))
             }
+            // Type predicates
+            TokenKind::Instance => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                let type_name = self.parse_symbol()?;
+                Ok(Expr::Instance(Box::new(expr), type_name))
+            }
             // Overflow handling (ADR-017)
             TokenKind::Boxed => {
                 self.advance();

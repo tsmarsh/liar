@@ -182,6 +182,9 @@ fn find_callable_vars_rec(
         Expr::Iter(inner) | Expr::Collect(inner) => {
             find_callable_vars_rec(&inner.node, var_names, callable);
         }
+        Expr::Instance(obj, _) => {
+            find_callable_vars_rec(&obj.node, var_names, callable);
+        }
         Expr::Boxed(inner) | Expr::Wrapping(inner) => {
             find_callable_vars_rec(&inner.node, var_names, callable);
         }
@@ -595,6 +598,11 @@ impl ClosureConverter {
             // Iterators
             Expr::Iter(coll) => Expr::Iter(Box::new(self.convert_expr(*coll)?)),
             Expr::Collect(iter) => Expr::Collect(Box::new(self.convert_expr(*iter)?)),
+
+            // Type predicates
+            Expr::Instance(obj, type_name) => {
+                Expr::Instance(Box::new(self.convert_expr(*obj)?), type_name)
+            }
 
             // Overflow handling
             Expr::Boxed(inner) => Expr::Boxed(Box::new(self.convert_expr(*inner)?)),

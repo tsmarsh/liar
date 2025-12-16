@@ -268,6 +268,7 @@ impl EscapeAnalyzer {
             }
             Expr::Iter(coll) => self.analyze_expr(coll),
             Expr::Collect(iter) => self.analyze_expr(iter),
+            Expr::Instance(obj, _) => self.analyze_expr(obj),
             Expr::Boxed(inner) | Expr::Wrapping(inner) => self.analyze_expr(inner),
             Expr::Quasiquote(inner) | Expr::Unquote(inner) | Expr::UnquoteSplicing(inner) => {
                 self.analyze_expr(inner)

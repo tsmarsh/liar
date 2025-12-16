@@ -745,6 +745,11 @@ impl BorrowChecker {
                 }
             }
 
+            // Type predicates - don't consume the object
+            Expr::Instance(obj, _) => {
+                self.check_expr(obj);
+            }
+
             // Byte arrays and regex are literals - no ownership concerns
             Expr::ByteArray(_) | Expr::Regex { .. } => {}
 
