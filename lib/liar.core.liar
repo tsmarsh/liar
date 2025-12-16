@@ -160,3 +160,22 @@
 ;; Returns 1 if x is a Cons, 0 otherwise
 (defmacro cons? (x)
   `(instance? ,x Cons))
+
+;; cond - multi-branch conditional
+;; (cond
+;;   (test1 body1)
+;;   (test2 body2)
+;;   (else default))
+;; Expands to nested ifs. Last clause should be (else x) or (true x) as default.
+(defmacro cond (... clauses)
+  (if (nil? clauses)
+      nil
+      (let ((clause (first clauses))
+            (more (rest clauses))
+            (test (first clause))
+            (body (first (rest clause))))
+        (if (nil? more)
+            ;; Last clause is the default - just return body
+            ;; (Convention: use (else x) or (true x) for clarity)
+            body
+            `(if ,test ,body (cond ,@more))))))

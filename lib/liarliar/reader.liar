@@ -71,7 +71,12 @@
 (defun eof? (c: i64) (= c -1))
 
 (defun whitespace? (c: i64)
-  (if (= c 32) true (if (= c 10) true (if (= c 9) true (if (= c 13) true false)))))
+  (cond
+    ((= c 32) true)   ;; space
+    ((= c 10) true)   ;; newline
+    ((= c 9)  true)   ;; tab
+    ((= c 13) true)   ;; carriage return
+    (else false)))
 
 (defun digit? (c: i64)
   (if (>= c 48) (if (<= c 57) true false) false))
@@ -83,14 +88,28 @@
 
 ;; Symbol start: alpha, _, +, -, *, /, <, >, =, ?, !, &
 (defun symbol-start? (c: i64)
-  (if (alpha? c) true
-      (if (= c 95) true (if (= c 43) true (if (= c 45) true (if (= c 42) true
-      (if (= c 47) true (if (= c 60) true (if (= c 62) true (if (= c 61) true
-      (if (= c 63) true (if (= c 33) true (if (= c 38) true false)))))))))))))
+  (cond
+    ((alpha? c) true)
+    ((= c 95) true)   ;; _
+    ((= c 43) true)   ;; +
+    ((= c 45) true)   ;; -
+    ((= c 42) true)   ;; *
+    ((= c 47) true)   ;; /
+    ((= c 60) true)   ;; <
+    ((= c 62) true)   ;; >
+    ((= c 61) true)   ;; =
+    ((= c 63) true)   ;; ?
+    ((= c 33) true)   ;; !
+    ((= c 38) true)   ;; &
+    (else false)))
 
 ;; Symbol continue: symbol-start, digit, or .
 (defun symbol-char? (c: i64)
-  (if (symbol-start? c) true (if (digit? c) true (if (= c 46) true false))))
+  (cond
+    ((symbol-start? c) true)
+    ((digit? c) true)
+    ((= c 46) true)   ;; .
+    (else false)))
 
 ;; ============================================================================
 ;; Whitespace and Comment Skipping
@@ -222,12 +241,13 @@
 
 ;; Decode escape character
 (defun decode-escape (next: i64) -> i64
-  (if (= next 110) 10       ;; \n -> newline
-      (if (= next 116) 9    ;; \t -> tab
-          (if (= next 114) 13   ;; \r -> CR
-              (if (= next 34) 34    ;; \" -> "
-                  (if (= next 92) 92    ;; \\ -> \
-                      next))))))        ;; unknown: keep as-is
+  (cond
+    ((= next 110) 10)    ;; \n -> newline
+    ((= next 116) 9)     ;; \t -> tab
+    ((= next 114) 13)    ;; \r -> CR
+    ((= next 34) 34)     ;; \" -> "
+    ((= next 92) 92)     ;; \\ -> \
+    (else next)))        ;; unknown: keep as-is
 
 ;; Copy string with escape processing
 (defun copy-string-loop (src: ptr dest: ptr src-idx dest-idx end) -> i64
@@ -495,34 +515,22 @@
 (defun read-value (lex: ptr table: ptr) -> ptr
   (let ((lex2 (skip-ws lex))
         (c (peek-char lex2)))
-    (if (eof? c)
-        (pcons lex2 nil)  ;; EOF
-        (if (= c 40)  ;; (
-            (read-list lex2 table)
-            (if (= c 91)  ;; [
-                (read-vector lex2 table)
-                (if (= c 123)  ;; {
-                    (read-map lex2 table)
-                    (if (= c 34)  ;; "
-                        (read-string lex2)
-                        (if (= c 58)  ;; :
-                            (read-keyword lex2 table)
-                            (if (= c 39)  ;; '
-                                (read-quote lex2 table)
-                                (if (= c 96)  ;; `
-                                    (read-quasiquote lex2 table)
-                                    (if (= c 126)  ;; ~
-                                        (read-unquote lex2 table)
-                                        (if (digit? c)
-                                            (read-number lex2)
-                                            (if (= c 45)  ;; - could be number or symbol
-                                                (if (digit? (peek-char-at lex2 1))
-                                                    (read-number lex2)
-                                                    (read-symbol lex2 table))
-                                                (if (symbol-start? c)
-                                                    (read-symbol lex2 table)
-                                                    ;; Unknown character - skip it
-                                                    (pcons (advance-char lex2) nil)))))))))))))))
+    (cond
+      ((eof? c)         (pcons lex2 nil))
+      ((= c 40)         (read-list lex2 table))        ;; (
+      ((= c 91)         (read-vector lex2 table))      ;; [
+      ((= c 123)        (read-map lex2 table))         ;; {
+      ((= c 34)         (read-string lex2))            ;; "
+      ((= c 58)         (read-keyword lex2 table))     ;; :
+      ((= c 39)         (read-quote lex2 table))       ;; '
+      ((= c 96)         (read-quasiquote lex2 table))  ;; `
+      ((= c 126)        (read-unquote lex2 table))     ;; ~
+      ((digit? c)       (read-number lex2))
+      ((= c 45)         (if (digit? (peek-char-at lex2 1))   ;; - number or symbol
+                            (read-number lex2)
+                            (read-symbol lex2 table)))
+      ((symbol-start? c) (read-symbol lex2 table))
+      (else             (pcons (advance-char lex2) nil)))))
 
 ;; ============================================================================
 ;; Top-Level Interface
