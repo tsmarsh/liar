@@ -33,7 +33,7 @@
 
 ;; array-set-copy - copy array and set one element
 ;; Returns new array with element at idx set to val
-(defun array-set-copy (size src idx val)
+(defun array-set-copy (size src: ptr idx val) -> ptr
   (let ((new (heap-array size))
         (cp (array-copy size new src))
         (st (aset new idx val)))
@@ -41,14 +41,14 @@
 
 ;; array-append - create new array with element appended
 ;; size is the current size of src
-(defun array-append (size src val)
+(defun array-append (size src: ptr val) -> ptr
   (let ((new (heap-array (+ size 1)))
         (cp (array-copy size new src))
         (st (aset new size val)))
     new))
 
 ;; array-clone - create exact copy of array
-(defun array-clone (size src)
+(defun array-clone (size src: ptr) -> ptr
   (let ((new (heap-array size))
         (cp (array-copy size new src)))
     new))

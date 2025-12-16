@@ -135,27 +135,38 @@
         (icons frac (icons scale lex)))))
 
 ;; Read a number (integer or float)
+;; Helper to negate if needed
+(defun negate-if (is-negative: i64 val: i64) -> i64
+  (if (= is-negative 1) (- 0 val) val))
+
+;; Helper for read-number after parsing integer part
+(defun read-number-finish (int-lex: ptr int-val: i64 is-negative: i64) -> ptr
+  (let ((next-c (peek-char int-lex)))
+    (if (= next-c 46)  ;; . - float
+        (let ((frac-result (read-frac-digits (advance-char int-lex) 0 1))
+              (frac-val (icons-head frac-result))
+              (scale-lex (icons-tail frac-result))
+              (scale (icons-head scale-lex))
+              (frac-lex (icons-tail scale-lex))
+              (final-int (negate-if is-negative int-val))
+              (final-frac (negate-if is-negative frac-val)))
+          (pcons frac-lex (box-float final-int final-frac scale)))
+        ;; Integer
+        (pcons int-lex (box-int (negate-if is-negative int-val))))))
+
+;; Helper to read digits from start position
+(defun read-number-from (start-lex: ptr is-neg: i64) -> ptr
+  (let ((int-result (read-digits-raw start-lex 0))
+        (int-val (icons-head int-result))
+        (int-lex (icons-tail int-result)))
+    (read-number-finish int-lex int-val is-neg)))
+
 ;; Returns (new-lexer . value) where value is BoxedInt or BoxedFloat
 (defun read-number (lex: ptr) -> ptr
-  (let ((c (peek-char lex))
-        (negative (= c 45)))  ;; -
-    (let ((start-lex (if negative (advance-char lex) lex))
-          (int-result (read-digits-raw start-lex 0))
-          (int-val (icons-head int-result))        ;; i64
-          (int-lex (icons-tail int-result))        ;; ptr
-          (next-c (peek-char int-lex)))
-      (if (= next-c 46)  ;; . - float
-          (let ((frac-result (read-frac-digits (advance-char int-lex) 0 1))
-                (frac-val (icons-head frac-result))
-                (scale-lex (icons-tail frac-result))
-                (scale (icons-head scale-lex))
-                (frac-lex (icons-tail scale-lex))
-                (final-int (if negative (- 0 int-val) int-val))
-                (final-frac (if negative (- 0 frac-val) frac-val)))
-            (pcons frac-lex (box-float final-int final-frac scale)))
-          ;; Integer
-          (let ((final-val (if negative (- 0 int-val) int-val)))
-            (pcons int-lex (box-int final-val)))))))
+  (let ((c (peek-char lex)))
+    (if (= c 45)  ;; -
+        (read-number-from (advance-char lex) 1)
+        (read-number-from lex 0))))
 
 ;; ============================================================================
 ;; Symbol Parsing
@@ -209,6 +220,15 @@
                 (count-string-len lex (+ len 2))  ;; skip escape sequence
                 (count-string-len lex (+ len 1)))))))
 
+;; Decode escape character
+(defun decode-escape (next: i64) -> i64
+  (if (= next 110) 10       ;; \n -> newline
+      (if (= next 116) 9    ;; \t -> tab
+          (if (= next 114) 13   ;; \r -> CR
+              (if (= next 34) 34    ;; \" -> "
+                  (if (= next 92) 92    ;; \\ -> \
+                      next))))))        ;; unknown: keep as-is
+
 ;; Copy string with escape processing
 (defun copy-string-loop (src: ptr dest: ptr src-idx dest-idx end) -> i64
   (if (>= src-idx end)
@@ -216,12 +236,7 @@
       (let ((c (zext i64 (load-byte (ptr+ src src-idx)))))
         (if (= c 92)  ;; backslash
             (let ((next (zext i64 (load-byte (ptr+ src (+ src-idx 1)))))
-                  (escaped (if (= next 110) 10  ;; \n -> newline
-                               (if (= next 116) 9  ;; \t -> tab
-                                   (if (= next 114) 13  ;; \r -> CR
-                                       (if (= next 34) 34  ;; \" -> "
-                                           (if (= next 92) 92  ;; \\ -> \
-                                               next))))))  ;; unknown: keep as-is
+                  (escaped (decode-escape next))
                   (s (store-byte (ptr+ dest dest-idx) (trunc i8 escaped))))
               (copy-string-loop src dest (+ src-idx 2) (+ dest-idx 1) end))
             (let ((s (store-byte (ptr+ dest dest-idx) (trunc i8 c))))
@@ -445,27 +460,31 @@
         (val (pcons-tail val-result)))
     (pcons val-lex (scons-loc qq-sym (scons-loc val nil line col) line col))))
 
+;; Helper for unquote dispatch
+(defun read-unquote-inner (start-lex: ptr table: ptr line: i64 col: i64 next-c: i64) -> ptr
+  (if (= next-c 64)  ;; @ - unquote-splicing
+      (let ((lex2 (advance-char start-lex))  ;; skip @
+            (us-str (make-unquote-splicing-str))
+            (us-sym (intern table us-str))
+            (val-result (read-value lex2 table))
+            (val-lex (pcons-head val-result))
+            (val (pcons-tail val-result)))
+        (pcons val-lex (scons-loc us-sym (scons-loc val nil line col) line col)))
+      ;; Regular unquote
+      (let ((uq-str (make-unquote-str))
+            (uq-sym (intern table uq-str))
+            (val-result (read-value start-lex table))
+            (val-lex (pcons-head val-result))
+            (val (pcons-tail val-result)))
+        (pcons val-lex (scons-loc uq-sym (scons-loc val nil line col) line col)))))
+
 ;; Read ~x -> (unquote x) or ~@x -> (unquote-splicing x)
 (defun read-unquote (lex: ptr table: ptr) -> ptr
   (let ((start-lex (advance-char lex))  ;; skip ~
         (line (lexer-line lex))
         (col (lexer-col lex))
         (next-c (peek-char start-lex)))
-    (if (= next-c 64)  ;; @ - unquote-splicing
-        (let ((lex2 (advance-char start-lex))  ;; skip @
-              (us-str (make-unquote-splicing-str))
-              (us-sym (intern table us-str))
-              (val-result (read-value lex2 table))
-              (val-lex (pcons-head val-result))
-              (val (pcons-tail val-result)))
-          (pcons val-lex (scons-loc us-sym (scons-loc val nil line col) line col)))
-        ;; Regular unquote
-        (let ((uq-str (make-unquote-str))
-              (uq-sym (intern table uq-str))
-              (val-result (read-value start-lex table))
-              (val-lex (pcons-head val-result))
-              (val (pcons-tail val-result)))
-          (pcons val-lex (scons-loc uq-sym (scons-loc val nil line col) line col))))))
+    (read-unquote-inner start-lex table line col next-c)))
 
 ;; ============================================================================
 ;; Main Dispatcher

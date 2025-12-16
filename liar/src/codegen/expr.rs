@@ -49,8 +49,26 @@ pub fn generate_expr(ctx: &mut CodegenContext, expr: &Spanned<Expr>) -> Result<l
         Expr::String(s) => Ok(lir::Expr::StringLit(s.clone())),
         Expr::Nil => Ok(lir::Expr::NullPtr),
 
-        // Variables
-        Expr::Var(name) => Ok(lir::Expr::LocalRef(name.name.clone())),
+        // Variables - check if it's a function reference (needs closure wrapping)
+        Expr::Var(name) => {
+            // If it's a local variable, use LocalRef
+            if ctx.lookup_var_type(&name.name).is_some() {
+                Ok(lir::Expr::LocalRef(name.name.clone()))
+            }
+            // If it's a known function (not extern), wrap in closure pair { @fn, null }
+            else if ctx.lookup_func_return_type(&name.name).is_some()
+                && !ctx.is_extern(&name.name)
+            {
+                Ok(lir::Expr::StructLit(vec![
+                    lir::Expr::GlobalRef(name.name.clone()),
+                    lir::Expr::NullPtr,
+                ]))
+            }
+            // Otherwise assume it's a variable (will fail at lair level if not found)
+            else {
+                Ok(lir::Expr::LocalRef(name.name.clone()))
+            }
+        }
 
         // Function calls
         Expr::Call(func, args) => generate_call(ctx, expr, func, args),

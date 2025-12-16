@@ -128,6 +128,15 @@
         (st (aset new-arr subidx tail-node)))
     (share (VecNode new-arr))))
 
+;; Helper for vec-conj when tail is full
+(defun vec-conj-full (v: ptr val tail-node: ptr) -> ptr
+  (let ((new-root (if (nil? (. v root))
+                      tail-node
+                      (push-tail-simple (. v shift) (. v root) tail-node)))
+        (new-tail (heap-array 32))
+        (st (aset new-tail 0 val)))
+    (share (PersistentVector (+ (. v cnt) 1) (. v shift) new-root new-tail 1))))
+
 ;; Append element - O(log32 n) but simplified for tail-only case
 (defun vec-conj (v: ptr val) -> ptr
   (let ((cnt (. v cnt))
@@ -137,14 +146,8 @@
         (let ((new-tail (array-clone-32 (. v tail)))
               (st (aset new-tail tail-len val)))
           (share (PersistentVector (+ cnt 1) (. v shift) (. v root) new-tail (+ tail-len 1))))
-        ;; Tail full - push to tree
-        (let ((tail-node (share (VecNode (. v tail))))
-              (new-root (if (nil? (. v root))
-                           tail-node
-                           (push-tail-simple (. v shift) (. v root) tail-node)))
-              (new-tail (heap-array 32))
-              (st (aset new-tail 0 val)))
-          (share (PersistentVector (+ cnt 1) (. v shift) new-root new-tail 1))))))
+        ;; Tail full - push to tree (use helper to avoid if-in-let bug)
+        (vec-conj-full v val (share (VecNode (. v tail)))))))
 
 ;; Update element at index - O(log32 n)
 (defun vec-assoc (v: ptr idx val) -> ptr
