@@ -100,3 +100,22 @@ Feature: Protocol Dispatch
     Given the definition (defun test () (let ((s (Single 10))) (add-n s 5)))
     When I evaluate (test)
     Then the result is 15
+
+  # Generic protocols with type parameters
+
+  Scenario: Generic protocol with type parameter
+    Given the definition (defprotocol Getter<T> (get-val [self] -> T))
+    Given the definition (defstruct IntBox (val: i64))
+    Given the definition (extend-protocol Getter<i64> IntBox (get-val [self] (. self val)))
+    Given the definition (defun test () (let ((box (IntBox 123))) (get-val box)))
+    When I evaluate (test)
+    Then the result is 123
+
+  Scenario: Generic protocol static dispatch
+    Given the definition (defprotocol Seq<T> (head [self] -> T) (tail [self] -> ptr))
+    Given the definition (defstruct ICons (hd: i64 tl: ptr))
+    Given the definition (extend-protocol Seq<i64> ICons (head [self] (. self hd)) (tail [self] (. self tl)))
+    Given the definition (defun sum (xs: ptr) -> i64 (if (nil? xs) 0 (+ (head xs) (sum (tail xs)))))
+    Given the definition (defun test () (sum (share (ICons 1 (share (ICons 2 (share (ICons 3 nil))))))))
+    When I evaluate (test)
+    Then the result is 6

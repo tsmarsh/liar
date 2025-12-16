@@ -184,9 +184,64 @@ impl<'a> Parser<'a> {
         Ok(Defstruct { name, fields })
     }
 
-    /// Parse protocol definition: (defprotocol Name "docstring"? (method [self args...] "doc"?)...)
+    /// Parse a generic name like "Seq<T>" into (name, type_params)
+    /// Returns (name_symbol, Vec<type_param_symbols>)
+    fn parse_generic_name(&mut self) -> Result<(Spanned<String>, Vec<Spanned<String>>)> {
+        let full_name = self.parse_symbol()?;
+        let span = full_name.span;
+
+        // Check if name contains type parameters: "Seq<T>" or "Map<K,V>"
+        if let Some(lt_pos) = full_name.node.find('<') {
+            let gt_pos = full_name.node.rfind('>').ok_or_else(|| {
+                CompileError::parse(span, "missing '>' in generic name".to_string())
+            })?;
+
+            let base_name = full_name.node[..lt_pos].to_string();
+            let params_str = &full_name.node[lt_pos + 1..gt_pos];
+
+            // Parse comma-separated type parameters
+            let type_params: Vec<Spanned<String>> = params_str
+                .split(',')
+                .map(|s| Spanned::new(s.trim().to_string(), span))
+                .collect();
+
+            Ok((Spanned::new(base_name, span), type_params))
+        } else {
+            // Non-generic name
+            Ok((full_name, Vec::new()))
+        }
+    }
+
+    /// Parse a generic name with type arguments like "Seq<i64>" into (name, type_args)
+    fn parse_generic_name_with_types(&mut self) -> Result<(Spanned<String>, Vec<Spanned<Type>>)> {
+        let full_name = self.parse_symbol()?;
+        let span = full_name.span;
+
+        // Check if name contains type arguments: "Seq<i64>" or "Map<i64,ptr>"
+        if let Some(lt_pos) = full_name.node.find('<') {
+            let gt_pos = full_name.node.rfind('>').ok_or_else(|| {
+                CompileError::parse(span, "missing '>' in generic name".to_string())
+            })?;
+
+            let base_name = full_name.node[..lt_pos].to_string();
+            let args_str = &full_name.node[lt_pos + 1..gt_pos];
+
+            // Parse comma-separated type arguments
+            let type_args: Vec<Spanned<Type>> = args_str
+                .split(',')
+                .map(|s| Spanned::new(Type::Named(s.trim().to_string()), span))
+                .collect();
+
+            Ok((Spanned::new(base_name, span), type_args))
+        } else {
+            // Non-generic name
+            Ok((full_name, Vec::new()))
+        }
+    }
+
+    /// Parse protocol definition: (defprotocol Name<T> "docstring"? (method [self args...] -> T "doc"?)...)
     fn parse_defprotocol(&mut self) -> Result<Defprotocol> {
-        let name = self.parse_symbol()?;
+        let (name, type_params) = self.parse_generic_name()?;
 
         // Optional docstring
         let doc = if let TokenKind::String(s) = &self.peek().kind {
@@ -211,6 +266,14 @@ impl<'a> Parser<'a> {
             }
             self.expect(TokenKind::RBracket)?;
 
+            // Optional return type annotation: -> T
+            let return_type = if self.check(TokenKind::Arrow) {
+                self.advance(); // consume ->
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+
             // Optional method docstring
             let method_doc = if let TokenKind::String(s) = &self.peek().kind {
                 let s = s.clone();
@@ -224,11 +287,17 @@ impl<'a> Parser<'a> {
             methods.push(ProtocolMethod {
                 name: method_name,
                 params,
+                return_type,
                 doc: method_doc,
             });
         }
 
-        Ok(Defprotocol { name, doc, methods })
+        Ok(Defprotocol {
+            name,
+            type_params,
+            doc,
+            methods,
+        })
     }
 
     /// Parse macro definition: (defmacro name (params... [... rest]) body)
@@ -261,9 +330,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse protocol extension: (extend-protocol ProtocolName TypeName (method [self args...] body)...)
+    /// Parse protocol extension: (extend-protocol ProtocolName<Type> TypeName (method [self args...] body)...)
     fn parse_extend_protocol(&mut self) -> Result<ExtendProtocol> {
-        let protocol = self.parse_symbol()?;
+        let (protocol, type_args) = self.parse_generic_name_with_types()?;
         let type_name = self.parse_symbol()?;
 
         // Parse method implementations
@@ -293,6 +362,7 @@ impl<'a> Parser<'a> {
 
         Ok(ExtendProtocol {
             protocol,
+            type_args,
             type_name,
             implementations,
         })

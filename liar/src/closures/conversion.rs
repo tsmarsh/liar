@@ -391,6 +391,7 @@ impl ClosureConverter {
         }
         Ok(ExtendProtocol {
             protocol: extend.protocol,
+            type_args: extend.type_args,
             type_name: extend.type_name,
             implementations: new_implementations,
         })

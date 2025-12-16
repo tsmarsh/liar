@@ -190,25 +190,34 @@ pub struct StructField {
 }
 
 /// Protocol definition (ADR-022)
+/// Supports generic protocols: (defprotocol Seq<T> (first [self] -> T))
 #[derive(Debug, Clone)]
 pub struct Defprotocol {
     pub name: Spanned<String>,
+    /// Type parameters for generic protocols (e.g., [T] for Seq<T>)
+    pub type_params: Vec<Spanned<String>>,
     pub doc: Option<String>,
     pub methods: Vec<ProtocolMethod>,
 }
 
 /// Protocol method signature
+/// Supports return type annotations: (method [self x] -> T)
 #[derive(Debug, Clone)]
 pub struct ProtocolMethod {
     pub name: Spanned<String>,
     pub params: Vec<Spanned<String>>, // includes self
+    /// Return type annotation (can reference type parameters)
+    pub return_type: Option<Spanned<Type>>,
     pub doc: Option<String>,
 }
 
 /// Protocol extension for a specific type
+/// Supports generic protocols: (extend-protocol Seq<i64> ICons ...)
 #[derive(Debug, Clone)]
 pub struct ExtendProtocol {
     pub protocol: Spanned<String>,
+    /// Type arguments for generic protocols (e.g., [i64] for Seq<i64>)
+    pub type_args: Vec<Spanned<Type>>,
     pub type_name: Spanned<String>,
     pub implementations: Vec<MethodImpl>,
 }

@@ -67,26 +67,49 @@ fn find_callables_in_expr(
     }
 }
 
+/// Mangle type arguments into a string for inclusion in function names
+/// e.g., [i64, ptr] -> "_i64_ptr"
+fn mangle_type_args(type_args: &[crate::span::Spanned<crate::ast::Type>]) -> String {
+    if type_args.is_empty() {
+        String::new()
+    } else {
+        let parts: Vec<String> = type_args
+            .iter()
+            .map(|t| match &t.node {
+                crate::ast::Type::Named(name) => name.clone(),
+                crate::ast::Type::Ptr => "ptr".to_string(),
+                _ => "unknown".to_string(),
+            })
+            .collect();
+        format!("_{}", parts.join("_"))
+    }
+}
+
 /// Generate lIR functions for an extend-protocol declaration
-/// Each method implementation becomes a function: __<Protocol>_<Type>__<method>
+/// Each method implementation becomes a function: __<Protocol><TypeArgs>_<Type>__<method>
+/// For generic protocols: __Seq_i64_ICons__first
 pub fn generate_extend_protocol(
     ctx: &mut CodegenContext,
     extend: &ExtendProtocol,
 ) -> Result<Vec<lir::FunctionDef>> {
     let protocol_name = &extend.protocol.node;
     let type_name = &extend.type_name.node;
+    let type_args_str = mangle_type_args(&extend.type_args);
 
-    // Register that this type implements this protocol
-    // Used for protocol default lookups
-    ctx.register_type_protocol(type_name, protocol_name);
+    // Register that this type implements this protocol (with mangled name for generics)
+    let mangled_protocol = format!("{}{}", protocol_name, type_args_str);
+    ctx.register_type_protocol(type_name, &mangled_protocol);
 
     let mut functions = Vec::new();
 
     for method_impl in &extend.implementations {
         let method_name = &method_impl.name.node;
 
-        // Generate function name: __Greet_Person__greet
-        let fn_name = format!("__{}_{}__{}", protocol_name, type_name, method_name);
+        // Generate function name: __Seq_i64_ICons__first (includes type args)
+        let fn_name = format!(
+            "__{}{}_{}__{}",
+            protocol_name, type_args_str, type_name, method_name
+        );
 
         // Register this implementation so we can dispatch to it
         ctx.register_protocol_impl(type_name, method_name, &fn_name);
