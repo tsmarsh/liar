@@ -202,6 +202,17 @@ impl Display for Expr {
                 }
                 write!(f, ")")
             }
+            Expr::IndirectTailCall {
+                fn_ptr,
+                ret_ty,
+                args,
+            } => {
+                write!(f, "(indirect-tailcall {} {}", fn_ptr, ret_ty)?;
+                for arg in args {
+                    write!(f, " {}", arg)?;
+                }
+                write!(f, ")")
+            }
 
             // Array operations
             Expr::ArrayAlloc { elem_type, size } => {

@@ -238,37 +238,56 @@ pub fn generate_closure_call(
     let fn_ptr_var = ctx.fresh_var("fn_ptr");
     let env_ptr_var = ctx.fresh_var("env_ptr");
 
+    // Save tail position state before generating args (args are not in tail position)
+    let was_tail = ctx.set_tail_position(false);
+
     // Generate the arguments
     let mut call_args = Vec::new();
     for arg in args {
         call_args.push(generate_expr(ctx, arg)?);
     }
 
+    // Restore tail position state
+    ctx.set_tail_position(was_tail);
+
+    // Build the call expression - use IndirectTailCall if in tail position
+    let call_expr = if was_tail && ctx.can_emit_tailcall() {
+        lir::Expr::IndirectTailCall {
+            fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var.clone())),
+            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
+            args: std::iter::once(lir::Expr::LocalRef(env_ptr_var.clone()))
+                .chain(call_args)
+                .collect(),
+        }
+    } else {
+        lir::Expr::IndirectCall {
+            fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var.clone())),
+            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
+            args: std::iter::once(lir::Expr::LocalRef(env_ptr_var.clone()))
+                .chain(call_args)
+                .collect(),
+        }
+    };
+
     // Build let bindings to extract fn_ptr and env_ptr, then call
     Ok(lir::Expr::Let {
         bindings: vec![
             (
-                fn_ptr_var.clone(),
+                fn_ptr_var,
                 Box::new(lir::Expr::ExtractValue {
                     aggregate: Box::new(lir::Expr::LocalRef(closure_var.to_string())),
                     indices: vec![0],
                 }),
             ),
             (
-                env_ptr_var.clone(),
+                env_ptr_var,
                 Box::new(lir::Expr::ExtractValue {
                     aggregate: Box::new(lir::Expr::LocalRef(closure_var.to_string())),
                     indices: vec![1],
                 }),
             ),
         ],
-        body: vec![lir::Expr::IndirectCall {
-            fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var)),
-            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
-            args: std::iter::once(lir::Expr::LocalRef(env_ptr_var))
-                .chain(call_args)
-                .collect(),
-        }],
+        body: vec![call_expr],
     })
 }
 
@@ -278,6 +297,9 @@ pub fn generate_closure_call_expr(
     func: &Spanned<Expr>,
     args: &[Spanned<Expr>],
 ) -> Result<lir::Expr> {
+    // Save tail position state - closure expr and args are not in tail position
+    let was_tail = ctx.set_tail_position(false);
+
     // Generate the closure expression
     let closure_expr = generate_expr(ctx, func)?;
 
@@ -290,33 +312,49 @@ pub fn generate_closure_call_expr(
         call_args.push(generate_expr(ctx, arg)?);
     }
 
+    // Restore tail position state
+    ctx.set_tail_position(was_tail);
+
     let fn_ptr_var = ctx.fresh_var("fn_ptr");
     let env_ptr_var = ctx.fresh_var("env_ptr");
+
+    // Build the call expression - use IndirectTailCall if in tail position
+    let call_expr = if was_tail && ctx.can_emit_tailcall() {
+        lir::Expr::IndirectTailCall {
+            fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var.clone())),
+            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
+            args: std::iter::once(lir::Expr::LocalRef(env_ptr_var.clone()))
+                .chain(call_args)
+                .collect(),
+        }
+    } else {
+        lir::Expr::IndirectCall {
+            fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var.clone())),
+            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
+            args: std::iter::once(lir::Expr::LocalRef(env_ptr_var.clone()))
+                .chain(call_args)
+                .collect(),
+        }
+    };
 
     Ok(lir::Expr::Let {
         bindings: vec![
             (closure_var.clone(), Box::new(closure_expr)),
             (
-                fn_ptr_var.clone(),
+                fn_ptr_var,
                 Box::new(lir::Expr::ExtractValue {
                     aggregate: Box::new(lir::Expr::LocalRef(closure_var.clone())),
                     indices: vec![0],
                 }),
             ),
             (
-                env_ptr_var.clone(),
+                env_ptr_var,
                 Box::new(lir::Expr::ExtractValue {
                     aggregate: Box::new(lir::Expr::LocalRef(closure_var)),
                     indices: vec![1],
                 }),
             ),
         ],
-        body: vec![lir::Expr::IndirectCall {
-            fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var)),
-            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
-            args: std::iter::once(lir::Expr::LocalRef(env_ptr_var))
-                .chain(call_args)
-                .collect(),
-        }],
+        body: vec![call_expr],
     })
 }

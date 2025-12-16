@@ -525,6 +525,11 @@ impl TypeChecker {
                 fn_ptr,
                 ret_ty,
                 args,
+            }
+            | Expr::IndirectTailCall {
+                fn_ptr,
+                ret_ty,
+                args,
             } => {
                 // Type check function pointer (must be ptr)
                 let fn_ptr_ty = self.check(fn_ptr)?;

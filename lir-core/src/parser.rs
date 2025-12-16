@@ -292,6 +292,7 @@ impl<'a> Parser<'a> {
             "call" => self.parse_call(),
             "tailcall" => self.parse_tailcall(),
             "indirect-call" => self.parse_indirect_call(),
+            "indirect-tailcall" => self.parse_indirect_tailcall(),
 
             // Array operations
             "array-alloc" => self.parse_array_alloc(),
@@ -751,6 +752,41 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Expr::IndirectCall {
+            fn_ptr,
+            ret_ty,
+            args,
+        })
+    }
+
+    /// Parse indirect-tailcall: (indirect-tailcall fn_ptr ret_ty args...)
+    /// Example: (indirect-tailcall fn_ptr_expr i64 arg1 arg2)
+    /// Used for tail calls through function pointers (e.g., in closures)
+    fn parse_indirect_tailcall(&mut self) -> Result<Expr, ParseError> {
+        // Parse function pointer expression
+        let fn_ptr = Box::new(self.parse_expr()?);
+
+        // Parse return type
+        let ret_ty = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(s)) => self.param_type_from_name(&s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "return type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse arguments
+        let mut args = Vec::new();
+        while let Some(tok) = self.lexer.peek()? {
+            if *tok == Token::RParen {
+                break;
+            }
+            args.push(self.parse_expr()?);
+        }
+
+        Ok(Expr::IndirectTailCall {
             fn_ptr,
             ret_ty,
             args,

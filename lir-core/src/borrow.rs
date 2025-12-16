@@ -260,7 +260,8 @@ impl BorrowChecker {
                 }
             }
 
-            Expr::IndirectCall { fn_ptr, args, .. } => {
+            Expr::IndirectCall { fn_ptr, args, .. }
+            | Expr::IndirectTailCall { fn_ptr, args, .. } => {
                 self.check_expr(fn_ptr);
                 for arg in args {
                     self.check_expr(arg);

@@ -165,7 +165,7 @@ impl<'ctx> super::CodeGen<'ctx> {
                 ret_ty,
                 args,
             } => self.compile_indirect_call(fn_ptr, ret_ty, args, locals),
-            Expr::TailCall { .. } => Err(CodeGenError::CodeGen(
+            Expr::TailCall { .. } | Expr::IndirectTailCall { .. } => Err(CodeGenError::CodeGen(
                 "tailcall requires block context".to_string(),
             )),
 
@@ -333,6 +333,9 @@ impl<'ctx> super::CodeGen<'ctx> {
         }
 
         // Evaluate body expressions, return last
+        // Note: Tail calls (TailCall/IndirectTailCall) in the body will error
+        // because they require block context for the return instruction.
+        // This is expected - tail calls should only appear in function-level Let.
         let mut result = None;
         for expr in body {
             result = Some(self.compile_with_locals(expr, &new_locals)?);

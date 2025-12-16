@@ -494,6 +494,13 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    // Indirect tail call through function pointer (for closures calling captured functions)
+    IndirectTailCall {
+        fn_ptr: Box<Expr>,
+        ret_ty: ParamType,
+        args: Vec<Expr>,
+    },
+
     // Array operations (bounds-checked)
     // (array-alloc type size) - allocate array on stack
     ArrayAlloc {

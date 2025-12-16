@@ -146,7 +146,7 @@ pub fn generate_extend_protocol(
         // Helper to check if an expression ends in a tail call
         fn is_tailcall(expr: &lir::Expr) -> bool {
             match expr {
-                lir::Expr::TailCall { .. } => true,
+                lir::Expr::TailCall { .. } | lir::Expr::IndirectTailCall { .. } => true,
                 lir::Expr::Let { body, .. } => body.last().is_some_and(is_tailcall),
                 _ => false,
             }
@@ -299,7 +299,7 @@ pub fn generate_extend_protocol_default(
         // Helper to check if an expression ends in a tail call
         fn is_tailcall(expr: &lir::Expr) -> bool {
             match expr {
-                lir::Expr::TailCall { .. } => true,
+                lir::Expr::TailCall { .. } | lir::Expr::IndirectTailCall { .. } => true,
                 lir::Expr::Let { body, .. } => body.last().is_some_and(is_tailcall),
                 _ => false,
             }

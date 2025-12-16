@@ -54,7 +54,17 @@ Feature: Standard Library Functions
     When I evaluate (test)
     Then the result is 20
 
-  # Note: Higher-order combinators (partial, pipe, juxt) require
-  # closures that capture and call function pointers, which currently
-  # triggers "tailcall requires block context" error. This needs
-  # separate work on closure codegen to support.
+  Scenario: Partial1 fixes first argument
+    Given the definition (defun partial1 (f a) (fn (x) (f a x)))
+    Given the definition (defun add (a b) (+ a b))
+    Given the definition (defun test () ((partial1 add 10) 5))
+    When I evaluate (test)
+    Then the result is 15
+
+  Scenario: Pipe composes left to right
+    Given the definition (defun pipe (f g) (fn (x) (g (f x))))
+    Given the definition (defun inc2 (x) (+ x 1))
+    Given the definition (defun square (x) (* x x))
+    Given the definition (defun test () ((pipe inc2 square) 3))
+    When I evaluate (test)
+    Then the result is 16

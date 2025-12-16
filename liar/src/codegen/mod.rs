@@ -351,7 +351,7 @@ fn generate_defun(
     // Recursively checks inside Let expressions since Let { ... body: [TailCall] } is also terminal
     fn is_tailcall(expr: &lir::Expr) -> bool {
         match expr {
-            lir::Expr::TailCall { .. } => true,
+            lir::Expr::TailCall { .. } | lir::Expr::IndirectTailCall { .. } => true,
             lir::Expr::Let { body, .. } => body.last().is_some_and(is_tailcall),
             _ => false,
         }
