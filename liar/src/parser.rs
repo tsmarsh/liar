@@ -231,21 +231,34 @@ impl<'a> Parser<'a> {
         Ok(Defprotocol { name, doc, methods })
     }
 
-    /// Parse macro definition: (defmacro name (params...) body)
+    /// Parse macro definition: (defmacro name (params... [... rest]) body)
     fn parse_defmacro(&mut self) -> Result<Defmacro> {
         let name = self.parse_symbol()?;
 
-        // Parse simple parameter list (just names, no types for macros)
+        // Parse parameter list with optional rest parameter
         self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();
+        let mut rest_param = None;
+
         while !self.check(TokenKind::RParen) {
+            // Check for rest parameter marker "..."
+            if self.check(TokenKind::Ellipsis) {
+                self.advance(); // consume ...
+                rest_param = Some(self.parse_symbol()?);
+                break; // rest must be last
+            }
             params.push(self.parse_symbol()?);
         }
         self.expect(TokenKind::RParen)?;
 
         let body = self.parse_expr()?;
 
-        Ok(Defmacro { name, params, body })
+        Ok(Defmacro {
+            name,
+            params,
+            rest_param,
+            body,
+        })
     }
 
     /// Parse protocol extension: (extend-protocol ProtocolName TypeName (method [self args...] body)...)

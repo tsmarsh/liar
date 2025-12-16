@@ -235,6 +235,8 @@ pub struct ExtendProtocolDefault {
 pub struct Defmacro {
     pub name: Spanned<String>,
     pub params: Vec<Spanned<String>>,
+    /// Rest parameter for variadic macros: (defmacro name (x ... rest) body)
+    pub rest_param: Option<Spanned<String>>,
     pub body: Spanned<Expr>,
 }
 

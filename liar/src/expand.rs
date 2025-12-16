@@ -107,6 +107,7 @@ impl Expander {
             if let Item::Defmacro(defmacro) = &item.node {
                 let def = MacroDef {
                     params: defmacro.params.iter().map(|p| p.node.clone()).collect(),
+                    rest_param: defmacro.rest_param.as_ref().map(|p| p.node.clone()),
                     body: defmacro.body.clone(),
                 };
                 let name = defmacro.name.node.clone();
@@ -535,22 +536,42 @@ impl Expander {
         args: &[Spanned<Expr>],
         span: Span,
     ) -> Result<Spanned<Expr>> {
-        if args.len() != macro_def.params.len() {
+        // Check arity: variadic macros require at least params.len() args
+        let min_args = macro_def.params.len();
+        if macro_def.rest_param.is_some() {
+            if args.len() < min_args {
+                return Err(CompileError::macro_error(
+                    span,
+                    format!(
+                        "macro expects at least {} arguments, got {}",
+                        min_args,
+                        args.len()
+                    ),
+                ));
+            }
+        } else if args.len() != min_args {
             return Err(CompileError::macro_error(
                 span,
-                format!(
-                    "macro expects {} arguments, got {}",
-                    macro_def.params.len(),
-                    args.len()
-                ),
+                format!("macro expects {} arguments, got {}", min_args, args.len()),
             ));
         }
 
         // Build environment with macro arguments as values
         let mut env = Env::new();
+
+        // Bind positional params
         for (param, arg) in macro_def.params.iter().zip(args.iter()) {
             // Arguments are passed unevaluated (as expressions)
             env.bind(param.clone(), Value::Expr(arg.clone()));
+        }
+
+        // Bind rest param to remaining args as a list
+        if let Some(rest_name) = &macro_def.rest_param {
+            let rest_args: Vec<Value> = args[min_args..]
+                .iter()
+                .map(|arg| Value::Expr(arg.clone()))
+                .collect();
+            env.bind(rest_name.clone(), Value::List(rest_args));
         }
 
         // Evaluate the macro body
@@ -761,21 +782,41 @@ fn expand_macro_call_with_jit(
     span: Span,
     jit_eval: &JitEvaluator,
 ) -> Result<Spanned<Expr>> {
-    if args.len() != macro_def.params.len() {
+    // Check arity: variadic macros require at least params.len() args
+    let min_args = macro_def.params.len();
+    if macro_def.rest_param.is_some() {
+        if args.len() < min_args {
+            return Err(CompileError::macro_error(
+                span,
+                format!(
+                    "macro expects at least {} arguments, got {}",
+                    min_args,
+                    args.len()
+                ),
+            ));
+        }
+    } else if args.len() != min_args {
         return Err(CompileError::macro_error(
             span,
-            format!(
-                "macro expects {} arguments, got {}",
-                macro_def.params.len(),
-                args.len()
-            ),
+            format!("macro expects {} arguments, got {}", min_args, args.len()),
         ));
     }
 
     // Build environment with macro arguments as values
     let mut env = Env::new();
+
+    // Bind positional params
     for (param, arg) in macro_def.params.iter().zip(args.iter()) {
         env.bind(param.clone(), Value::Expr(arg.clone()));
+    }
+
+    // Bind rest param to remaining args as a list
+    if let Some(rest_name) = &macro_def.rest_param {
+        let rest_args: Vec<Value> = args[min_args..]
+            .iter()
+            .map(|arg| Value::Expr(arg.clone()))
+            .collect();
+        env.bind(rest_name.clone(), Value::List(rest_args));
     }
 
     // Evaluate the macro body with JIT support

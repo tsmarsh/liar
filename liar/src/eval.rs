@@ -15,6 +15,8 @@ use crate::span::{Span, Spanned};
 pub struct MacroDef {
     /// Parameter names
     pub params: Vec<String>,
+    /// Rest parameter for variadic macros
+    pub rest_param: Option<String>,
     /// Macro body expression
     pub body: Spanned<Expr>,
 }
@@ -212,24 +214,43 @@ impl Evaluator {
         args: &[Spanned<Expr>],
         span: Span,
     ) -> Result<Value> {
-        // Check arity
-        if args.len() != macro_def.params.len() {
+        // Check arity: variadic macros require at least params.len() args
+        let min_args = macro_def.params.len();
+        if macro_def.rest_param.is_some() {
+            if args.len() < min_args {
+                return Err(CompileError::macro_error(
+                    span,
+                    format!(
+                        "macro expects at least {} arguments, got {}",
+                        min_args,
+                        args.len()
+                    ),
+                ));
+            }
+        } else if args.len() != min_args {
             return Err(CompileError::macro_error(
                 span,
-                format!(
-                    "macro expects {} arguments, got {}",
-                    macro_def.params.len(),
-                    args.len()
-                ),
+                format!("macro expects {} arguments, got {}", min_args, args.len()),
             ));
         }
 
         // Create environment with macro parameters bound to argument expressions
         let mut new_env = Env::new();
+
+        // Bind positional params
         for (param, arg) in macro_def.params.iter().zip(args.iter()) {
             // Resolve the argument in the caller's environment
             let resolved_arg = self.resolve_arg(caller_env, arg)?;
             new_env.bind(param.clone(), resolved_arg);
+        }
+
+        // Bind rest param to remaining args as a list
+        if let Some(rest_name) = &macro_def.rest_param {
+            let rest_args: Result<Vec<Value>> = args[min_args..]
+                .iter()
+                .map(|arg| self.resolve_arg(caller_env, arg))
+                .collect();
+            new_env.bind(rest_name.clone(), Value::List(rest_args?));
         }
 
         // Evaluate the macro body
