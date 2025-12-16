@@ -266,8 +266,21 @@ impl CodegenContext {
     }
 
     /// Add a phi binding to be emitted at the start of the current block
-    /// when the block is ended. Returns the variable name for the phi.
+    /// when the block is ended. Also registers the variable's type for phi inference.
     pub fn add_pending_phi(&mut self, var_name: String, phi_expr: lir::Expr) {
+        // Extract and register the phi type so nested ifs can infer types correctly
+        if let lir::Expr::Phi { ref ty, .. } = phi_expr {
+            let return_type = match ty {
+                lir::ParamType::Scalar(s) => lir::ReturnType::Scalar(s.clone()),
+                lir::ParamType::Ptr
+                | lir::ParamType::Own(_)
+                | lir::ParamType::Ref(_)
+                | lir::ParamType::RefMut(_)
+                | lir::ParamType::Rc(_) => lir::ReturnType::Ptr,
+                lir::ParamType::AnonStruct(fields) => lir::ReturnType::AnonStruct(fields.clone()),
+            };
+            self.register_var_type(&var_name, return_type);
+        }
         self.pending_phis.push((var_name, Box::new(phi_expr)));
     }
 

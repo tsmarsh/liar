@@ -375,14 +375,14 @@
               (val (pcons-tail result)))
           (if (nil? val)
               acc  ;; no value read, done
-              (read-all-loop new-lex table (scons val acc 0 0)))))))
+              (read-all-loop new-lex table (scons val acc)))))))
 
 ;; Reverse a list
 (defun reverse-list-loop (lst: ptr acc: ptr) -> ptr
   (if (nil? lst)
       acc
       (reverse-list-loop (scons-tail lst)
-                         (scons (scons-head lst) acc 0 0))))
+                         (scons (scons-head lst) acc))))
 
 (defun reverse-list (lst: ptr) -> ptr
   (reverse-list-loop lst nil))

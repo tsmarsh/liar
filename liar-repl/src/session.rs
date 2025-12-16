@@ -100,6 +100,9 @@ impl<'ctx> Session<'ctx> {
             || input.starts_with("(def ")
             || input.starts_with("(defstruct")
             || input.starts_with("(defprotocol")
+            || input.starts_with("(extern")
+            || input.starts_with("(defmacro")
+            || input.starts_with("(extend-protocol")
     }
 
     /// Add a definition to the session
