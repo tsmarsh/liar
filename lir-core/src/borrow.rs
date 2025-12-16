@@ -352,6 +352,24 @@ impl BorrowChecker {
                 self.check_expr(src);
             }
 
+            Expr::PtrArrayAlloc { .. } => {}
+
+            Expr::PtrArrayGet { array, index, .. } => {
+                self.check_expr(array);
+                self.check_expr(index);
+            }
+
+            Expr::PtrArraySet {
+                array,
+                index,
+                value,
+                ..
+            } => {
+                self.check_expr(array);
+                self.check_expr(index);
+                self.check_expr(value);
+            }
+
             Expr::StructLit(fields) => {
                 for field in fields {
                     self.check_expr(field);

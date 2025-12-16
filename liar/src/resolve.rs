@@ -201,6 +201,10 @@ const BUILTINS: &[&str] = &[
     // Heap arrays for persistent data structures
     "heap-array",
     "array-copy",
+    // Pointer arrays (for heterogeneous/tagged value storage)
+    "heap-array-ptr",
+    "aget-ptr",
+    "aset-ptr",
     // I/O (not yet implemented but reserved)
     "print",
     "println",

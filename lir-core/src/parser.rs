@@ -303,6 +303,11 @@ impl<'a> Parser<'a> {
             "heap-array" => self.parse_heap_array(),
             "array-copy" => self.parse_array_copy(),
 
+            // Pointer array operations
+            "ptr-array-alloc" => self.parse_ptr_array_alloc(),
+            "ptr-array-get" => self.parse_ptr_array_get(),
+            "ptr-array-set" => self.parse_ptr_array_set(),
+
             // Ownership operations
             "alloc" => self.parse_alloc_own(),
             "borrow" => self.parse_borrow(),
@@ -1003,6 +1008,75 @@ impl<'a> Parser<'a> {
             size,
             dest: Box::new(dest),
             src: Box::new(src),
+        })
+    }
+
+    /// Parse ptr-array-alloc: (ptr-array-alloc size)
+    fn parse_ptr_array_alloc(&mut self) -> Result<Expr, ParseError> {
+        // Parse size
+        let size = match self.lexer.next_token_peeked()? {
+            Some(Token::Integer(n)) => n as u32,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "array size (integer)".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        Ok(Expr::PtrArrayAlloc { size })
+    }
+
+    /// Parse ptr-array-get: (ptr-array-get size array index)
+    fn parse_ptr_array_get(&mut self) -> Result<Expr, ParseError> {
+        // Parse size
+        let size = match self.lexer.next_token_peeked()? {
+            Some(Token::Integer(n)) => n as u32,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "array size (integer)".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse array and index expressions
+        let array = self.parse_expr()?;
+        let index = self.parse_expr()?;
+
+        Ok(Expr::PtrArrayGet {
+            size,
+            array: Box::new(array),
+            index: Box::new(index),
+        })
+    }
+
+    /// Parse ptr-array-set: (ptr-array-set size array index value)
+    fn parse_ptr_array_set(&mut self) -> Result<Expr, ParseError> {
+        // Parse size
+        let size = match self.lexer.next_token_peeked()? {
+            Some(Token::Integer(n)) => n as u32,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "array size (integer)".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse array, index, and value expressions
+        let array = self.parse_expr()?;
+        let index = self.parse_expr()?;
+        let value = self.parse_expr()?;
+
+        Ok(Expr::PtrArraySet {
+            size,
+            array: Box::new(array),
+            index: Box::new(index),
+            value: Box::new(value),
         })
     }
 

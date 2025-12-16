@@ -247,6 +247,18 @@ impl Display for Expr {
                 src,
             } => write!(f, "(array-copy {} {} {} {})", elem_type, size, dest, src),
 
+            // Pointer array operations
+            Expr::PtrArrayAlloc { size } => write!(f, "(ptr-array-alloc {})", size),
+            Expr::PtrArrayGet { size, array, index } => {
+                write!(f, "(ptr-array-get {} {} {})", size, array, index)
+            }
+            Expr::PtrArraySet {
+                size,
+                array,
+                index,
+                value,
+            } => write!(f, "(ptr-array-set {} {} {} {})", size, array, index, value),
+
             // Heap-allocated struct with ownership
             Expr::HeapStruct {
                 struct_name,

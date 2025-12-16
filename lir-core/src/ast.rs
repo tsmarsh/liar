@@ -543,6 +543,25 @@ pub enum Expr {
         src: Box<Expr>,
     },
 
+    // Pointer array operations - for heterogeneous/tagged value storage
+    // (ptr-array-alloc size) - allocate pointer array on heap
+    PtrArrayAlloc {
+        size: u32,
+    },
+    // (ptr-array-get size arr idx) - load pointer from array
+    PtrArrayGet {
+        size: u32,
+        array: Box<Expr>,
+        index: Box<Expr>,
+    },
+    // (ptr-array-set size arr idx val) - store pointer to array
+    PtrArraySet {
+        size: u32,
+        array: Box<Expr>,
+        index: Box<Expr>,
+        value: Box<Expr>,
+    },
+
     // Heap-allocated struct with ownership semantics
     // (heap-struct StructName field1 field2 ...) - allocate struct on heap, return owned ptr
     // lIR handles malloc, field initialization, and tracks ownership for cleanup

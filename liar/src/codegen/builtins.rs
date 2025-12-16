@@ -546,6 +546,62 @@ pub fn generate_builtin(
         //     (aset new idx val)
         //     new))
 
+        // Pointer array operations - for heterogeneous/tagged value storage
+        "heap-array-ptr" => {
+            check_unary(expr, "heap-array-ptr", args)?;
+            ctx.set_needs_malloc();
+            if let Expr::Int(n) = &args[0].node {
+                Some(lir::Expr::PtrArrayAlloc { size: *n as u32 })
+            } else {
+                // Dynamic size - generate malloc call
+                let size_expr = generate_expr(ctx, &args[0])?;
+                // Multiply by 8 (size of ptr on 64-bit) for byte size
+                let byte_size = lir::Expr::Mul(
+                    Box::new(size_expr),
+                    Box::new(lir::Expr::IntLit {
+                        ty: lir::ScalarType::I64,
+                        value: 8,
+                    }),
+                );
+                Some(lir::Expr::Call {
+                    name: "malloc".to_string(),
+                    args: vec![byte_size],
+                })
+            }
+        }
+        "aget-ptr" => {
+            if args.len() != 2 {
+                return Err(CompileError::codegen(
+                    expr.span,
+                    "aget-ptr requires 2 arguments (array, index)",
+                ));
+            }
+            let arr = generate_expr(ctx, &args[0])?;
+            let idx = generate_expr(ctx, &args[1])?;
+            Some(lir::Expr::PtrArrayGet {
+                size: 0,
+                array: Box::new(arr),
+                index: Box::new(idx),
+            })
+        }
+        "aset-ptr" => {
+            if args.len() != 3 {
+                return Err(CompileError::codegen(
+                    expr.span,
+                    "aset-ptr requires 3 arguments (array, index, value)",
+                ));
+            }
+            let arr = generate_expr(ctx, &args[0])?;
+            let idx = generate_expr(ctx, &args[1])?;
+            let val = generate_expr(ctx, &args[2])?;
+            Some(lir::Expr::PtrArraySet {
+                size: 0,
+                array: Box::new(arr),
+                index: Box::new(idx),
+                value: Box::new(val),
+            })
+        }
+
         // Nil check - compares pointer to null
         "nil?" => {
             check_unary(expr, "nil?", args)?;

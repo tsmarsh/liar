@@ -267,6 +267,18 @@ impl<'ctx> super::CodeGen<'ctx> {
                 src,
             } => self.compile_array_copy(elem_type, *size, dest, src, locals),
 
+            // Pointer array operations
+            Expr::PtrArrayAlloc { size } => self.compile_ptr_array_alloc(*size),
+            Expr::PtrArrayGet { size, array, index } => {
+                self.compile_ptr_array_get(*size, array, index, locals)
+            }
+            Expr::PtrArraySet {
+                size,
+                array,
+                index,
+                value,
+            } => self.compile_ptr_array_set(*size, array, index, value, locals),
+
             // Struct operations
             Expr::StructLit(fields) => self.compile_struct_lit(fields, locals),
             Expr::ExtractValue { aggregate, indices } => {
@@ -606,6 +618,100 @@ impl<'ctx> super::CodeGen<'ctx> {
 
         // Return dest pointer
         Ok(dest_ptr.into())
+    }
+
+    /// Compile pointer array allocation via malloc
+    fn compile_ptr_array_alloc(&self, size: u32) -> Result<BasicValueEnum<'ctx>> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let ptr_size = ptr_ty.size_of();
+        let count = self.context.i64_type().const_int(size as u64, false);
+        let byte_size = self
+            .builder
+            .build_int_mul(ptr_size, count, "bytesize")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Call malloc
+        let malloc_fn = self.module.get_function("malloc").unwrap_or_else(|| {
+            let fn_type = ptr_ty.fn_type(&[self.context.i64_type().into()], false);
+            self.module.add_function("malloc", fn_type, None)
+        });
+
+        let call_site = self
+            .builder
+            .build_call(malloc_fn, &[byte_size.into()], "ptrarrayalloc")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        let ptr = call_site
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| CodeGenError::CodeGen("malloc returned void".to_string()))?;
+
+        Ok(ptr)
+    }
+
+    /// Compile pointer array get with bounds checking
+    fn compile_ptr_array_get(
+        &self,
+        size: u32,
+        array: &Expr,
+        index: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let arr_ptr = self
+            .compile_expr_recursive(array, locals)?
+            .into_pointer_value();
+        let idx = self.compile_expr_recursive(index, locals)?.into_int_value();
+
+        // Emit bounds check if index is not a constant in bounds
+        if !Self::is_constant_in_bounds(index, size) && size > 0 {
+            self.emit_bounds_check(idx, size)?;
+        }
+
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(ptr_ty, arr_ptr, &[idx], "ptrarrayidx")
+                .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+        };
+        let loaded = self
+            .builder
+            .build_load(ptr_ty, elem_ptr, "ptrarrayget")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+        Ok(loaded)
+    }
+
+    /// Compile pointer array set with bounds checking
+    fn compile_ptr_array_set(
+        &self,
+        size: u32,
+        array: &Expr,
+        index: &Expr,
+        value: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let arr_ptr = self
+            .compile_expr_recursive(array, locals)?
+            .into_pointer_value();
+        let idx = self.compile_expr_recursive(index, locals)?.into_int_value();
+        let val = self.compile_expr_recursive(value, locals)?;
+
+        // Emit bounds check if index is not a constant in bounds
+        if !Self::is_constant_in_bounds(index, size) && size > 0 {
+            self.emit_bounds_check(idx, size)?;
+        }
+
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(ptr_ty, arr_ptr, &[idx], "ptrarrayidx")
+                .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+        };
+        self.builder
+            .build_store(elem_ptr, val)
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Return void (as i64 zero)
+        Ok(self.context.i64_type().const_zero().into())
     }
 
     /// Compile struct literal

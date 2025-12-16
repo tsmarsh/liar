@@ -632,6 +632,50 @@ impl TypeChecker {
                 Ok(Type::Ptr)
             }
 
+            // Pointer array operations
+            Expr::PtrArrayAlloc { .. } => {
+                // PtrArrayAlloc returns a pointer to the array
+                Ok(Type::Ptr)
+            }
+            Expr::PtrArrayGet { array, index, .. } => {
+                // Check array is a pointer
+                let arr_ty = self.check(array)?;
+                if !arr_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Check index is an integer
+                let idx_ty = self.check(index)?;
+                if !idx_ty.is_integer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Return pointer type
+                Ok(Type::Ptr)
+            }
+            Expr::PtrArraySet {
+                array,
+                index,
+                value,
+                ..
+            } => {
+                // Check array is a pointer
+                let arr_ty = self.check(array)?;
+                if !arr_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Check index is an integer
+                let idx_ty = self.check(index)?;
+                if !idx_ty.is_integer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Check value is a pointer
+                let val_ty = self.check(value)?;
+                if !val_ty.is_pointer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // Array set returns void
+                Ok(Type::Scalar(ScalarType::Void))
+            }
+
             // Struct literal
             Expr::StructLit(fields) => {
                 // Check all field types - each field is a valid expression
