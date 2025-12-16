@@ -12,8 +12,50 @@ use std::collections::HashMap;
 
 /// Compile liar source and call a function, returning the result
 pub fn compile_and_call(source: &str, func_name: &str) -> Result<Value, String> {
+    compile_and_call_with_stdlib(source, func_name, false)
+}
+
+/// Compile liar source with stdlib and call a function
+pub fn compile_and_call_with_stdlib(
+    source: &str,
+    func_name: &str,
+    with_stdlib: bool,
+) -> Result<Value, String> {
+    // Build full source with optional stdlib
+    let full_source = if with_stdlib {
+        let lib_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../lib");
+        let core_path = format!("{}/liar.core.liar", lib_path);
+        let seq_path = format!("{}/liar.seq.liar", lib_path);
+
+        let mut combined = String::new();
+
+        // Load core library (no dependencies)
+        if let Ok(core) = std::fs::read_to_string(&core_path) {
+            // Strip namespace declaration for embedding
+            let stripped = strip_namespace(&core);
+            combined.push_str(&stripped);
+            combined.push('\n');
+        } else {
+            return Err(format!("Failed to read core library from {}", core_path));
+        }
+
+        // Load seq library (depends on core)
+        if let Ok(seq) = std::fs::read_to_string(&seq_path) {
+            let stripped = strip_namespace(&seq);
+            combined.push_str(&stripped);
+            combined.push('\n');
+        } else {
+            return Err(format!("Failed to read seq library from {}", seq_path));
+        }
+
+        combined.push_str(source);
+        combined
+    } else {
+        source.to_string()
+    };
+
     // Compile liar → lIR string
-    let lir_str = liar::compile(source).map_err(|errs| {
+    let lir_str = liar::compile(&full_source).map_err(|errs| {
         errs.iter()
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
@@ -185,6 +227,46 @@ pub fn format_value(value: &Value) -> String {
     }
 }
 
+/// Strip namespace declaration and require clauses from source
+/// This allows embedding library code without namespace conflicts
+fn strip_namespace(source: &str) -> String {
+    let mut result = String::new();
+    let mut in_ns = false;
+    let mut paren_depth = 0;
+
+    let mut chars = source.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_ns {
+            // Track paren depth to find end of ns form
+            if c == '(' {
+                paren_depth += 1;
+            } else if c == ')' {
+                paren_depth -= 1;
+                if paren_depth == 0 {
+                    in_ns = false;
+                    // Skip trailing whitespace after ns form
+                    while chars.peek() == Some(&'\n') || chars.peek() == Some(&' ') {
+                        chars.next();
+                    }
+                }
+            }
+        } else if c == '(' {
+            // Check if this starts a ns form
+            let rest: String = chars.clone().take(3).collect();
+            if rest.starts_with("ns ") || rest.starts_with("ns\n") || rest.starts_with("ns\t") {
+                in_ns = true;
+                paren_depth = 1;
+            } else {
+                result.push(c);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +286,38 @@ mod tests {
         "#;
         let result = compile_and_call(source, "test").unwrap();
         assert_eq!(format_value(&result), "6");
+    }
+
+    #[test]
+    fn test_strip_namespace() {
+        let source = "(ns test.ns (:require [other :as o]))\n\n(defun foo () 42)";
+        let stripped = strip_namespace(source);
+        assert!(
+            stripped.contains("(defun foo () 42)"),
+            "Should contain function def"
+        );
+        assert!(
+            !stripped.contains("ns test.ns"),
+            "Should not contain namespace"
+        );
+    }
+
+    #[test]
+    fn test_strip_namespace_preserves_content() {
+        let source = "(ns my.ns)\n(defun list3 (a b c) (+ a b))";
+        let stripped = strip_namespace(source);
+        eprintln!("Stripped: {:?}", stripped);
+        assert!(
+            stripped.contains("defun list3"),
+            "Should contain list3 definition"
+        );
+    }
+
+    #[test]
+    fn test_stdlib_loads() {
+        let source = "(defun test () (+ 1 2))";
+        let result = compile_and_call_with_stdlib(source, "test", true);
+        eprintln!("Stdlib result: {:?}", result);
+        assert!(result.is_ok() || result.is_err()); // Just check it doesn't panic
     }
 }

@@ -104,11 +104,59 @@
 (defun comp3 (f g h)
   (fn (x) (f (g (h x)))))
 
-;; Variadic composition macro - composes any number of functions
-;; NOTE: Commented out until variadic syntax is supported
-;; (defmacro comp* (... fns)
-;;   (if (nil? fns)
-;;       `identity
-;;       (if (nil? (rest fns))
-;;           (first fns)
-;;           `(fn (x) (,(first fns) ((comp* ,@(rest fns)) x))))))
+;; Variadic composition macro
+(defmacro comp* (... fns)
+  (if (nil? fns)
+      `identity
+      (if (nil? (rest fns))
+          (first fns)
+          `(fn (x) (,(first fns) ((comp* ,@(rest fns)) x))))))
+
+;;; ============================================================
+;;; Threading Macros
+;;; ============================================================
+
+;; Thread-first: insert x as first argument of each form
+;; (thread-first x (f a) (g b)) => (g (f x a) b)
+;; (thread-first x f g) => (g (f x))
+;; Note: Uses list? (macro-time check) not cons? (runtime check)
+;; Named thread-first to avoid conflict with -> (Arrow token for return types)
+(defmacro thread-first (x ... forms)
+  (if (nil? forms)
+      x
+      (let ((form (first forms))
+            (more (rest forms)))
+        (if (nil? more)
+            ;; Last form
+            (if (list? form)
+                `(,(first form) ,x ,@(rest form))
+                `(,form ,x))
+            ;; More forms: recurse
+            (if (list? form)
+                `(thread-first (,(first form) ,x ,@(rest form)) ,@more)
+                `(thread-first (,form ,x) ,@more))))))
+
+;; Thread-last: insert x as last argument of each form
+;; (thread-last x (f a) (g b)) => (g b (f a x))
+;; (thread-last x f g) => (g (f x))
+;; Note: Uses list? (macro-time check) not cons? (runtime check)
+;; Named thread-last to avoid conflict with ->> token
+(defmacro thread-last (x ... forms)
+  (if (nil? forms)
+      x
+      (let ((form (first forms))
+            (more (rest forms)))
+        (if (nil? more)
+            ;; Last form
+            (if (list? form)
+                `(,@form ,x)
+                `(,form ,x))
+            ;; More forms: recurse
+            (if (list? form)
+                `(thread-last (,@form ,x) ,@more)
+                `(thread-last (,form ,x) ,@more))))))
+
+;; cons? - runtime check if value is a Cons cell (requires Cons struct from liar.seq)
+;; Returns 1 if x is a Cons, 0 otherwise
+(defmacro cons? (x)
+  `(instance? ,x Cons))

@@ -599,6 +599,17 @@ impl Evaluator {
                 match list {
                     Value::List(items) => Ok(Some(items.first().cloned().unwrap_or(Value::Nil))),
                     Value::Nil => Ok(Some(Value::Nil)),
+                    // Handle call expressions: first element is the function
+                    Value::Expr(expr) => match &expr.node {
+                        Expr::Call(func, _) => Ok(Some(Value::Expr(func.as_ref().clone()))),
+                        Expr::Vector(items) => Ok(Some(
+                            items
+                                .first()
+                                .map(|e| Value::Expr(e.clone()))
+                                .unwrap_or(Value::Nil),
+                        )),
+                        _ => Err(CompileError::macro_error(span, "first requires a list")),
+                    },
                     _ => Err(CompileError::macro_error(span, "first requires a list")),
                 }
             }
@@ -616,6 +627,28 @@ impl Evaluator {
                         }
                     }
                     Value::Nil => Ok(Some(Value::Nil)),
+                    // Handle call expressions: rest are the arguments
+                    Value::Expr(expr) => match &expr.node {
+                        Expr::Call(_, call_args) => {
+                            let rest_values: Vec<Value> =
+                                call_args.iter().map(|e| Value::Expr(e.clone())).collect();
+                            if rest_values.is_empty() {
+                                Ok(Some(Value::Nil))
+                            } else {
+                                Ok(Some(Value::List(rest_values)))
+                            }
+                        }
+                        Expr::Vector(items) => {
+                            if items.len() <= 1 {
+                                Ok(Some(Value::Nil))
+                            } else {
+                                let rest_values: Vec<Value> =
+                                    items[1..].iter().map(|e| Value::Expr(e.clone())).collect();
+                                Ok(Some(Value::List(rest_values)))
+                            }
+                        }
+                        _ => Err(CompileError::macro_error(span, "rest requires a list")),
+                    },
                     _ => Err(CompileError::macro_error(span, "rest requires a list")),
                 }
             }
@@ -839,7 +872,13 @@ impl Evaluator {
                     return Err(CompileError::macro_error(span, "list? requires 1 argument"));
                 }
                 let v = self.eval(env, &args[0])?;
-                Ok(Some(Value::Bool(matches!(v, Value::List(_)))))
+                // Check for Value::List OR a Value::Expr containing a call-like expression
+                let is_list = match &v {
+                    Value::List(_) => true,
+                    Value::Expr(expr) => matches!(&expr.node, Expr::Call(_, _) | Expr::Vector(_)),
+                    _ => false,
+                };
+                Ok(Some(Value::Bool(is_list)))
             }
             "int?" => {
                 if args.len() != 1 {

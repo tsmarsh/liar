@@ -96,9 +96,10 @@
 (defprotocol Emptyable
   (empty [self]))            ; returns empty collection of same type
 
-;; Deref - dereference (for atoms, delays, futures)
-(defprotocol Deref
-  (deref [self]))            ; returns the referenced value
+;; Derefable - dereference (for atoms, delays, futures)
+;; Note: method is named 'dereference' to avoid conflict with 'deref' keyword
+(defprotocol Derefable
+  (dereference [self]))      ; returns the referenced value
 
 ;; Reversible - efficient reverse iteration
 (defprotocol Reversible
@@ -185,7 +186,9 @@
 ;;; Cons - the fundamental list building block
 ;;; ============================================================
 
-(defstruct Cons (head: ptr tail: ptr))
+;; Note: head is i64 for simplicity - stores values directly, not boxed
+;; For pointer values, cast to i64 first
+(defstruct Cons (head: i64 tail: ptr))
 
 (extend-protocol Seq Cons
   (first [self] (. self head))
@@ -276,7 +279,7 @@
 ;;; ============================================================
 
 ;; cons - construct a new list node
-(defun cons (head tail: ptr)
+(defun cons (head tail: ptr) -> ptr
   (share (Cons head tail)))
 
 ;; list - construct a list from elements
@@ -394,3 +397,238 @@
       (if (nil? (rest seq))
           (first seq)
           (reduce (rest seq) (fn (acc x) (if (> x acc) x acc)) (first seq)))))
+
+;;; ============================================================
+;;; Sequence Accessors
+;;; ============================================================
+
+;; second - get second element
+(defun second (seq: ptr)
+  (first (rest seq)))
+
+;; third - get third element
+(defun third (seq: ptr)
+  (first (rest (rest seq))))
+
+;; fourth - get fourth element
+(defun fourth (seq: ptr)
+  (first (rest (rest (rest seq)))))
+
+;; fifth - get fifth element
+(defun fifth (seq: ptr)
+  (first (rest (rest (rest (rest seq))))))
+
+;;; ============================================================
+;;; Search and Find Functions
+;;; ============================================================
+
+;; find - find first element matching predicate (returns element or nil)
+(defun find (pred seq: ptr)
+  (if (nil? seq)
+      nil
+      (if (pred (first seq))
+          (first seq)
+          (find pred (rest seq)))))
+
+;; some - find first truthy result of (f elem)
+;; Returns the first non-nil result, or nil if none
+(defun some (f seq: ptr) -> ptr
+  (if (nil? seq)
+      nil
+      (let ((result (f (first seq))))
+        (if (nil? result)
+            (some f (rest seq))
+            result))))
+
+;; find-index - find index of first element matching predicate
+(defun find-index-acc (pred seq: ptr idx)
+  (if (nil? seq)
+      -1
+      (if (pred (first seq))
+          idx
+          (find-index-acc pred (rest seq) (+ idx 1)))))
+
+(defun find-index (pred seq: ptr)
+  (find-index-acc pred seq 0))
+
+;;; ============================================================
+;;; Sequence Transformations
+;;; ============================================================
+
+;; mapcat - map then concatenate results
+(defun mapcat (f seq: ptr)
+  (if (nil? seq)
+      nil
+      (append (f (first seq)) (mapcat f (rest seq)))))
+
+;; Note: flatten and flatten-all are commented out because they require
+;; nested lists (Cons containing Cons pointers), but Cons.head is i64.
+;; TODO: Implement when we have tagged unions or polymorphic types.
+
+;; (defun flatten (seq: ptr)
+;;   (mapcat (fn (x) (if (= 1 (instance? x Cons)) x (list1 x))) seq))
+
+;; (defun flatten-all (seq: ptr)
+;;   (if (nil? seq)
+;;       nil
+;;       (if (= 1 (instance? (first seq) Cons))
+;;           (append (flatten-all (first seq)) (flatten-all (rest seq)))
+;;           (cons (first seq) (flatten-all (rest seq))))))
+
+;; interpose - insert separator between elements
+(defun interpose (sep seq: ptr)
+  (if (nil? seq)
+      nil
+      (if (nil? (rest seq))
+          seq
+          (cons (first seq) (cons sep (interpose sep (rest seq)))))))
+
+;; intersperse - alias for interpose
+(defun intersperse (sep seq: ptr)
+  (interpose sep seq))
+
+;;; ============================================================
+;;; Zipping Functions
+;;; ============================================================
+
+;; Note: zip is commented out because it creates nested lists (pairs),
+;; but Cons.head is i64 and can't store Cons pointers.
+
+;; (defun zip (seq1: ptr seq2: ptr)
+;;   (if (nil? seq1)
+;;       nil
+;;       (if (nil? seq2)
+;;           nil
+;;           (cons (list2 (first seq1) (first seq2))
+;;                 (zip (rest seq1) (rest seq2))))))
+
+;; zip-with - combine with function (works because f returns i64)
+(defun zip-with (f seq1: ptr seq2: ptr) -> ptr
+  (if (nil? seq1)
+      nil
+      (if (nil? seq2)
+          nil
+          (cons (f (first seq1) (first seq2))
+                (zip-with f (rest seq1) (rest seq2))))))
+
+;;; ============================================================
+;;; Partitioning Functions
+;;; ============================================================
+
+;; Note: partition, partition-by, split-at, split-with are commented out
+;; because they create nested lists (lists of lists), but Cons.head is i64.
+
+;; (defun partition (n seq: ptr)
+;;   (if (nil? seq)
+;;       nil
+;;       (cons (take n seq) (partition n (skip-n n seq)))))
+
+;; (defun partition-by-acc (f seq: ptr current: ptr last-val)
+;;   ...)
+
+;; (defun partition-by (f seq: ptr)
+;;   ...)
+
+;; (defun split-at (n seq: ptr)
+;;   (list2 (take n seq) (skip-n n seq)))
+
+;; (defun split-with-acc (pred seq: ptr acc: ptr)
+;;   ...)
+
+;; (defun split-with (pred seq: ptr)
+;;   ...)
+
+;;; ============================================================
+;;; Range and Repeat Functions
+;;; ============================================================
+
+;; range - generate sequence of integers [start, end)
+(defun range (start end) -> ptr
+  (if (>= start end)
+      nil
+      (cons start (range (+ start 1) end))))
+
+;; range-step - generate sequence with step
+(defun range-step (start end step) -> ptr
+  (if (>= start end)
+      nil
+      (cons start (range-step (+ start step) end step))))
+
+;; repeat-n - n copies of value
+(defun repeat-n (n x)
+  (if (<= n 0)
+      nil
+      (cons x (repeat-n (- n 1) x))))
+
+;; iterate-n - generate sequence by repeated application
+(defun iterate-n (n f x)
+  (if (<= n 0)
+      nil
+      (cons x (iterate-n (- n 1) f (f x)))))
+
+;; cycle-n - repeat sequence n times
+(defun cycle-n (n seq: ptr)
+  (if (<= n 0)
+      nil
+      (append seq (cycle-n (- n 1) seq))))
+
+;;; ============================================================
+;;; Concatenation
+;;; ============================================================
+
+;; concat2 - concatenate two sequences (alias for append)
+(defun concat2 (a: ptr b: ptr)
+  (append a b))
+
+;; concat3 - concatenate three sequences
+(defun concat3 (a: ptr b: ptr c: ptr)
+  (append a (append b c)))
+
+;; concat4 - concatenate four sequences
+(defun concat4 (a: ptr b: ptr c: ptr d: ptr)
+  (append a (append b (append c d))))
+
+;;; ============================================================
+;;; Distinct and Deduplication
+;;; ============================================================
+
+;; dedupe - remove consecutive duplicates
+(defun dedupe-acc (seq: ptr prev acc: ptr)
+  (if (nil? seq)
+      (reverse acc)
+      (if (= (first seq) prev)
+          (dedupe-acc (rest seq) prev acc)
+          (dedupe-acc (rest seq) (first seq) (cons (first seq) acc)))))
+
+(defun dedupe (seq: ptr)
+  (if (nil? seq)
+      nil
+      (dedupe-acc (rest seq) (first seq) (list1 (first seq)))))
+
+;;; ============================================================
+;;; Function Combinators
+;;; ============================================================
+
+;; partial1 - partial application with 1 arg fixed
+(defun partial1 (f a)
+  (fn (x) (f a x)))
+
+;; partial2 - partial application with 2 args fixed
+(defun partial2 (f a b)
+  (fn (x) (f a b x)))
+
+;; juxt2 - apply multiple functions, return list of results
+(defun juxt2 (f g)
+  (fn (x) (list2 (f x) (g x))))
+
+;; juxt3 - apply three functions
+(defun juxt3 (f g h)
+  (fn (x) (list3 (f x) (g x) (h x))))
+
+;; pipe - compose functions left-to-right (opposite of comp)
+(defun pipe (f g)
+  (fn (x) (g (f x))))
+
+;; pipe3 - compose three functions left-to-right
+(defun pipe3 (f g h)
+  (fn (x) (h (g (f x)))))

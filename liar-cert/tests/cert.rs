@@ -3,9 +3,8 @@
 //! Uses cucumber features to verify liar semantics.
 
 use cucumber::{given, then, when, World};
-use liar_cert::{compile_and_call, format_value};
+use liar_cert::{compile_and_call, compile_and_call_with_stdlib, format_value};
 use lir_codegen::codegen::Value;
-use std::fs;
 
 #[derive(Debug, Default, World)]
 pub struct LiarWorld {
@@ -17,11 +16,18 @@ pub struct LiarWorld {
     result: Option<Value>,
     /// Error message if compilation/evaluation failed
     error: Option<String>,
+    /// Whether to load stdlib
+    with_stdlib: bool,
 }
 
 impl LiarWorld {
     fn call_function(&mut self, name: &str) {
-        match compile_and_call(&self.source, name) {
+        let result = if self.with_stdlib {
+            compile_and_call_with_stdlib(&self.source, name, true)
+        } else {
+            compile_and_call(&self.source, name)
+        };
+        match result {
             Ok(val) => {
                 self.result = Some(val);
                 self.error = None;
@@ -38,10 +44,7 @@ impl LiarWorld {
 
 #[given("the standard library is loaded")]
 async fn given_stdlib(world: &mut LiarWorld) {
-    let stdlib_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../lib/stdlib.liar");
-    if let Ok(stdlib) = fs::read_to_string(stdlib_path) {
-        world.source = stdlib;
-    }
+    world.with_stdlib = true;
 }
 
 #[given(regex = "^the definition \\(defun (.*)$")]
