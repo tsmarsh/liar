@@ -1,0 +1,435 @@
+;; expand.liar - Macro expansion for the liarliar compiler
+;;
+;; Expands macros by pattern matching on S-expression structure.
+;; Handles quasiquote, unquote, unquote-splicing, and user-defined macros.
+;;
+;; Dependencies: value.liar, symbols.liar
+
+;; ============================================================================
+;; Expansion Context
+;; ============================================================================
+
+;; Context holds macro definitions and gensym counter
+;; Macros are stored as a list of (name params body) triples
+(defstruct ExpandContext (ctx-macros: ptr ctx-gensym: i64 ctx-symbols: ptr))
+
+(defun make-expand-context (symbols: ptr) -> ptr
+  (share (ExpandContext nil 0 symbols)))
+
+(defun ctx-macros (ctx: ptr) -> ptr
+  (. ctx ctx-macros))
+
+(defun ctx-gensym-counter (ctx: ptr) -> i64
+  (. ctx ctx-gensym))
+
+(defun ctx-symbols (ctx: ptr) -> ptr
+  (. ctx ctx-symbols))
+
+;; ============================================================================
+;; Symbol Comparison Helpers
+;; ============================================================================
+
+;; Check if a symbol has a given name (null-terminated string)
+(defun symbol-name-eq (sym: ptr name: ptr)
+  (if (symbol? sym)
+      (streq (symbol-name sym) name)
+      false))
+
+;; Build well-known symbol names as byte arrays
+;; "quote" = 113 117 111 116 101 0
+(defun make-quote-name () -> ptr
+  (let ((buf (heap-array 6))
+        (s0 (store-byte buf 113))
+        (s1 (store-byte (ptr+ buf 1) 117))
+        (s2 (store-byte (ptr+ buf 2) 111))
+        (s3 (store-byte (ptr+ buf 3) 116))
+        (s4 (store-byte (ptr+ buf 4) 101))
+        (s5 (store-byte (ptr+ buf 5) 0)))
+    buf))
+
+;; "quasiquote" = 113 117 97 115 105 113 117 111 116 101 0
+(defun make-quasiquote-name () -> ptr
+  (let ((buf (heap-array 11))
+        (s0 (store-byte buf 113))
+        (s1 (store-byte (ptr+ buf 1) 117))
+        (s2 (store-byte (ptr+ buf 2) 97))
+        (s3 (store-byte (ptr+ buf 3) 115))
+        (s4 (store-byte (ptr+ buf 4) 105))
+        (s5 (store-byte (ptr+ buf 5) 113))
+        (s6 (store-byte (ptr+ buf 6) 117))
+        (s7 (store-byte (ptr+ buf 7) 111))
+        (s8 (store-byte (ptr+ buf 8) 116))
+        (s9 (store-byte (ptr+ buf 9) 101))
+        (s10 (store-byte (ptr+ buf 10) 0)))
+    buf))
+
+;; "unquote" = 117 110 113 117 111 116 101 0
+(defun make-unquote-name () -> ptr
+  (let ((buf (heap-array 8))
+        (s0 (store-byte buf 117))
+        (s1 (store-byte (ptr+ buf 1) 110))
+        (s2 (store-byte (ptr+ buf 2) 113))
+        (s3 (store-byte (ptr+ buf 3) 117))
+        (s4 (store-byte (ptr+ buf 4) 111))
+        (s5 (store-byte (ptr+ buf 5) 116))
+        (s6 (store-byte (ptr+ buf 6) 101))
+        (s7 (store-byte (ptr+ buf 7) 0)))
+    buf))
+
+;; "unquote-splicing" = 117 110 113 117 111 116 101 45 115 112 108 105 99 105 110 103 0
+(defun make-unquote-splicing-name () -> ptr
+  (let ((buf (heap-array 17))
+        (s0 (store-byte buf 117))
+        (s1 (store-byte (ptr+ buf 1) 110))
+        (s2 (store-byte (ptr+ buf 2) 113))
+        (s3 (store-byte (ptr+ buf 3) 117))
+        (s4 (store-byte (ptr+ buf 4) 111))
+        (s5 (store-byte (ptr+ buf 5) 116))
+        (s6 (store-byte (ptr+ buf 6) 101))
+        (s7 (store-byte (ptr+ buf 7) 45))
+        (s8 (store-byte (ptr+ buf 8) 115))
+        (s9 (store-byte (ptr+ buf 9) 112))
+        (s10 (store-byte (ptr+ buf 10) 108))
+        (s11 (store-byte (ptr+ buf 11) 105))
+        (s12 (store-byte (ptr+ buf 12) 99))
+        (s13 (store-byte (ptr+ buf 13) 105))
+        (s14 (store-byte (ptr+ buf 14) 110))
+        (s15 (store-byte (ptr+ buf 15) 103))
+        (s16 (store-byte (ptr+ buf 16) 0)))
+    buf))
+
+;; "defmacro" = 100 101 102 109 97 99 114 111 0
+(defun make-defmacro-name () -> ptr
+  (let ((buf (heap-array 9))
+        (s0 (store-byte buf 100))
+        (s1 (store-byte (ptr+ buf 1) 101))
+        (s2 (store-byte (ptr+ buf 2) 102))
+        (s3 (store-byte (ptr+ buf 3) 109))
+        (s4 (store-byte (ptr+ buf 4) 97))
+        (s5 (store-byte (ptr+ buf 5) 99))
+        (s6 (store-byte (ptr+ buf 6) 114))
+        (s7 (store-byte (ptr+ buf 7) 111))
+        (s8 (store-byte (ptr+ buf 8) 0)))
+    buf))
+
+;; ============================================================================
+;; Form Predicates
+;; ============================================================================
+
+;; Check if form is a list starting with a symbol matching the given name
+(defun form-starts-with (form: ptr name: ptr)
+  (if (nil? form)
+      false
+      (if (scons? form)
+          (let ((head (scons-head form)))
+            (symbol-name-eq head name))
+          false)))
+
+;; Predicate: is this (quote ...)?
+(defun quote-form? (form: ptr)
+  (form-starts-with form (make-quote-name)))
+
+;; Predicate: is this (quasiquote ...)?
+(defun quasiquote-form? (form: ptr)
+  (form-starts-with form (make-quasiquote-name)))
+
+;; Predicate: is this (unquote ...)?
+(defun unquote-form? (form: ptr)
+  (form-starts-with form (make-unquote-name)))
+
+;; Predicate: is this (unquote-splicing ...)?
+(defun unquote-splicing-form? (form: ptr)
+  (form-starts-with form (make-unquote-splicing-name)))
+
+;; Predicate: is this (defmacro ...)?
+(defun defmacro-form? (form: ptr)
+  (form-starts-with form (make-defmacro-name)))
+
+;; ============================================================================
+;; List Accessors
+;; ============================================================================
+
+;; cadr = (car (cdr x)) = second element
+(defun cadr (form: ptr) -> ptr
+  (if (scons? form)
+      (let ((tail (scons-tail form)))
+        (if (scons? tail)
+            (scons-head tail)
+            nil))
+      nil))
+
+;; caddr = (car (cdr (cdr x))) = third element
+(defun caddr (form: ptr) -> ptr
+  (if (scons? form)
+      (let ((tail (scons-tail form)))
+        (if (scons? tail)
+            (let ((tail2 (scons-tail tail)))
+              (if (scons? tail2)
+                  (scons-head tail2)
+                  nil))
+            nil))
+      nil))
+
+;; cadddr = (car (cdr (cdr (cdr x)))) = fourth element
+(defun cadddr (form: ptr) -> ptr
+  (if (scons? form)
+      (let ((tail (scons-tail form)))
+        (if (scons? tail)
+            (let ((tail2 (scons-tail tail)))
+              (if (scons? tail2)
+                  (let ((tail3 (scons-tail tail2)))
+                    (if (scons? tail3)
+                        (scons-head tail3)
+                        nil))
+                  nil))
+            nil))
+      nil))
+
+;; ============================================================================
+;; Macro Table Operations
+;; ============================================================================
+
+;; Macro entry: (pcons name (pcons params body))
+(defstruct MacroEntry (macro-name: ptr macro-params: ptr macro-body: ptr))
+
+(defun make-macro-entry (name: ptr params: ptr body: ptr) -> ptr
+  (share (MacroEntry name params body)))
+
+(defun macro-entry-name (e: ptr) -> ptr
+  (. e macro-name))
+
+(defun macro-entry-params (e: ptr) -> ptr
+  (. e macro-params))
+
+(defun macro-entry-body (e: ptr) -> ptr
+  (. e macro-body))
+
+;; Find a macro by name in the context
+(defun find-macro-loop (macros: ptr name: ptr) -> ptr
+  (if (nil? macros)
+      nil
+      (let ((entry (pcons-head macros)))
+        (if (symbol-name-eq (macro-entry-name entry) (symbol-name name))
+            entry
+            (find-macro-loop (pcons-tail macros) name)))))
+
+(defun find-macro (ctx: ptr name: ptr) -> ptr
+  (find-macro-loop (ctx-macros ctx) name))
+
+;; Check if a form is a macro call
+(defun macro-call? (ctx: ptr form: ptr)
+  (if (scons? form)
+      (let ((head (scons-head form)))
+        (if (symbol? head)
+            (not (nil? (find-macro ctx head)))
+            false))
+      false))
+
+;; ============================================================================
+;; Quasiquote Expansion
+;; ============================================================================
+
+;; Build (cons a b) form
+(defun make-cons-form (ctx: ptr a: ptr b: ptr) -> ptr
+  (let ((symbols (ctx-symbols ctx))
+        (cons-sym (intern symbols (make-cons-name))))
+    (scons cons-sym (scons a (scons b nil)))))
+
+;; "cons" = 99 111 110 115 0
+(defun make-cons-name () -> ptr
+  (let ((buf (heap-array 5))
+        (s0 (store-byte buf 99))
+        (s1 (store-byte (ptr+ buf 1) 111))
+        (s2 (store-byte (ptr+ buf 2) 110))
+        (s3 (store-byte (ptr+ buf 3) 115))
+        (s4 (store-byte (ptr+ buf 4) 0)))
+    buf))
+
+;; Build (append a b) form
+(defun make-append-form (ctx: ptr a: ptr b: ptr) -> ptr
+  (let ((symbols (ctx-symbols ctx))
+        (append-sym (intern symbols (make-append-name))))
+    (scons append-sym (scons a (scons b nil)))))
+
+;; "append" = 97 112 112 101 110 100 0
+(defun make-append-name () -> ptr
+  (let ((buf (heap-array 7))
+        (s0 (store-byte buf 97))
+        (s1 (store-byte (ptr+ buf 1) 112))
+        (s2 (store-byte (ptr+ buf 2) 112))
+        (s3 (store-byte (ptr+ buf 3) 101))
+        (s4 (store-byte (ptr+ buf 4) 110))
+        (s5 (store-byte (ptr+ buf 5) 100))
+        (s6 (store-byte (ptr+ buf 6) 0)))
+    buf))
+
+;; Build (quote x) form
+(defun make-quote-form (ctx: ptr x: ptr) -> ptr
+  (let ((symbols (ctx-symbols ctx))
+        (quote-sym (intern symbols (make-quote-name))))
+    (scons quote-sym (scons x nil))))
+
+;; Expand quasiquote on a list element by element
+;; Returns code that builds the list at runtime
+(defun expand-qq-list (ctx: ptr form: ptr) -> ptr
+  (if (nil? form)
+      nil  ;; empty list stays nil
+      (let ((head (scons-head form))
+            (tail (scons-tail form)))
+        (if (unquote-splicing-form? head)
+            ;; ~@xs - splice: (append xs (expand-qq-list tail))
+            (let ((spliced (cadr head))
+                  (rest (expand-qq-list ctx tail)))
+              (if (nil? rest)
+                  spliced  ;; just the spliced value
+                  (make-append-form ctx spliced rest)))
+            ;; Regular element: (cons (expand-qq head) (expand-qq-list tail))
+            (let ((expanded-head (expand-qq ctx head))
+                  (expanded-tail (expand-qq-list ctx tail)))
+              (make-cons-form ctx expanded-head expanded-tail))))))
+
+;; Main quasiquote expansion
+;; `x where x may contain ~y and ~@z
+(defun expand-qq (ctx: ptr form: ptr) -> ptr
+  (if (unquote-form? form)
+      ;; ~x - just return x (it will be evaluated)
+      (cadr form)
+      (if (unquote-splicing-form? form)
+          ;; ~@x at top level is an error (can't splice into non-list)
+          nil  ;; TODO: proper error handling
+          (if (scons? form)
+              ;; List: expand each element
+              (expand-qq-list ctx form)
+              ;; Atom: quote it
+              (make-quote-form ctx form)))))
+
+;; ============================================================================
+;; Macro Expansion
+;; ============================================================================
+
+;; Substitute macro parameters with arguments in body
+;; env is a list of (param . arg) pairs
+(defun substitute (body: ptr env: ptr) -> ptr
+  (if (nil? body)
+      nil
+      (if (symbol? body)
+          ;; Look up symbol in environment
+          (let ((binding (lookup-env body env)))
+            (if (nil? binding)
+                body  ;; not a parameter, keep as-is
+                (pcons-tail binding)))  ;; found, return the argument
+          (if (scons? body)
+              ;; Recurse into list
+              (scons (substitute (scons-head body) env)
+                     (substitute (scons-tail body) env))
+              ;; Other atoms: keep as-is
+              body))))
+
+;; Look up a symbol in the environment
+(defun lookup-env (sym: ptr env: ptr) -> ptr
+  (if (nil? env)
+      nil
+      (let ((binding (pcons-head env)))
+        (let ((param (pcons-head binding)))
+          (if (symbol-name-eq param (symbol-name sym))
+              binding
+              (lookup-env sym (pcons-tail env)))))))
+
+;; Build environment from params list and args list
+(defun build-env (params: ptr args: ptr) -> ptr
+  (if (nil? params)
+      nil
+      (if (nil? args)
+          nil
+          (let ((param (scons-head params))
+                (arg (scons-head args))
+                (rest-env (build-env (scons-tail params) (scons-tail args))))
+            (pcons (pcons param arg) rest-env)))))
+
+;; Expand a macro call
+(defun expand-macro (ctx: ptr form: ptr) -> ptr
+  (let ((head (scons-head form))
+        (args (scons-tail form))
+        (entry (find-macro ctx head)))
+    (if (nil? entry)
+        form  ;; not a macro, return unchanged
+        (let ((params (macro-entry-params entry))
+              (body (macro-entry-body entry))
+              (env (build-env params args))
+              (substituted (substitute body env)))
+          ;; Recursively expand the result
+          (expand ctx substituted)))))
+
+;; ============================================================================
+;; Main Expander
+;; ============================================================================
+
+;; Register a macro definition, return updated context
+(defun register-macro (ctx: ptr form: ptr) -> ptr
+  ;; (defmacro name (params...) body)
+  (let ((name (cadr form))
+        (params (caddr form))
+        (body (cadddr form))
+        (entry (make-macro-entry name params body))
+        (new-macros (pcons entry (ctx-macros ctx))))
+    (share (ExpandContext new-macros (ctx-gensym-counter ctx) (ctx-symbols ctx)))))
+
+;; Expand a single form (main entry point)
+(defun expand (ctx: ptr form: ptr) -> ptr
+  (if (nil? form)
+      nil
+      (if (quote-form? form)
+          ;; 'x - return x unchanged
+          (cadr form)
+          (if (quasiquote-form? form)
+              ;; `x - expand quasiquote
+              (expand-qq ctx (cadr form))
+              (if (scons? form)
+                  ;; List - could be macro call or regular form
+                  (if (macro-call? ctx form)
+                      (expand-macro ctx form)
+                      ;; Not a macro - expand children
+                      (expand-list ctx form))
+                  ;; Atom - return unchanged
+                  form)))))
+
+;; Expand all elements of a list
+(defun expand-list (ctx: ptr form: ptr) -> ptr
+  (if (nil? form)
+      nil
+      (scons (expand ctx (scons-head form))
+             (expand-list ctx (scons-tail form)))))
+
+;; ============================================================================
+;; Top-level: Expand all forms, collecting macro definitions
+;; ============================================================================
+
+;; Process a list of top-level forms
+;; Returns (ctx . expanded-forms) as pcons
+(defun expand-toplevel-loop (ctx: ptr forms: ptr acc: ptr) -> ptr
+  (if (nil? forms)
+      (pcons ctx (reverse-scons acc))
+      (let ((form (scons-head forms))
+            (rest (scons-tail forms)))
+        (if (defmacro-form? form)
+            ;; Register macro, don't include in output
+            (let ((new-ctx (register-macro ctx form)))
+              (expand-toplevel-loop new-ctx rest acc))
+            ;; Expand and include in output
+            (let ((expanded (expand ctx form)))
+              (expand-toplevel-loop ctx rest (scons expanded acc)))))))
+
+;; Reverse an scons list
+(defun reverse-scons-loop (lst: ptr acc: ptr) -> ptr
+  (if (nil? lst)
+      acc
+      (reverse-scons-loop (scons-tail lst) (scons (scons-head lst) acc))))
+
+(defun reverse-scons (lst: ptr) -> ptr
+  (reverse-scons-loop lst nil))
+
+;; Main entry: expand all top-level forms
+;; Returns pcons of (final-context . expanded-forms)
+(defun expand-toplevel (symbols: ptr forms: ptr) -> ptr
+  (let ((ctx (make-expand-context symbols)))
+    (expand-toplevel-loop ctx forms nil)))

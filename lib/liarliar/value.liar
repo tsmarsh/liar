@@ -25,7 +25,7 @@
 (defun icons-tail (c: ptr) -> ptr
   (. c icons-tl))
 
-(defun icons? (x: ptr) -> i64
+(defun icons? (x: ptr)
   (instance? x ICons))
 
 
@@ -44,7 +44,7 @@
 (defun pcons-tail (c: ptr) -> ptr
   (. c pcons-tl))
 
-(defun pcons? (x: ptr) -> i64
+(defun pcons? (x: ptr)
   (instance? x PCons))
 
 
@@ -75,7 +75,7 @@
 (defun scons-col (c: ptr) -> i64
   (. c scons-col))
 
-(defun scons? (x: ptr) -> i64
+(defun scons? (x: ptr)
   (instance? x SCons))
 
 
@@ -90,7 +90,7 @@
 (defun unbox-int (b: ptr) -> i64
   (. b boxed-int-val))
 
-(defun boxed-int? (x: ptr) -> i64
+(defun boxed-int? (x: ptr)
   (instance? x BoxedInt))
 
 
@@ -124,7 +124,7 @@
 (defun liar-string (liar-str-data: ptr liar-str-len) -> ptr
   (share (LiarString liar-str-data liar-str-len)))
 
-(defun liar-string? (x: ptr) -> i64
+(defun liar-string? (x: ptr)
   (instance? x LiarString))
 
 (defun liar-string-data (s: ptr) -> ptr

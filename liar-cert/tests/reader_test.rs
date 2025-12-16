@@ -13,13 +13,13 @@ const READER_SOURCE: &str = r#"
 (defun icons (h icons-tl: ptr) -> ptr (share (ICons h icons-tl)))
 (defun icons-head (c: ptr) -> i64 (. c icons-hd))
 (defun icons-tail (c: ptr) -> ptr (. c icons-tl))
-(defun icons? (x: ptr) -> i64 (instance? x ICons))
+(defun icons? (x: ptr) (instance? x ICons))
 
 (defstruct PCons (pcons-hd: ptr pcons-tl: ptr))
 (defun pcons (h: ptr pcons-tl: ptr) -> ptr (share (PCons h pcons-tl)))
 (defun pcons-head (c: ptr) -> ptr (. c pcons-hd))
 (defun pcons-tail (c: ptr) -> ptr (. c pcons-tl))
-(defun pcons? (x: ptr) -> i64 (instance? x PCons))
+(defun pcons? (x: ptr) (instance? x PCons))
 
 (defstruct SCons (scons-hd: ptr scons-tl: ptr scons-line: i64 scons-col: i64))
 (defun scons (h: ptr scons-tl: ptr) -> ptr (share (SCons h scons-tl 0 0)))
@@ -28,16 +28,16 @@ const READER_SOURCE: &str = r#"
 (defun scons-tail (c: ptr) -> ptr (. c scons-tl))
 (defun scons-line (c: ptr) -> i64 (. c scons-line))
 (defun scons-col (c: ptr) -> i64 (. c scons-col))
-(defun scons? (x: ptr) -> i64 (instance? x SCons))
+(defun scons? (x: ptr) (instance? x SCons))
 
 (defstruct BoxedInt (boxed-int-val: i64))
 (defun box-int (v) -> ptr (share (BoxedInt v)))
 (defun unbox-int (b: ptr) -> i64 (. b boxed-int-val))
-(defun boxed-int? (x: ptr) -> i64 (instance? x BoxedInt))
+(defun boxed-int? (x: ptr) (instance? x BoxedInt))
 
 (defstruct LiarString (liar-str-data: ptr liar-str-len: i64))
 (defun liar-string (liar-str-data: ptr liar-str-len) -> ptr (share (LiarString liar-str-data liar-str-len)))
-(defun liar-string? (x: ptr) -> i64 (instance? x LiarString))
+(defun liar-string? (x: ptr) (instance? x LiarString))
 (defun liar-string-data (s: ptr) -> ptr (. s liar-str-data))
 (defun liar-string-len (s: ptr) -> i64 (. s liar-str-len))
 
@@ -48,7 +48,7 @@ const READER_SOURCE: &str = r#"
 (defstruct Symbol (sym-id: i64 sym-name: ptr))
 (defun symbol-id (s: ptr) -> i64 (. s sym-id))
 (defun symbol-name (s: ptr) -> ptr (. s sym-name))
-(defun symbol? (x: ptr) -> i64 (instance? x Symbol))
+(defun symbol? (x: ptr) (instance? x Symbol))
 
 (defstruct SymbolTable (sym-tab-data: ptr sym-tab-cap: i64 sym-tab-count: i64))
 (defun make-symbol-table (cap) -> ptr

@@ -18,7 +18,7 @@
 (defun symbol-name (s: ptr) -> ptr
   (. s sym-name))
 
-(defun symbol? (x: ptr) -> i64
+(defun symbol? (x: ptr)
   (instance? x Symbol))
 
 

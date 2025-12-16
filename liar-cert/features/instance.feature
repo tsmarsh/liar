@@ -24,7 +24,7 @@ Feature: Type checking with instance?
 
   Scenario: Check instance in conditional
     Given the definition (defstruct Point (x: i64 y: i64))
-    Given the definition (defun test () (let ((p (share (Point 5 10)))) (if (= 1 (instance? p Point)) (. p x) 0)))
+    Given the definition (defun test () (let ((p (share (Point 5 10)))) (if (instance? p Point) (. p x) 0)))
     When I evaluate (test)
     Then the result is 5
 

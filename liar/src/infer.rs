@@ -284,8 +284,9 @@ impl Inferencer {
             }
 
             Expr::If(cond, then_, else_) => {
-                let cond_ty = self.infer_expr(cond, env);
-                let _ = self.unify(&cond_ty, &Ty::Bool, cond.span);
+                // Clojure-style truthiness: any type allowed in condition
+                // Only nil and false are falsy; everything else is truthy
+                let _cond_ty = self.infer_expr(cond, env);
 
                 let then_ty = self.infer_expr(then_, env);
                 let else_ty = self.infer_expr(else_, env);
@@ -564,9 +565,9 @@ impl Inferencer {
 
             // Type predicates
             Expr::Instance(obj, _) => {
-                // instance? returns a boolean (i64: 0 or 1)
+                // instance? returns a boolean
                 let _obj_ty = self.infer_expr(obj, env);
-                Ty::I64
+                Ty::Bool
             }
 
             // Byte arrays and regex
