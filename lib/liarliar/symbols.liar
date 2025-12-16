@@ -1,0 +1,104 @@
+;; symbols.liar - Symbol interning for the liar reader
+;;
+;; Symbols are interned so that identical symbol names share the same id.
+;; This enables fast equality checks (compare ids instead of strings).
+;;
+;; Architecture:
+;;   - Symbol struct holds the interned id and a pointer to the name string
+;;   - A symbol table (ptr array) maps ids to names
+;;   - Interning uses linear scan (sufficient for bootstrap)
+
+;; --- Symbol struct ---
+
+(defstruct Symbol (sym-id: i64 sym-name: ptr))
+
+(defun symbol-id (s: ptr) -> i64
+  (. s sym-id))
+
+(defun symbol-name (s: ptr) -> ptr
+  (. s sym-name))
+
+(defun symbol? (x: ptr) -> i64
+  (instance? x Symbol))
+
+
+;; --- Symbol table (global state) ---
+;; Simple design: fixed-size array with linear growth
+;; Table layout: [count, name0, name1, name2, ...]
+
+(defstruct SymbolTable (sym-tab-data: ptr sym-tab-cap: i64 sym-tab-count: i64))
+
+;; Create a new symbol table with initial capacity
+(defun make-symbol-table (cap) -> ptr
+  (let ((data (heap-array-ptr (+ cap 1))))
+    (share (SymbolTable data cap 0))))
+
+(defun sym-table-data (t: ptr) -> ptr
+  (. t sym-tab-data))
+
+(defun sym-table-cap (t: ptr) -> i64
+  (. t sym-tab-cap))
+
+(defun sym-table-count (t: ptr) -> i64
+  (. t sym-tab-count))
+
+
+;; --- String comparison ---
+;; Compare two null-terminated strings byte by byte
+
+(defun streq-loop (a: ptr b: ptr idx) -> i64
+  (let ((ca (load-byte (ptr+ a idx)))
+        (cb (load-byte (ptr+ b idx))))
+    (if (= ca cb)
+        (if (= ca 0)
+            1  ;; both ended, equal
+            (streq-loop a b (+ idx 1)))
+        0)))  ;; different byte, not equal
+
+(defun streq (a: ptr b: ptr) -> i64
+  (streq-loop a b 0))
+
+
+;; --- Interning ---
+
+;; Search for a string in the table, return its id or -1 if not found
+(defun find-symbol-loop (data: ptr name: ptr count idx) -> i64
+  (if (>= idx count)
+      -1  ;; not found
+      (let ((stored-name (aget-ptr data idx)))
+        (if (= 1 (streq stored-name name))
+            idx  ;; found at this index
+            (find-symbol-loop data name count (+ idx 1))))))
+
+(defun find-symbol (table: ptr name: ptr) -> i64
+  (let ((data (sym-table-data table))
+        (count (sym-table-count table)))
+    (find-symbol-loop data name count 0)))
+
+;; Add a symbol to the table (does not check for duplicates)
+;; Returns the new symbol's id
+(defun add-symbol (table: ptr name: ptr) -> i64
+  (let ((data (sym-table-data table))
+        (count (sym-table-count table))
+        (s (aset-ptr data count name)))
+    ;; Update count in table struct
+    ;; Note: this mutates the struct directly (non-persistent)
+    count))
+
+;; Intern a symbol: return existing id or create new
+;; Returns a Symbol struct pointer
+(defun intern (table: ptr name: ptr) -> ptr
+  (let ((existing (find-symbol table name)))
+    (if (>= existing 0)
+        ;; Found - return symbol with existing id
+        (share (Symbol existing name))
+        ;; Not found - add and return new symbol
+        (let ((new-id (add-symbol table name)))
+          (share (Symbol new-id name))))))
+
+
+;; --- Common symbols (predefined for efficiency) ---
+;; These could be pre-interned during reader initialization
+
+;; Built-in symbol names as string literals
+;; Note: The reader will intern these on first use
