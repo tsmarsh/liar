@@ -54,13 +54,13 @@
 
 ;; Index within a level: (idx >> shift) & MASK
 (defun vec-index (idx shift)
-  (bit-and (bit-shr idx shift) 31))
+  (bit-and (shr idx shift) 31))
 
 ;; Where the tail starts in the vector
 (defun tail-offset (v: ptr)
   (if (< (. v cnt) 32)
       0
-      (bit-shl (bit-shr (- (. v cnt) 1) 5) 5)))
+      (shl (shr (- (. v cnt) 1) 5) 5)))
 
 ;;; ============================================================
 ;;; Access Operations - O(log32 n)
@@ -123,7 +123,7 @@
 
 ;; Push tail into tree (simplified - only handles adding to existing level)
 (defun push-tail-simple (shift parent: ptr tail-node: ptr) -> ptr
-  (let ((subidx (bit-and (bit-shr (- (. parent cnt) 1) shift) 31))
+  (let ((subidx (bit-and (shr (- (. parent cnt) 1) shift) 31))
         (new-arr (array-clone-32 (. parent array)))
         (st (aset new-arr subidx tail-node)))
     (share (VecNode new-arr))))

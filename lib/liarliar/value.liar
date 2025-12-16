@@ -94,7 +94,26 @@
   (instance? x BoxedInt))
 
 
-;; BoxedFloat deferred until struct field type support for double is verified
+;; --- Boxed Float (stored as integer/fractional parts since struct fields don't support double) ---
+;; Example: 3.14 → (BoxedFloat 3 14 100) where 3 + 14/100 = 3.14
+;; scale is 10^(number of decimal digits)
+
+(defstruct BoxedFloat (boxed-float-int: i64 boxed-float-frac: i64 boxed-float-scale: i64))
+
+(defun box-float (int-part: i64 frac-part: i64 scale: i64) -> ptr
+  (share (BoxedFloat int-part frac-part scale)))
+
+(defun boxed-float? (x: ptr)
+  (instance? x BoxedFloat))
+
+(defun boxed-float-int (f: ptr) -> i64
+  (. f boxed-float-int))
+
+(defun boxed-float-frac (f: ptr) -> i64
+  (. f boxed-float-frac))
+
+(defun boxed-float-scale (f: ptr) -> i64
+  (. f boxed-float-scale))
 
 
 ;; --- String wrapper (ptr to null-terminated bytes) ---

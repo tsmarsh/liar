@@ -116,23 +116,46 @@
 ;; Number Parsing
 ;; ============================================================================
 
-;; Accumulate digits into a number
-(defun read-digits (lex: ptr acc: i64) -> ptr
+;; Accumulate digits into a number, returning (lexer . boxed-int)
+;; Uses icons (i64 cons) for the intermediate result since we need i64 value
+(defun read-digits-raw (lex: ptr acc: i64) -> ptr
   (let ((c (peek-char lex)))
     (if (digit? c)
-        (read-digits (advance-char lex) (+ (* acc 10) (- c 48)))
-        ;; Return a pair: (lexer . boxed-int)
-        (pcons lex (box-int acc)))))
+        (read-digits-raw (advance-char lex) (+ (* acc 10) (- c 48)))
+        (icons acc lex))))  ;; icons: (i64-head, ptr-tail)
 
-;; Read a number (integer only for bootstrap)
-;; Returns (new-lexer . value)
-(defun read-number (lex: ptr) -> ptr
+;; Read fractional digits, also tracking scale (10^n)
+;; Returns icons (frac, icons (scale, lexer))
+(defun read-frac-digits (lex: ptr frac: i64 scale: i64) -> ptr
   (let ((c (peek-char lex)))
-    (if (= c 45)  ;; negative
-        (let ((result (read-digits (advance-char lex) 0)))
-          (pcons (pcons-head result)
-                 (box-int (- 0 (unbox-int (pcons-tail result))))))
-        (read-digits lex 0))))
+    (if (digit? c)
+        (read-frac-digits (advance-char lex)
+                          (+ (* frac 10) (- c 48))
+                          (* scale 10))
+        (icons frac (icons scale lex)))))
+
+;; Read a number (integer or float)
+;; Returns (new-lexer . value) where value is BoxedInt or BoxedFloat
+(defun read-number (lex: ptr) -> ptr
+  (let ((c (peek-char lex))
+        (negative (= c 45)))  ;; -
+    (let ((start-lex (if negative (advance-char lex) lex))
+          (int-result (read-digits-raw start-lex 0))
+          (int-val (icons-head int-result))        ;; i64
+          (int-lex (icons-tail int-result))        ;; ptr
+          (next-c (peek-char int-lex)))
+      (if (= next-c 46)  ;; . - float
+          (let ((frac-result (read-frac-digits (advance-char int-lex) 0 1))
+                (frac-val (icons-head frac-result))
+                (scale-lex (icons-tail frac-result))
+                (scale (icons-head scale-lex))
+                (frac-lex (icons-tail scale-lex))
+                (final-int (if negative (- 0 int-val) int-val))
+                (final-frac (if negative (- 0 frac-val) frac-val)))
+            (pcons frac-lex (box-float final-int final-frac scale)))
+          ;; Integer
+          (let ((final-val (if negative (- 0 int-val) int-val)))
+            (pcons int-lex (box-int final-val)))))))
 
 ;; ============================================================================
 ;; Symbol Parsing
@@ -251,32 +274,28 @@
     (read-list-elements start-lex table)))
 
 ;; ============================================================================
-;; Vector Parsing (simplified - produces SCons for bootstrap)
+;; Vector Parsing - produces actual PersistentVector
 ;; ============================================================================
 
-;; Read vector elements until ]
-(defun read-vector-elements (lex: ptr table: ptr) -> ptr
+;; Read vector elements until ], building a PersistentVector
+;; acc is the vector being built
+(defun read-vector-elements (lex: ptr table: ptr acc: ptr) -> ptr
   (let ((lex2 (skip-ws lex))
-        (c (peek-char lex2))
-        (line (lexer-line lex2))
-        (col (lexer-col lex2)))
+        (c (peek-char lex2)))
     (if (= c 93)  ;; ]
-        (pcons (advance-char lex2) nil)
+        (pcons (advance-char lex2) acc)
         (if (eof? c)
-            (pcons lex2 nil)
+            (pcons lex2 acc)  ;; unclosed vector
             (let ((elem-result (read-value lex2 table))
                   (elem-lex (pcons-head elem-result))
-                  (elem-val (pcons-tail elem-result))
-                  (rest-result (read-vector-elements elem-lex table))
-                  (rest-lex (pcons-head rest-result))
-                  (rest-list (pcons-tail rest-result)))
-              (pcons rest-lex (scons-loc elem-val rest-list line col)))))))
+                  (elem-val (pcons-tail elem-result)))
+              (read-vector-elements elem-lex table (vec-conj acc elem-val)))))))
 
 ;; Read a vector: [ ... ]
-;; For bootstrap, vectors are just SCons lists (PersistentVector later)
+;; Returns (lexer . PersistentVector)
 (defun read-vector (lex: ptr table: ptr) -> ptr
   (let ((start-lex (advance-char lex)))  ;; skip [
-    (read-vector-elements start-lex table)))
+    (read-vector-elements start-lex table (vector))))
 
 ;; ============================================================================
 ;; Quote Handling
@@ -328,6 +347,127 @@
     (pcons new-lex sym)))
 
 ;; ============================================================================
+;; Map Parsing - produces actual PersistentHashMap
+;; ============================================================================
+
+;; Read map entries until }, building a PersistentHashMap
+;; Maps have alternating key-value pairs: {k1 v1 k2 v2 ...}
+(defun read-map-elements (lex: ptr table: ptr acc: ptr) -> ptr
+  (let ((lex2 (skip-ws lex))
+        (c (peek-char lex2)))
+    (if (= c 125)  ;; }
+        (pcons (advance-char lex2) acc)
+        (if (eof? c)
+            (pcons lex2 acc)  ;; unclosed map
+            ;; Read key
+            (let ((key-result (read-value lex2 table))
+                  (key-lex (pcons-head key-result))
+                  (key-val (pcons-tail key-result))
+                  ;; Read value
+                  (val-result (read-value key-lex table))
+                  (val-lex (pcons-head val-result))
+                  (val-val (pcons-tail val-result)))
+              (read-map-elements val-lex table (hm-assoc acc key-val val-val)))))))
+
+;; Read a map: { k1 v1 k2 v2 ... }
+;; Returns (lexer . PersistentHashMap)
+(defun read-map (lex: ptr table: ptr) -> ptr
+  (let ((start-lex (advance-char lex)))  ;; skip {
+    (read-map-elements start-lex table (hash-map))))
+
+;; ============================================================================
+;; Quasiquote / Unquote Handling
+;; ============================================================================
+
+;; Create "quasiquote" string as ptr
+;; "quasiquote" = 113 117 97 115 105 113 117 111 116 101 0
+(defun make-quasiquote-str () -> ptr
+  (let ((buf (heap-array 11))
+        (s0 (store-byte buf 113))          ;; q
+        (s1 (store-byte (ptr+ buf 1) 117)) ;; u
+        (s2 (store-byte (ptr+ buf 2) 97))  ;; a
+        (s3 (store-byte (ptr+ buf 3) 115)) ;; s
+        (s4 (store-byte (ptr+ buf 4) 105)) ;; i
+        (s5 (store-byte (ptr+ buf 5) 113)) ;; q
+        (s6 (store-byte (ptr+ buf 6) 117)) ;; u
+        (s7 (store-byte (ptr+ buf 7) 111)) ;; o
+        (s8 (store-byte (ptr+ buf 8) 116)) ;; t
+        (s9 (store-byte (ptr+ buf 9) 101)) ;; e
+        (sa (store-byte (ptr+ buf 10) 0))) ;; null
+    buf))
+
+;; Create "unquote" string as ptr
+;; "unquote" = 117 110 113 117 111 116 101 0
+(defun make-unquote-str () -> ptr
+  (let ((buf (heap-array 8))
+        (s0 (store-byte buf 117))          ;; u
+        (s1 (store-byte (ptr+ buf 1) 110)) ;; n
+        (s2 (store-byte (ptr+ buf 2) 113)) ;; q
+        (s3 (store-byte (ptr+ buf 3) 117)) ;; u
+        (s4 (store-byte (ptr+ buf 4) 111)) ;; o
+        (s5 (store-byte (ptr+ buf 5) 116)) ;; t
+        (s6 (store-byte (ptr+ buf 6) 101)) ;; e
+        (s7 (store-byte (ptr+ buf 7) 0)))  ;; null
+    buf))
+
+;; Create "unquote-splicing" string as ptr
+;; "unquote-splicing" = 117 110 113 117 111 116 101 45 115 112 108 105 99 105 110 103 0
+(defun make-unquote-splicing-str () -> ptr
+  (let ((buf (heap-array 17))
+        (s00 (store-byte buf 117))          ;; u
+        (s01 (store-byte (ptr+ buf 1) 110)) ;; n
+        (s02 (store-byte (ptr+ buf 2) 113)) ;; q
+        (s03 (store-byte (ptr+ buf 3) 117)) ;; u
+        (s04 (store-byte (ptr+ buf 4) 111)) ;; o
+        (s05 (store-byte (ptr+ buf 5) 116)) ;; t
+        (s06 (store-byte (ptr+ buf 6) 101)) ;; e
+        (s07 (store-byte (ptr+ buf 7) 45))  ;; -
+        (s08 (store-byte (ptr+ buf 8) 115)) ;; s
+        (s09 (store-byte (ptr+ buf 9) 112)) ;; p
+        (s10 (store-byte (ptr+ buf 10) 108)) ;; l
+        (s11 (store-byte (ptr+ buf 11) 105)) ;; i
+        (s12 (store-byte (ptr+ buf 12) 99))  ;; c
+        (s13 (store-byte (ptr+ buf 13) 105)) ;; i
+        (s14 (store-byte (ptr+ buf 14) 110)) ;; n
+        (s15 (store-byte (ptr+ buf 15) 103)) ;; g
+        (s16 (store-byte (ptr+ buf 16) 0)))  ;; null
+    buf))
+
+;; Read `x -> (quasiquote x)
+(defun read-quasiquote (lex: ptr table: ptr) -> ptr
+  (let ((start-lex (advance-char lex))  ;; skip `
+        (line (lexer-line lex))
+        (col (lexer-col lex))
+        (qq-str (make-quasiquote-str))
+        (qq-sym (intern table qq-str))
+        (val-result (read-value start-lex table))
+        (val-lex (pcons-head val-result))
+        (val (pcons-tail val-result)))
+    (pcons val-lex (scons-loc qq-sym (scons-loc val nil line col) line col))))
+
+;; Read ~x -> (unquote x) or ~@x -> (unquote-splicing x)
+(defun read-unquote (lex: ptr table: ptr) -> ptr
+  (let ((start-lex (advance-char lex))  ;; skip ~
+        (line (lexer-line lex))
+        (col (lexer-col lex))
+        (next-c (peek-char start-lex)))
+    (if (= next-c 64)  ;; @ - unquote-splicing
+        (let ((lex2 (advance-char start-lex))  ;; skip @
+              (us-str (make-unquote-splicing-str))
+              (us-sym (intern table us-str))
+              (val-result (read-value lex2 table))
+              (val-lex (pcons-head val-result))
+              (val (pcons-tail val-result)))
+          (pcons val-lex (scons-loc us-sym (scons-loc val nil line col) line col)))
+        ;; Regular unquote
+        (let ((uq-str (make-unquote-str))
+              (uq-sym (intern table uq-str))
+              (val-result (read-value start-lex table))
+              (val-lex (pcons-head val-result))
+              (val (pcons-tail val-result)))
+          (pcons val-lex (scons-loc uq-sym (scons-loc val nil line col) line col))))))
+
+;; ============================================================================
 ;; Main Dispatcher
 ;; ============================================================================
 
@@ -342,22 +482,28 @@
             (read-list lex2 table)
             (if (= c 91)  ;; [
                 (read-vector lex2 table)
-                (if (= c 34)  ;; "
-                    (read-string lex2)
-                    (if (= c 58)  ;; :
-                        (read-keyword lex2 table)
-                        (if (= c 39)  ;; '
-                            (read-quote lex2 table)
-                            (if (digit? c)
-                                (read-number lex2)
-                                (if (= c 45)  ;; - could be number or symbol
-                                    (if (digit? (peek-char-at lex2 1))
-                                        (read-number lex2)
-                                        (read-symbol lex2 table))
-                                    (if (symbol-start? c)
-                                        (read-symbol lex2 table)
-                                        ;; Unknown character - skip it
-                                        (pcons (advance-char lex2) nil))))))))))))
+                (if (= c 123)  ;; {
+                    (read-map lex2 table)
+                    (if (= c 34)  ;; "
+                        (read-string lex2)
+                        (if (= c 58)  ;; :
+                            (read-keyword lex2 table)
+                            (if (= c 39)  ;; '
+                                (read-quote lex2 table)
+                                (if (= c 96)  ;; `
+                                    (read-quasiquote lex2 table)
+                                    (if (= c 126)  ;; ~
+                                        (read-unquote lex2 table)
+                                        (if (digit? c)
+                                            (read-number lex2)
+                                            (if (= c 45)  ;; - could be number or symbol
+                                                (if (digit? (peek-char-at lex2 1))
+                                                    (read-number lex2)
+                                                    (read-symbol lex2 table))
+                                                (if (symbol-start? c)
+                                                    (read-symbol lex2 table)
+                                                    ;; Unknown character - skip it
+                                                    (pcons (advance-char lex2) nil)))))))))))))))
 
 ;; ============================================================================
 ;; Top-Level Interface
