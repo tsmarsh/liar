@@ -45,39 +45,40 @@
 
 ;; --- String comparison ---
 ;; Compare two null-terminated strings byte by byte
+;; Note: predicate functions don't specify return type - compiler infers bool (i1)
 
-(defun streq-loop (a: ptr b: ptr idx) -> i64
+(defun streq-loop (a: ptr b: ptr idx)
   (let ((ca (load-byte (ptr+ a idx)))
         (cb (load-byte (ptr+ b idx))))
     (if (= ca cb)
         (if (= ca 0)
-            1  ;; both ended, equal
+            true  ;; both ended, equal
             (streq-loop a b (+ idx 1)))
-        0)))  ;; different byte, not equal
+        false)))  ;; different byte, not equal
 
-(defun streq (a: ptr b: ptr) -> i64
+(defun streq (a: ptr b: ptr)
   (streq-loop a b 0))
 
 
 ;; --- Interning ---
 
 ;; Search for a string in the table, return its id or -1 if not found
-(defun find-symbol-loop (data: ptr name: ptr count idx) -> i64
+(defun find-symbol-loop (data: ptr name count idx) -> i64
   (if (>= idx count)
       -1  ;; not found
       (let ((stored-name (aget-ptr data idx)))
-        (if (= 1 (streq stored-name name))
+        (if (streq stored-name name)
             idx  ;; found at this index
             (find-symbol-loop data name count (+ idx 1))))))
 
-(defun find-symbol (table: ptr name: ptr) -> i64
+(defun find-symbol (table: ptr name) -> i64
   (let ((data (sym-table-data table))
         (count (sym-table-count table)))
     (find-symbol-loop data name count 0)))
 
 ;; Add a symbol to the table (does not check for duplicates)
 ;; Returns the new symbol's id
-(defun add-symbol (table: ptr name: ptr) -> i64
+(defun add-symbol (table: ptr name) -> i64
   (let ((data (sym-table-data table))
         (count (sym-table-count table))
         (s (aset-ptr data count name)))
@@ -87,7 +88,7 @@
 
 ;; Intern a symbol: return existing id or create new
 ;; Returns a Symbol struct pointer
-(defun intern (table: ptr name: ptr) -> ptr
+(defun intern (table: ptr name) -> ptr
   (let ((existing (find-symbol table name)))
     (if (>= existing 0)
         ;; Found - return symbol with existing id

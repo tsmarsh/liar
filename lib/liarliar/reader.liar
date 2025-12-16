@@ -1,0 +1,404 @@
+;; reader.liar - S-expression reader for liar
+;;
+;; Parses source text into SCons structures (native AST).
+;; Uses load-byte and ptr+ for character-by-character parsing.
+;;
+;; Dependencies: value.liar (SCons, BoxedInt, LiarString, pcons)
+;;               symbols.liar (intern)
+;;
+;; Note: All functions that take 'src' or 'name' use ptr type, not string.
+;; String literals in liar have type 'string', which is incompatible with ptr.
+;; The reader expects ptr to raw byte data (from slurp or heap-array).
+
+;; ============================================================================
+;; Lexer State
+;; ============================================================================
+
+(defstruct Lexer (lex-src: ptr lex-pos: i64 lex-len: i64 lex-line: i64 lex-col: i64))
+
+;; Create a new lexer from source bytes
+;; Note: src must be ptr (from slurp or heap-array), not string literal
+(defun make-lexer (src len: i64) -> ptr
+  (share (Lexer src 0 len 1 1)))
+
+(defun lexer-src (lex: ptr) -> ptr (. lex lex-src))
+(defun lexer-pos (lex: ptr) -> i64 (. lex lex-pos))
+(defun lexer-len (lex: ptr) -> i64 (. lex lex-len))
+(defun lexer-line (lex: ptr) -> i64 (. lex lex-line))
+(defun lexer-col (lex: ptr) -> i64 (. lex lex-col))
+
+;; ============================================================================
+;; Character Operations
+;; ============================================================================
+
+;; Peek at current character without consuming
+;; Returns -1 for EOF
+(defun peek-char (lex: ptr) -> i64
+  (if (>= (lexer-pos lex) (lexer-len lex))
+      -1
+      (zext i64 (load-byte (ptr+ (lexer-src lex) (lexer-pos lex))))))
+
+;; Peek at character at offset from current position
+(defun peek-char-at (lex: ptr offset: i64) -> i64
+  (let ((pos (+ (lexer-pos lex) offset)))
+    (if (>= pos (lexer-len lex))
+        -1
+        (zext i64 (load-byte (ptr+ (lexer-src lex) pos))))))
+
+;; Advance lexer by one character, updating line/col
+;; Returns a new Lexer (functional style for bootstrap simplicity)
+(defun advance-char (lex: ptr) -> ptr
+  (let ((c (peek-char lex))
+        (pos (+ (lexer-pos lex) 1)))
+    (if (= c 10)  ;; newline
+        (share (Lexer (lexer-src lex) pos (lexer-len lex)
+                      (+ (lexer-line lex) 1) 1))
+        (share (Lexer (lexer-src lex) pos (lexer-len lex)
+                      (lexer-line lex) (+ (lexer-col lex) 1))))))
+
+;; Advance lexer by n characters
+(defun advance-n (lex: ptr n: i64) -> ptr
+  (if (<= n 0)
+      lex
+      (advance-n (advance-char lex) (- n 1))))
+
+;; ============================================================================
+;; Character Classification
+;; ============================================================================
+
+;; Note: predicate functions don't specify return type - compiler infers bool (i1)
+
+(defun eof? (c: i64) (= c -1))
+
+(defun whitespace? (c: i64)
+  (if (= c 32) true (if (= c 10) true (if (= c 9) true (if (= c 13) true false)))))
+
+(defun digit? (c: i64)
+  (if (>= c 48) (if (<= c 57) true false) false))
+
+(defun alpha? (c: i64)
+  (if (>= c 97)
+      (if (<= c 122) true (if (>= c 65) (if (<= c 90) true false) false))
+      (if (>= c 65) (if (<= c 90) true false) false)))
+
+;; Symbol start: alpha, _, +, -, *, /, <, >, =, ?, !, &
+(defun symbol-start? (c: i64)
+  (if (alpha? c) true
+      (if (= c 95) true (if (= c 43) true (if (= c 45) true (if (= c 42) true
+      (if (= c 47) true (if (= c 60) true (if (= c 62) true (if (= c 61) true
+      (if (= c 63) true (if (= c 33) true (if (= c 38) true false)))))))))))))
+
+;; Symbol continue: symbol-start, digit, or .
+(defun symbol-char? (c: i64)
+  (if (symbol-start? c) true (if (digit? c) true (if (= c 46) true false))))
+
+;; ============================================================================
+;; Whitespace and Comment Skipping
+;; ============================================================================
+
+;; Skip to end of line (for comments)
+(defun skip-to-eol (lex: ptr) -> ptr
+  (let ((c (peek-char lex)))
+    (if (eof? c) lex
+        (if (= c 10) (advance-char lex)  ;; consume newline
+            (skip-to-eol (advance-char lex))))))
+
+;; Skip whitespace and comments
+(defun skip-ws (lex: ptr) -> ptr
+  (let ((c (peek-char lex)))
+    (if (eof? c) lex
+        (if (whitespace? c) (skip-ws (advance-char lex))
+            (if (= c 59)  ;; semicolon starts comment
+                (skip-ws (skip-to-eol lex))
+                lex)))))
+
+;; ============================================================================
+;; Number Parsing
+;; ============================================================================
+
+;; Accumulate digits into a number
+(defun read-digits (lex: ptr acc: i64) -> ptr
+  (let ((c (peek-char lex)))
+    (if (digit? c)
+        (read-digits (advance-char lex) (+ (* acc 10) (- c 48)))
+        ;; Return a pair: (lexer . boxed-int)
+        (pcons lex (box-int acc)))))
+
+;; Read a number (integer only for bootstrap)
+;; Returns (new-lexer . value)
+(defun read-number (lex: ptr) -> ptr
+  (let ((c (peek-char lex)))
+    (if (= c 45)  ;; negative
+        (let ((result (read-digits (advance-char lex) 0)))
+          (pcons (pcons-head result)
+                 (box-int (- 0 (unbox-int (pcons-tail result))))))
+        (read-digits lex 0))))
+
+;; ============================================================================
+;; Symbol Parsing
+;; ============================================================================
+
+;; Count symbol length from current position
+(defun count-symbol-len (lex: ptr len: i64) -> i64
+  (let ((c (peek-char-at lex len)))
+    (if (symbol-char? c)
+        (count-symbol-len lex (+ len 1))
+        len)))
+
+;; Copy n bytes from source to dest
+(defun copy-bytes-loop (src: ptr dest: ptr n: i64 idx: i64) -> i64
+  (if (>= idx n)
+      n
+      (let ((b (load-byte (ptr+ src idx)))
+            (s (store-byte (ptr+ dest idx) b)))
+        (copy-bytes-loop src dest n (+ idx 1)))))
+
+(defun copy-bytes (src: ptr dest: ptr n: i64) -> i64
+  (copy-bytes-loop src dest n 0))
+
+;; Read a symbol and intern it
+;; Returns (new-lexer . symbol)
+(defun read-symbol (lex: ptr table: ptr) -> ptr
+  (let ((start-pos (lexer-pos lex))
+        (len (count-symbol-len lex 0))
+        ;; Allocate buffer for symbol name + null terminator
+        (buf (heap-array (+ len 1)))
+        (c (copy-bytes (ptr+ (lexer-src lex) start-pos) buf len))
+        ;; Null-terminate
+        (s (store-byte (ptr+ buf len) 0))
+        ;; Advance lexer past the symbol
+        (new-lex (advance-n lex len))
+        ;; Intern the symbol
+        (sym (intern table buf)))
+    (pcons new-lex sym)))
+
+;; ============================================================================
+;; String Parsing
+;; ============================================================================
+
+;; Count string length (stopping at closing quote or EOF)
+;; Handles escape sequences for length calculation
+(defun count-string-len (lex: ptr len: i64) -> i64
+  (let ((c (peek-char-at lex len)))
+    (if (eof? c) len  ;; unclosed string
+        (if (= c 34) len  ;; closing quote
+            (if (= c 92)  ;; backslash escape
+                (count-string-len lex (+ len 2))  ;; skip escape sequence
+                (count-string-len lex (+ len 1)))))))
+
+;; Copy string with escape processing
+(defun copy-string-loop (src: ptr dest: ptr src-idx dest-idx end) -> i64
+  (if (>= src-idx end)
+      dest-idx  ;; return final length
+      (let ((c (zext i64 (load-byte (ptr+ src src-idx)))))
+        (if (= c 92)  ;; backslash
+            (let ((next (zext i64 (load-byte (ptr+ src (+ src-idx 1)))))
+                  (escaped (if (= next 110) 10  ;; \n -> newline
+                               (if (= next 116) 9  ;; \t -> tab
+                                   (if (= next 114) 13  ;; \r -> CR
+                                       (if (= next 34) 34  ;; \" -> "
+                                           (if (= next 92) 92  ;; \\ -> \
+                                               next))))))  ;; unknown: keep as-is
+                  (s (store-byte (ptr+ dest dest-idx) (trunc i8 escaped))))
+              (copy-string-loop src dest (+ src-idx 2) (+ dest-idx 1) end))
+            (let ((s (store-byte (ptr+ dest dest-idx) (trunc i8 c))))
+              (copy-string-loop src dest (+ src-idx 1) (+ dest-idx 1) end))))))
+
+;; Read a string literal
+;; Returns (new-lexer . liar-string)
+(defun read-string (lex: ptr) -> ptr
+  (let ((start-lex (advance-char lex))  ;; skip opening quote
+        (start-pos (lexer-pos start-lex))
+        (raw-len (count-string-len start-lex 0))
+        ;; Allocate buffer (may be smaller after escape processing)
+        (buf (heap-array (+ raw-len 1)))
+        (actual-len (copy-string-loop (ptr+ (lexer-src start-lex) 0)
+                                       buf start-pos (+ start-pos raw-len) 0))
+        ;; Null-terminate
+        (s (store-byte (ptr+ buf actual-len) 0))
+        ;; Advance past string content and closing quote
+        (end-lex (advance-n start-lex (+ raw-len 1))))
+    (pcons end-lex (liar-string buf actual-len))))
+
+;; ============================================================================
+;; List Parsing
+;; ============================================================================
+
+;; Read list elements until )
+;; Returns (new-lexer . scons-list)
+;; Note: Uses forward reference to read-value (defined later)
+(defun read-list-elements (lex: ptr table: ptr) -> ptr
+  (let ((lex2 (skip-ws lex))
+        (c (peek-char lex2))
+        (line (lexer-line lex2))
+        (col (lexer-col lex2)))
+    (if (= c 41)  ;; )
+        (pcons (advance-char lex2) nil)  ;; end of list
+        (if (eof? c)
+            (pcons lex2 nil)  ;; unclosed list (error case)
+            (let ((elem-result (read-value lex2 table))
+                  (elem-lex (pcons-head elem-result))
+                  (elem-val (pcons-tail elem-result))
+                  (rest-result (read-list-elements elem-lex table))
+                  (rest-lex (pcons-head rest-result))
+                  (rest-list (pcons-tail rest-result)))
+              (pcons rest-lex (scons-loc elem-val rest-list line col)))))))
+
+;; Read a list: ( ... )
+;; Returns (new-lexer . scons-list)
+(defun read-list (lex: ptr table: ptr) -> ptr
+  (let ((start-lex (advance-char lex)))  ;; skip (
+    (read-list-elements start-lex table)))
+
+;; ============================================================================
+;; Vector Parsing (simplified - produces SCons for bootstrap)
+;; ============================================================================
+
+;; Read vector elements until ]
+(defun read-vector-elements (lex: ptr table: ptr) -> ptr
+  (let ((lex2 (skip-ws lex))
+        (c (peek-char lex2))
+        (line (lexer-line lex2))
+        (col (lexer-col lex2)))
+    (if (= c 93)  ;; ]
+        (pcons (advance-char lex2) nil)
+        (if (eof? c)
+            (pcons lex2 nil)
+            (let ((elem-result (read-value lex2 table))
+                  (elem-lex (pcons-head elem-result))
+                  (elem-val (pcons-tail elem-result))
+                  (rest-result (read-vector-elements elem-lex table))
+                  (rest-lex (pcons-head rest-result))
+                  (rest-list (pcons-tail rest-result)))
+              (pcons rest-lex (scons-loc elem-val rest-list line col)))))))
+
+;; Read a vector: [ ... ]
+;; For bootstrap, vectors are just SCons lists (PersistentVector later)
+(defun read-vector (lex: ptr table: ptr) -> ptr
+  (let ((start-lex (advance-char lex)))  ;; skip [
+    (read-vector-elements start-lex table)))
+
+;; ============================================================================
+;; Quote Handling
+;; ============================================================================
+
+;; Create the "quote" string as a ptr (since string literals are type 'string', not 'ptr')
+;; "quote" = 113, 117, 111, 116, 101, 0
+(defun make-quote-str () -> ptr
+  (let ((buf (heap-array 6))
+        (s1 (store-byte buf 113))         ;; q
+        (s2 (store-byte (ptr+ buf 1) 117)) ;; u
+        (s3 (store-byte (ptr+ buf 2) 111)) ;; o
+        (s4 (store-byte (ptr+ buf 3) 116)) ;; t
+        (s5 (store-byte (ptr+ buf 4) 101)) ;; e
+        (s6 (store-byte (ptr+ buf 5) 0)))  ;; null
+    buf))
+
+;; Read 'x -> (quote x)
+(defun read-quote (lex: ptr table: ptr) -> ptr
+  (let ((start-lex (advance-char lex))  ;; skip '
+        (line (lexer-line lex))
+        (col (lexer-col lex))
+        ;; Create "quote" string as ptr
+        (quote-str (make-quote-str))
+        (quote-sym (intern table quote-str))
+        ;; Read the quoted value
+        (val-result (read-value start-lex table))
+        (val-lex (pcons-head val-result))
+        (val (pcons-tail val-result)))
+    (pcons val-lex (scons-loc quote-sym (scons-loc val nil line col) line col))))
+
+;; ============================================================================
+;; Keyword Parsing
+;; ============================================================================
+
+;; Read :keyword
+;; Returns (new-lexer . keyword-symbol)
+(defun read-keyword (lex: ptr table: ptr) -> ptr
+  (let ((start-lex (advance-char lex))  ;; skip :
+        (start-pos (lexer-pos start-lex))
+        (len (count-symbol-len start-lex 0))
+        ;; Allocate buffer with : prefix
+        (buf (heap-array (+ len 2)))
+        (s1 (store-byte buf 58))  ;; :
+        (c (copy-bytes (ptr+ (lexer-src start-lex) start-pos) (ptr+ buf 1) len))
+        (s2 (store-byte (ptr+ buf (+ len 1)) 0))  ;; null terminate
+        (new-lex (advance-n start-lex len))
+        (sym (intern table buf)))
+    (pcons new-lex sym)))
+
+;; ============================================================================
+;; Main Dispatcher
+;; ============================================================================
+
+;; Read a single value from the lexer
+;; Returns (new-lexer . value) as a pcons pair
+(defun read-value (lex: ptr table: ptr) -> ptr
+  (let ((lex2 (skip-ws lex))
+        (c (peek-char lex2)))
+    (if (eof? c)
+        (pcons lex2 nil)  ;; EOF
+        (if (= c 40)  ;; (
+            (read-list lex2 table)
+            (if (= c 91)  ;; [
+                (read-vector lex2 table)
+                (if (= c 34)  ;; "
+                    (read-string lex2)
+                    (if (= c 58)  ;; :
+                        (read-keyword lex2 table)
+                        (if (= c 39)  ;; '
+                            (read-quote lex2 table)
+                            (if (digit? c)
+                                (read-number lex2)
+                                (if (= c 45)  ;; - could be number or symbol
+                                    (if (digit? (peek-char-at lex2 1))
+                                        (read-number lex2)
+                                        (read-symbol lex2 table))
+                                    (if (symbol-start? c)
+                                        (read-symbol lex2 table)
+                                        ;; Unknown character - skip it
+                                        (pcons (advance-char lex2) nil))))))))))))
+
+;; ============================================================================
+;; Top-Level Interface
+;; ============================================================================
+
+;; Read all expressions from source text
+;; Returns a list of SCons expressions (in reverse order)
+(defun read-all-loop (lex: ptr table: ptr acc: ptr) -> ptr
+  (let ((lex2 (skip-ws lex))
+        (c (peek-char lex2)))
+    (if (eof? c)
+        acc  ;; done - return accumulated list
+        (let ((result (read-value lex2 table))
+              (new-lex (pcons-head result))
+              (val (pcons-tail result)))
+          (if (nil? val)
+              acc  ;; no value read, done
+              (read-all-loop new-lex table (scons val acc 0 0)))))))
+
+;; Reverse a list
+(defun reverse-list-loop (lst: ptr acc: ptr) -> ptr
+  (if (nil? lst)
+      acc
+      (reverse-list-loop (scons-tail lst)
+                         (scons (scons-head lst) acc 0 0))))
+
+(defun reverse-list (lst: ptr) -> ptr
+  (reverse-list-loop lst nil))
+
+;; Read all expressions from source
+;; Returns a list of SCons expressions in correct order
+(defun read-all (src: ptr len: i64 table: ptr) -> ptr
+  (let ((lex (make-lexer src len))
+        (exprs (read-all-loop lex table nil)))
+    (reverse-list exprs)))
+
+;; String length helper (count until null byte)
+(defun strlen-loop (s: ptr idx: i64) -> i64
+  (if (= 0 (load-byte (ptr+ s idx)))
+      idx
+      (strlen-loop s (+ idx 1))))
+
+(defun strlen (s: ptr) -> i64
+  (strlen-loop s 0))
