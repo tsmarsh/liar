@@ -40,7 +40,7 @@ lIR is fully functional as an LLVM IR assembler:
 
 ### liar
 
-liar is a working compiler (132 passing test scenarios):
+liar is a working compiler (117 passing test scenarios):
 - Arithmetic, comparisons, boolean logic (int and float)
 - Functions with type inference and annotations
 - Let bindings (sequential and parallel, with destructuring)
@@ -51,19 +51,25 @@ liar is a working compiler (132 passing test scenarios):
 - Macros with quasiquote, unquote, splicing, and gensym
 - Tail call optimization
 - FFI to C functions (extern declarations)
-- I/O via `print`/`println` builtins and `lib/io.liar`
+- I/O via `print`/`println` builtins and `lib/liar.io.liar`
 - Type conversions (trunc, zext, sext, fptosi, sitofp, etc.)
 - Bitwise operations and popcount
 - Byte-level pointer operations (store-byte, load-byte, ptr+)
 - REPL with incremental JIT
+- Async I/O with reactor-based event loop
 
 **Standard Library (`lib/`):**
-- `seq.liar` — Protocols (Seq, Countable, Indexable, etc.) and list operations
-- `vector.liar` — Persistent vectors (32-way trie)
-- `hashmap.liar` — Persistent hash maps (HAMT)
-- `hashset.liar` — Persistent hash sets
-- `io.liar` — File I/O (slurp, spit, read-line)
-- `array.liar` — Low-level array helpers
+- `liar.core.liar` — Core functions (inc, dec, min, max, etc.) and threading macros
+- `liar.seq.liar` — Protocols (Seq, Countable, Indexable) and cons-based lists
+- `liar.vector.liar` — Persistent vectors (32-way trie)
+- `liar.hashmap.liar` — Persistent hash maps (HAMT)
+- `liar.hashset.liar` — Persistent hash sets
+- `liar.io.liar` — Async file I/O (slurp, spit, read-line), sockets, pipes
+- `liar.array.liar` — Low-level array helpers (array-clone, array-append)
+- `liar.runtime.liar` — FFI declarations for liar-runtime (async executor)
+- `liar.async.liar` — Async task primitives (spawn, block-on)
+- `liar.mut-vector.liar` — Mutable vector for building persistent vectors
+- `liar.test.liar` — Unit test assertions (assert-eq, assert-lt, run-tests)
 
 **Not yet implemented:**
 - Pattern matching / match expressions
@@ -211,6 +217,55 @@ See [LIAR.md](doc/LIAR.md) for the full language definition.
 | FFI | `extern` declarations for C functions |
 
 **Design decisions:** See [doc/adr/](doc/adr/) for Architecture Decision Records.
+
+---
+
+# Compiler Architecture
+
+## liar Compiler Pipeline
+
+The liar compiler (`liar/src/`) processes source through these phases:
+
+1. **Lexer** (`lexer.rs`) — Tokenizes source into tokens
+2. **Parser** (`parser.rs`) — Builds AST from tokens
+3. **Macro Expansion** (`expand.rs`) — Expands macros, handles quasiquote/unquote
+4. **Name Resolution** (`resolve.rs`) — Resolves symbols, registers builtins
+5. **Type Inference** (`infer.rs`) — Hindley-Milner style inference with annotations
+6. **Closure Analysis** (`closures/`) — Capture analysis, escape detection, conversion
+7. **Ownership Checking** (`ownership.rs`) — Simplified borrow checking
+8. **Code Generation** (`codegen/`) — Emits lIR AST
+
+## Key Compiler Modules
+
+| Module | Responsibility |
+|--------|----------------|
+| `ast.rs` | AST types (Expr, Def, Pattern) |
+| `closures/analysis.rs` | Determines what variables closures capture |
+| `closures/escape.rs` | Detects if closures escape their scope |
+| `closures/conversion.rs` | Converts closures to structs + function pointers |
+| `codegen/builtins.rs` | Generates lIR for builtin operations (+, -, print, etc.) |
+| `codegen/protocols.rs` | Protocol dispatch table generation |
+| `codegen/context.rs` | Code generation context and state |
+| `eval.rs` | Macro-time evaluation (for defmacro bodies) |
+| `loader.rs` | File loading with namespace support |
+| `macro_jit.rs` | JIT compilation for macro expansion |
+
+## lIR Crates
+
+| Crate | Purpose |
+|-------|---------|
+| `lir-core` | AST, parser, types, borrow checking for lIR |
+| `lir-codegen` | LLVM IR generation, JIT compilation |
+| `lir-lair` | AOT compiler (lIR → native executable) |
+| `lir-cli` | Command-line lIR expression evaluator |
+| `lir-repl` | Interactive lIR REPL |
+
+## Runtime
+
+`liar-runtime/` provides:
+- Async I/O reactor (epoll on Linux, kqueue on macOS)
+- Task executor for async/await
+- FFI functions callable from liar code
 
 ---
 

@@ -12,30 +12,28 @@ liar source → liar compiler → lIR → LLVM IR → native code
 
 ## Current Status
 
-liar is a working compiler with a functional REPL. The core language works, but the standard library is minimal and some planned features aren't yet implemented.
+liar is a working compiler with a functional REPL. The core language is complete with a growing standard library.
 
-**What works today (62 passing test scenarios):**
-- Arithmetic, comparisons, boolean logic
-- Functions with type inference
-- Let bindings (sequential and parallel)
+**What works today (117 passing test scenarios for liar, 286 for lIR):**
+- Arithmetic, comparisons, boolean logic (int and float)
+- Functions with type inference and annotations
+- Let bindings (sequential and parallel, with destructuring)
 - Atoms for thread-safe shared state
-- Closures with capture analysis
-- Structs and protocols
-- Macros with quasiquote
-- Ownership and borrow checking
+- Closures with capture analysis and escape detection
+- Structs with typed fields and protocols with default implementations
+- Macros with quasiquote, unquote, splicing, and gensym
+- Ownership and simplified borrow checking
+- I/O via `print`/`println` builtins
+- Async I/O (file, socket, pipe) via `liar.io`
+- Persistent data structures (vectors, hashmaps, hashsets)
 - REPL with incremental JIT
-
-**Partial/untested:**
-- Persistent vectors and maps (literals only, no operations)
-- SIMD vector literals
+- nREPL server for IDE integration
 
 **Not yet implemented:**
-- I/O (no `println` yet)
-- Collection operations (`map`, `filter`, `reduce`)
-- Recursive functions (need branch-based control flow)
-- Modules
-- Enums
-- Error propagation (`?` operator)
+- Pattern matching / match expressions
+- Algebraic data types (enums)
+- Module system
+- Full borrow checking
 
 ## Quick Start
 
@@ -253,39 +251,65 @@ A 1:1 mapping to LLVM IR with parentheses:
 
 ## Standard Library
 
-The stdlib is currently minimal:
+Libraries in `lib/` use namespaced naming (`liar.{name}.liar`):
 
 ```lisp
-(inc x)      ; (+ x 1)
-(dec x)      ; (- x 1)  
-(square x)   ; (* x x)
+;; Core utilities (liar.core)
+(inc x)           ; (+ x 1)
+(dec x)           ; (- x 1)
+(min a b)         ; smaller of a, b
+(max a b)         ; larger of a, b
+(abs x)           ; absolute value
+(clamp x lo hi)   ; constrain x to [lo, hi]
+
+;; Threading macros
+(thread-first x (f a) (g b))  ; => (g (f x a) b)
+(thread-last x (f a) (g b))   ; => (g b (f a x))
+
+;; I/O (liar.io)
+(slurp "file.txt")            ; read file to string
+(spit "file.txt" contents)    ; write string to file
+(println-str "hello")         ; print with newline
+
+;; Collections (liar.vector, liar.hashmap, liar.hashset)
+(vector 1 2 3)                ; persistent vector
+(hashmap :a 1 :b 2)           ; persistent hash map
+(hashset 1 2 3)               ; persistent hash set
 ```
 
-Built-in operations available without stdlib:
+**Built-in operations** (no require needed):
 - Arithmetic: `+`, `-`, `*`, `/`, `rem`
 - Comparison: `<`, `>`, `<=`, `>=`, `=`, `!=`
 - Boolean: `and`, `or`, `not`
 - Atoms: `atom`, `swap!`, `reset!`, `compare-and-set!`, `@`
-- References: `ref`, `ref-mut`, `deref`
-- Arrays: `array`, `array-get`, `array-set`, `array-len`
+- I/O: `print`, `println`
+- Memory: `heap-array`, `aget`, `aset`, `share`
+- Pointers: `ptr+`, `load-byte`, `store-byte`
 
 ## Project Structure
 
 ```
 liar/
 ├── liar/           # High-level Lisp compiler
-├── liar-repl/      # Interactive REPL  
-├── liar-nrepl/     # nREPL server
-├── liar-cert/      # BDD tests for liar
+│   └── src/
+│       ├── lexer.rs, parser.rs, ast.rs    # Frontend
+│       ├── expand.rs, resolve.rs          # Macro expansion, name resolution
+│       ├── infer.rs, ownership.rs         # Type inference, borrow checking
+│       ├── closures/                      # Closure analysis & conversion
+│       └── codegen/                       # lIR code generation
+├── liar-repl/      # Interactive REPL with JIT
+├── liar-nrepl/     # nREPL server for IDE integration
+├── liar-runtime/   # Async I/O runtime (epoll/kqueue)
+├── liar-cert/      # BDD tests for liar (117 scenarios)
 ├── lir-core/       # lIR AST, parser, types
-├── lir-codegen/    # LLVM code generation
+├── lir-codegen/    # LLVM IR generation, JIT
 ├── lir-lair/       # lIR AOT compiler
-├── lir-cli/        # lIR evaluator
+├── lir-cli/        # lIR expression evaluator
 ├── lir-repl/       # lIR REPL
-├── cert/           # BDD tests for lIR
-├── lib/            # Standard library
+├── cert/           # BDD tests for lIR (286 scenarios)
+├── lib/            # Standard library (.liar files)
 └── doc/            # Documentation
-    ├── LIAR.md     # Language specification (aspirational)
+    ├── LIAR.md     # Language specification
     ├── lIR.md      # lIR reference
     └── adr/        # Architecture decisions
 ```
@@ -296,11 +320,11 @@ liar/
 # Run all tests
 cargo test
 
-# Run lIR specification tests (202 scenarios)
+# Run lIR specification tests (286 scenarios)
 cargo test --test cert
 
-# Run liar tests
-cargo test --test liar-cert
+# Run liar tests (117 scenarios)
+cargo test -p liar-cert --test cert
 ```
 
 ## Documentation
@@ -312,10 +336,10 @@ cargo test --test liar-cert
 ## Roadmap
 
 Near-term priorities:
-1. **I/O** - `print`, `println`, file operations
-2. **Stdlib** - `map`, `filter`, `reduce`, `range`
-3. **Collection operations** - `get`, `assoc`, `conj`
-4. **Better errors** - Source locations in error messages
+1. **Pattern matching** - `match` expressions with destructuring
+2. **Algebraic data types** - enums / sum types
+3. **Module system** - proper imports/exports
+4. **String protocols** - Unicode strings with Seq protocol
 
 See `.moth/` for detailed work items.
 
