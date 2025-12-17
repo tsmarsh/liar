@@ -1,0 +1,214 @@
+;; closures.liar - Closure conversion with capture analysis
+;;
+;; Closure conversion transforms lambdas into top-level functions with
+;; explicit environment passing. This module:
+;;
+;; 1. Finds free variables in lambda bodies
+;; 2. Determines capture mode (move/borrow/clone) per ADR 005
+;; 3. Generates environment structs for captured variables
+;; 4. Lifts lambdas to top-level functions
+;; 5. Tracks closure color (let/plet/pure) per ADR 010
+;;
+;; Key insight: closures are just functions with a hidden first parameter
+;; (the environment struct) that holds captured values.
+
+(ns liarliar.closures
+  (:require [liarliar.symbols :refer :all]
+            [liarliar.env :refer :all]
+            [liarliar.value :refer :all]))
+
+;; ============================================================
+;; Capture Modes (per ADR 005)
+;; ============================================================
+
+(def CAPTURE-MOVE 0)    ;; Transfer ownership into closure
+(def CAPTURE-BORROW 1)  ;; Borrow reference (closure cannot escape)
+(def CAPTURE-CLONE 2)   ;; Clone value into closure
+
+;; ============================================================
+;; Closure Colors (per ADR 010)
+;; ============================================================
+;;
+;; Pure closures: No captures, can be called anywhere
+;; Let closures: Captures from let/defun, single-threaded
+;; Plet closures: Captures from plet (atoms), thread-safe
+
+(def COLOR-PURE 0)
+(def COLOR-LET 1)
+(def COLOR-PLET 2)
+
+;; ============================================================
+;; Capture Info
+;; ============================================================
+;;
+;; Tracks captured variables for a closure
+
+(defstruct CaptureInfo
+  (cap-sym-id: i64      ;; Symbol ID of captured var
+   cap-mode: i64        ;; CAPTURE-* mode
+   cap-next: ptr))      ;; Next capture (linked list)
+
+(defun make-capture (sym-id mode: i64) -> ptr
+  (share (CaptureInfo sym-id mode nil)))
+
+(defun capture-sym-id (c: ptr) -> i64
+  (. c cap-sym-id))
+
+(defun capture-mode (c: ptr) -> i64
+  (. c cap-mode))
+
+(defun capture-next (c: ptr) -> ptr
+  (. c cap-next))
+
+;; Add capture to list
+(defun captures-cons (c: ptr rest: ptr) -> ptr
+  (share (CaptureInfo (capture-sym-id c) (capture-mode c) rest)))
+
+;; ============================================================
+;; Closure Info
+;; ============================================================
+;;
+;; Complete closure conversion result
+
+(defstruct ClosureInfo
+  (clos-name: ptr       ;; Generated function name (symbol)
+   clos-env-name: ptr   ;; Generated env struct name (symbol)
+   clos-captures: ptr   ;; CaptureInfo list
+   clos-color: i64      ;; COLOR-* value
+   clos-escapes: i64))  ;; 1 if closure escapes, 0 if local
+
+(defun make-closure-info (name: ptr env-name: ptr) -> ptr
+  (share (ClosureInfo name env-name nil COLOR-PURE 0)))
+
+;; ============================================================
+;; Free Variable Analysis
+;; ============================================================
+;;
+;; Find variables used but not defined within a form.
+;; Uses environment to track bound variables.
+
+(defun is-bound? (env: ptr sym-id) -> i64
+  (env-defined? env sym-id))
+
+;; Add symbol to free set (simple list of sym-ids)
+;; Returns new list with sym-id prepended (if not already present)
+(defun add-free-loop (lst: ptr sym-id) -> i64
+  (if (nil? lst)
+      0  ;; not found
+      (if (= sym-id (icons-head lst))
+          1  ;; already present
+          (add-free-loop (icons-tail lst) sym-id))))
+
+(defun add-free (free: ptr sym-id) -> ptr
+  (if (= 1 (add-free-loop free sym-id))
+      free  ;; already present
+      (icons sym-id free)))
+
+;; Merge two free variable lists
+(defun merge-free (a: ptr b: ptr) -> ptr
+  (if (nil? a)
+      b
+      (merge-free (icons-tail a) (add-free b (icons-head a)))))
+
+;; Count free variables
+(defun count-free (lst: ptr) -> i64
+  (if (nil? lst)
+      0
+      (+ 1 (count-free (icons-tail lst)))))
+
+;; ============================================================
+;; Closure Conversion Context
+;; ============================================================
+
+(defstruct ClosureCtx
+  (cctx-syms: ptr       ;; SymbolTable for gensym
+   cctx-counter: i64    ;; Counter for unique names
+   cctx-lifted: ptr))   ;; List of lifted functions
+
+(defun make-closure-ctx (syms: ptr) -> ptr
+  (share (ClosureCtx syms 0 nil)))
+
+(defun cctx-gensym (ctx: ptr prefix) -> ptr
+  ;; Generate unique symbol name by appending counter
+  ;; TODO: proper string concat with counter
+  (intern (. ctx cctx-syms) prefix))
+
+;; ============================================================
+;; Capture Mode Determination
+;; ============================================================
+;;
+;; Per ADR 005, capture mode depends on how the variable is used:
+;; - If mutated in closure body: needs ownership (move or clone)
+;; - If only read and closure doesn't escape: can borrow
+;; - Default: move (safest)
+
+(defun determine-capture-mode (escapes body: ptr sym-id) -> i64
+  ;; For now, default to move semantics
+  ;; A proper implementation would analyze:
+  ;; 1. Is the variable mutated?
+  ;; 2. Does the closure escape?
+  ;; 3. Is the variable copyable?
+  (if (= 0 escapes)
+      CAPTURE-BORROW  ;; Non-escaping can borrow
+      CAPTURE-MOVE))  ;; Escaping needs to move/clone
+
+;; ============================================================
+;; Escape Analysis
+;; ============================================================
+;;
+;; Determines if a closure escapes its defining scope:
+;; - Returned from function -> escapes
+;; - Stored in struct -> escapes
+;; - Passed to unknown function -> escapes
+;; - Only called locally -> doesn't escape
+
+(defun closure-escapes? (ctx: ptr form: ptr) -> i64
+  ;; For now, conservatively assume all closures escape
+  ;; A proper implementation would do data flow analysis
+  1)
+
+;; ============================================================
+;; Closure Color Tracking
+;; ============================================================
+;;
+;; Per ADR 010, closure color determined by capture context:
+;; - No captures -> pure
+;; - Captures from let -> let-closure
+;; - Captures from plet (atoms) -> plet-closure
+
+(defun determine-color (captures: ptr env: ptr) -> i64
+  (if (nil? captures)
+      COLOR-PURE
+      ;; TODO: check if any capture is from plet (atom)
+      ;; For now, assume let-closure
+      COLOR-LET))
+
+;; ============================================================
+;; Build Captures List
+;; ============================================================
+
+(defun build-captures-loop (free: ptr env: ptr escapes acc: ptr) -> ptr
+  (if (nil? free)
+      acc
+      (let ((sym-id (icons-head free))
+            (mode (determine-capture-mode escapes nil sym-id))
+            (cap (make-capture sym-id mode)))
+        (build-captures-loop (icons-tail free) env escapes (captures-cons cap acc)))))
+
+(defun build-captures (free: ptr env: ptr escapes) -> ptr
+  (build-captures-loop free env escapes nil))
+
+;; ============================================================
+;; Main Conversion Entry Point
+;; ============================================================
+;;
+;; convert-closure: Takes a lambda form and returns ClosureInfo
+;; with all the information needed for code generation.
+
+(defun convert-closure (ctx: ptr env: ptr form: ptr) -> ptr
+  ;; Analyze closure
+  (let ((escapes (closure-escapes? ctx form)))
+    ;; TODO: find free vars, build captures, determine color
+    ;; For now, return minimal closure info with nil names
+    ;; Real implementation would use gensym for unique names
+    (make-closure-info nil nil)))
