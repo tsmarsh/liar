@@ -1,0 +1,236 @@
+;; ownership.liar - Borrow checking for memory safety
+;;
+;; Tracks ownership state per binding to prevent:
+;; - Use after move
+;; - Aliasing violations (multiple mutable borrows)
+;; - Borrows outliving their referents
+;;
+;; Per ADR 007, aliasing of immutable values is always safe.
+;; Most liar code (immutable by default per ADR 001) won't trigger errors.
+;;
+;; Tricky cases:
+;; 1. Mutable captures in closures (ADR 005)
+;; 2. Mutable borrows (&x)
+;; 3. Values passed to functions (moved by default)
+
+(ns liarliar.ownership
+  (:require [liarliar.symbols :refer :all]
+            [liarliar.env :refer :all]
+            [liarliar.value :refer :all]))
+
+;; ============================================================
+;; Ownership States
+;; ============================================================
+
+(def STATE-OWNED 0)        ;; Value is owned by this binding
+(def STATE-MOVED 1)        ;; Value was moved away
+(def STATE-BORROWED 2)     ;; Immutably borrowed (multiple OK)
+(def STATE-BORROWED-MUT 3) ;; Mutably borrowed (exclusive)
+
+;; ============================================================
+;; Ownership Info
+;; ============================================================
+;;
+;; Tracks state for a single binding
+
+(defstruct OwnerInfo
+  (owner-sym-id: i64      ;; Symbol ID of the binding
+   owner-state: i64       ;; STATE-* value
+   owner-moved-at: i64    ;; Source location if moved
+   owner-borrow-count: i64)) ;; Number of active borrows
+
+(defun make-owner-info (sym-id) -> ptr
+  (share (OwnerInfo sym-id STATE-OWNED 0 0)))
+
+(defun owner-sym-id (o: ptr) -> i64
+  (. o owner-sym-id))
+
+(defun owner-state (o: ptr) -> i64
+  (. o owner-state))
+
+(defun owner-moved-at (o: ptr) -> i64
+  (. o owner-moved-at))
+
+(defun owner-borrow-count (o: ptr) -> i64
+  (. o owner-borrow-count))
+
+;; ============================================================
+;; State Predicates
+;; ============================================================
+
+(defun state-owned? (state) -> i64
+  (if (= state STATE-OWNED) 1 0))
+
+(defun state-moved? (state) -> i64
+  (if (= state STATE-MOVED) 1 0))
+
+(defun state-borrowed? (state) -> i64
+  (if (= state STATE-BORROWED) 1 0))
+
+(defun state-borrowed-mut? (state) -> i64
+  (if (= state STATE-BORROWED-MUT) 1 0))
+
+;; ============================================================
+;; Borrow Info
+;; ============================================================
+;;
+;; Tracks an active borrow
+
+(defstruct BorrowInfo
+  (borrow-id: i64          ;; Unique borrow ID
+   borrow-target: i64      ;; Symbol ID being borrowed
+   borrow-mutable: i64     ;; 1 if mutable borrow, 0 otherwise
+   borrow-scope-depth: i64 ;; Scope depth when borrow was created
+   borrow-next: ptr))      ;; Next borrow (linked list)
+
+(defun make-borrow (id: i64 target: i64 mutable scope-depth) -> ptr
+  (share (BorrowInfo id target mutable scope-depth nil)))
+
+;; ============================================================
+;; Ownership Context
+;; ============================================================
+;;
+;; Tracks ownership state during checking
+;; Uses parallel arrays for owner tracking (simpler than env)
+
+(defstruct OwnerCtx
+  (octx-sym-ids: ptr      ;; i64 array of symbol IDs
+   octx-states: ptr       ;; i64 array of states
+   octx-count: i64        ;; number of tracked bindings
+   octx-cap: i64          ;; capacity
+   octx-scope-depth: i64  ;; Current scope nesting depth
+   octx-errors: ptr))     ;; List of error messages
+
+(defun make-owner-ctx () -> ptr
+  (let ((cap 256))
+    (share (OwnerCtx
+            (heap-array cap)   ;; sym-ids
+            (heap-array cap)   ;; states
+            0                  ;; count
+            cap                ;; capacity
+            0                  ;; scope depth
+            nil))))            ;; no errors
+
+;; ============================================================
+;; Owner Registration
+;; ============================================================
+
+;; Find index of sym-id in owners array, or -1 if not found
+(defun find-owner-loop (ids: ptr sym-id count idx) -> i64
+  (if (>= idx count)
+      -1
+      (if (= (aget ids idx) sym-id)
+          idx
+          (find-owner-loop ids sym-id count (+ idx 1)))))
+
+(defun find-owner (ctx: ptr sym-id) -> i64
+  (find-owner-loop (. ctx octx-sym-ids) sym-id (. ctx octx-count) 0))
+
+(defun register-owner! (ctx: ptr sym-id) -> i64
+  (let ((count (. ctx octx-count))
+        (ids (. ctx octx-sym-ids))
+        (states (. ctx octx-states)))
+    ;; TODO: check capacity
+    (do
+      (aset ids count sym-id)
+      (aset states count STATE-OWNED)
+      ;; Note: count is not incremented in struct (would need mutation)
+      ;; For now, caller must track count externally or we return new count
+      (+ count 1))))
+
+(defun get-owner-state (ctx: ptr sym-id) -> i64
+  (let ((idx (find-owner ctx sym-id)))
+    (if (< idx 0)
+        -1  ;; not found
+        (aget (. ctx octx-states) idx))))
+
+;; ============================================================
+;; State Transitions
+;; ============================================================
+
+(defun set-owner-state! (ctx: ptr sym-id new-state) -> i64
+  (let ((idx (find-owner ctx sym-id)))
+    (if (< idx 0)
+        -1  ;; not found
+        (do
+          (aset (. ctx octx-states) idx new-state)
+          0))))
+
+(defun mark-moved! (ctx: ptr sym-id) -> i64
+  (set-owner-state! ctx sym-id STATE-MOVED))
+
+(defun mark-borrowed! (ctx: ptr sym-id) -> i64
+  (set-owner-state! ctx sym-id STATE-BORROWED))
+
+(defun mark-borrowed-mut! (ctx: ptr sym-id) -> i64
+  (set-owner-state! ctx sym-id STATE-BORROWED-MUT))
+
+;; ============================================================
+;; Validation Checks
+;; ============================================================
+
+(defun can-use? (ctx: ptr sym-id) -> i64
+  (let ((state (get-owner-state ctx sym-id)))
+    (if (< state 0)
+        1  ;; Unknown bindings assumed usable (builtins)
+        (if (= 1 (state-moved? state))
+            0  ;; Cannot use moved value
+            (if (= 1 (state-borrowed-mut? state))
+                0  ;; Cannot use while mutably borrowed
+                1)))))
+
+(defun can-move? (ctx: ptr sym-id) -> i64
+  (let ((state (get-owner-state ctx sym-id)))
+    (if (< state 0)
+        1
+        (if (= 1 (state-moved? state))
+            0  ;; Already moved
+            (if (= 1 (state-borrowed? state))
+                0  ;; Cannot move while borrowed
+                1)))))
+
+(defun can-borrow? (ctx: ptr sym-id) -> i64
+  (let ((state (get-owner-state ctx sym-id)))
+    (if (< state 0)
+        1
+        (if (= 1 (state-moved? state))
+            0  ;; Cannot borrow moved value
+            (if (= 1 (state-borrowed-mut? state))
+                0  ;; Cannot borrow while mutably borrowed
+                1)))))
+
+(defun can-borrow-mut? (ctx: ptr sym-id) -> i64
+  (let ((state (get-owner-state ctx sym-id)))
+    (if (< state 0)
+        1
+        (if (= 1 (state-moved? state))
+            0  ;; Cannot borrow moved value
+            (if (or (= 1 (state-borrowed? state))
+                    (= 1 (state-borrowed-mut? state)))
+                0  ;; Cannot mutably borrow while any borrow active
+                1)))))
+
+;; ============================================================
+;; Scope Management
+;; ============================================================
+
+(defun enter-scope! (ctx: ptr) -> i64
+  ;; TODO: increment scope depth
+  (+ (. ctx octx-scope-depth) 1))
+
+(defun exit-scope! (ctx: ptr) -> i64
+  ;; TODO: end all borrows from this scope
+  ;; TODO: decrement scope depth
+  (- (. ctx octx-scope-depth) 1))
+
+;; ============================================================
+;; Main Entry Point
+;; ============================================================
+;;
+;; check-ownership: Walk AST and validate ownership rules
+;; Returns 1 if valid, 0 if errors found
+
+(defun check-ownership (ctx: ptr form: ptr) -> i64
+  ;; For bootstrap, just return success
+  ;; Full implementation would walk AST and check rules
+  1)
