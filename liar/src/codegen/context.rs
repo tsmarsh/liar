@@ -27,6 +27,8 @@ pub struct CodegenContext {
     pub var_struct_types: HashMap<String, String>,
     /// Variable types for phi inference
     var_types: HashMap<String, lir::ReturnType>,
+    /// Global constants (from def) - maps name to literal value
+    pub constants: HashMap<String, i64>,
     /// Protocol method to protocol name mapping
     pub protocol_methods: HashMap<String, String>,
     /// Protocol implementations: (type_name, method_name) -> impl_fn_name
@@ -89,6 +91,7 @@ impl CodegenContext {
             struct_defs: HashMap::new(),
             var_struct_types: HashMap::new(),
             var_types: HashMap::new(),
+            constants: HashMap::new(),
             protocol_methods: HashMap::new(),
             protocol_impls: HashMap::new(),
             type_protocols: HashMap::new(),
@@ -181,6 +184,16 @@ impl CodegenContext {
     /// Look up a variable's type
     pub fn lookup_var_type(&self, var_name: &str) -> Option<&lir::ReturnType> {
         self.var_types.get(var_name)
+    }
+
+    /// Register a global constant (from def)
+    pub fn register_constant(&mut self, name: &str, value: i64) {
+        self.constants.insert(name.to_string(), value);
+    }
+
+    /// Look up a global constant
+    pub fn lookup_constant(&self, name: &str) -> Option<i64> {
+        self.constants.get(name).copied()
     }
 
     // ========== Block Management ==========

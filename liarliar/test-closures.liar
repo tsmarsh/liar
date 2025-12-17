@@ -1,0 +1,244 @@
+;; test-closures.liar - Tests for closure conversion
+;;
+;; Tests free variable analysis, capture building, and closure conversion.
+
+(ns liarliar.test-closures
+  (:require [liar.test :refer :all]
+            [liarliar.symbols :refer :all]
+            [liarliar.env :refer :all]
+            [liarliar.value :refer :all]
+            [liarliar.closures :refer :all]))
+
+;; ============================================================
+;; Test Helpers
+;; ============================================================
+
+;; Create a symbol from ASCII codes
+(defun test-sym (syms: ptr c0 c1 c2 c3 len: i64) -> ptr
+  (let ((buf (heap-array 5)))
+    (do
+      (store-byte buf c0)
+      (store-byte (ptr+ buf 1) c1)
+      (store-byte (ptr+ buf 2) c2)
+      (store-byte (ptr+ buf 3) c3)
+      (store-byte (ptr+ buf len) 0)
+      (intern syms buf))))
+
+;; fn symbol (102 110)
+(defun make-fn-sym (syms: ptr) -> ptr
+  (test-sym syms 102 110 0 0 2))
+
+;; let symbol (108 101 116)
+(defun make-let-sym (syms: ptr) -> ptr
+  (test-sym syms 108 101 116 0 3))
+
+;; + symbol (43)
+(defun make-plus-sym (syms: ptr) -> ptr
+  (test-sym syms 43 0 0 0 1))
+
+;; x symbol (120)
+(defun make-x-sym (syms: ptr) -> ptr
+  (test-sym syms 120 0 0 0 1))
+
+;; y symbol (121)
+(defun make-y-sym (syms: ptr) -> ptr
+  (test-sym syms 121 0 0 0 1))
+
+;; a symbol (97)
+(defun make-a-sym (syms: ptr) -> ptr
+  (test-sym syms 97 0 0 0 1))
+
+;; ============================================================
+;; Test: Free Variable - None (integer)
+;; ============================================================
+
+(defun test-free-vars-int (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (env (make-global-env))
+        (expr (box-int 42))
+        (free (find-free-vars expr env)))
+    (do
+      (assert t (nil? free))
+      0)))
+
+;; ============================================================
+;; Test: Free Variable - Single symbol (x is free)
+;; ============================================================
+
+(defun test-free-vars-symbol (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (env (make-global-env))
+        (x-sym (make-x-sym syms))
+        (x-id (symbol-id x-sym))
+        (free (find-free-vars x-sym env)))
+    (do
+      (assert t (icons? free))
+      (assert-eq t (icons-head free) x-id)
+      0)))
+
+;; ============================================================
+;; Test: Free Variable - Symbol bound in env
+;; ============================================================
+
+(defun test-free-vars-bound (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (env (make-global-env))
+        (x-sym (make-x-sym syms)))
+    (do
+      ;; Bind x in environment
+      (env-define! env (symbol-id x-sym) 42)
+      (let ((free (find-free-vars x-sym env)))
+        (do
+          (assert t (nil? free))
+          0)))))
+
+;; ============================================================
+;; Test: Free Variable - Lambda with param bound
+;; ============================================================
+;;
+;; (fn (x) x)  -> no free vars (x is a param)
+
+(defun test-free-vars-lambda-param (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (env (make-global-env))
+        (fn-sym (make-fn-sym syms))
+        (x-sym (make-x-sym syms))
+        ;; Build (fn (x) x)
+        (params (scons x-sym nil))
+        (body x-sym)
+        (lambda (scons fn-sym (scons params (scons body nil))))
+        (free (find-free-vars lambda env)))
+    (do
+      (assert t (nil? free))
+      0)))
+
+;; ============================================================
+;; Test: Free Variable - Lambda with free var
+;; ============================================================
+;;
+;; (fn (x) y)  -> y is free
+
+(defun test-free-vars-lambda-free (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (env (make-global-env))
+        (fn-sym (make-fn-sym syms))
+        (x-sym (make-x-sym syms))
+        (y-sym (make-y-sym syms))
+        (y-id (symbol-id y-sym))  ;; capture id before using y-sym
+        ;; Build (fn (x) y)
+        (params (scons x-sym nil))
+        (body y-sym)
+        (lambda (scons fn-sym (scons params (scons body nil))))
+        (free (find-free-vars lambda env)))
+    (do
+      (assert t (icons? free))
+      (assert-eq t (icons-head free) y-id)
+      0)))
+
+;; ============================================================
+;; Test: Gensym generates unique names
+;; ============================================================
+
+(defun test-gensym (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (ctx (make-closure-ctx syms))
+        (sym1 (gensym-closure ctx))
+        (ctx2 (cctx-inc-counter ctx))
+        (sym2 (gensym-closure ctx2)))
+    (do
+      (assert t (symbol? sym1))
+      (assert t (symbol? sym2))
+      (assert t (!= (symbol-id sym1) (symbol-id sym2)))
+      0)))
+
+;; ============================================================
+;; Test: Convert closure - pure (no captures)
+;; ============================================================
+;;
+;; (fn (x) x) -> pure closure (no captures)
+
+(defun test-convert-pure (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (env (make-global-env))
+        (ctx (make-closure-ctx syms))
+        (fn-sym (make-fn-sym syms))
+        (x-sym (make-x-sym syms))
+        ;; Build (fn (x) x)
+        (params (scons x-sym nil))
+        (body x-sym)
+        (lambda (scons fn-sym (scons params (scons body nil))))
+        ;; Convert
+        (result (convert-closure ctx env lambda))
+        (new-ctx (pcons-head result))
+        (info (pcons-tail result)))
+    (do
+      (assert t (symbol? (closure-info-name info)))
+      (assert t (symbol? (closure-info-env-name info)))
+      (assert t (nil? (closure-info-captures info)))
+      (assert-eq t (closure-info-color info) 0)
+      0)))
+
+;; ============================================================
+;; Test: Convert closure - with captures
+;; ============================================================
+;;
+;; (fn (x) y) -> captures y
+
+(defun test-convert-capture (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (env (make-global-env))
+        (ctx (make-closure-ctx syms))
+        (fn-sym (make-fn-sym syms))
+        (x-sym (make-x-sym syms))
+        (y-sym (make-y-sym syms))
+        (y-id (symbol-id y-sym))  ;; capture id before using y-sym
+        ;; Build (fn (x) y)
+        (params (scons x-sym nil))
+        (body y-sym)
+        (lambda (scons fn-sym (scons params (scons body nil))))
+        ;; Convert
+        (result (convert-closure ctx env lambda))
+        (info (pcons-tail result))
+        (captures (closure-info-captures info)))
+    (do
+      (assert t (not (nil? captures)))
+      (assert-eq t (capture-sym-id captures) y-id)
+      0)))
+
+;; ============================================================
+;; Test: Build captures directly
+;; ============================================================
+
+(defun test-build-captures (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (env (make-global-env))
+        (y-sym (make-y-sym syms))
+        (y-id (symbol-id y-sym))
+        ;; Create a free list with just y-id
+        (free (icons y-id nil))
+        ;; Build captures from free list
+        (captures (build-captures free env 0)))
+    (do
+      (assert t (not (nil? captures)))
+      (assert-eq t (capture-sym-id captures) y-id)
+      0)))
+
+;; ============================================================
+;; Run All Tests
+;; ============================================================
+
+(defun run-closure-tests (t: ptr) -> i64
+  (do
+    (test-free-vars-int t)
+    (test-free-vars-symbol t)
+    (test-free-vars-bound t)
+    (test-free-vars-lambda-param t)
+    (test-free-vars-lambda-free t)
+    (test-gensym t)
+    (test-build-captures t)
+    (test-convert-pure t)
+    (test-convert-capture t)
+    0))
+
+(defun main () -> i64
+  (run-tests-verbose run-closure-tests))

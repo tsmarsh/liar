@@ -55,6 +55,13 @@ pub fn generate_expr(ctx: &mut CodegenContext, expr: &Spanned<Expr>) -> Result<l
             if ctx.lookup_var_type(&name.name).is_some() {
                 Ok(lir::Expr::LocalRef(name.name.clone()))
             }
+            // If it's a global constant, inline the value
+            else if let Some(value) = ctx.lookup_constant(&name.name) {
+                Ok(lir::Expr::IntLit {
+                    ty: lir::ScalarType::I64,
+                    value: value.into(),
+                })
+            }
             // If it's a known function (not extern), wrap in closure pair { @fn, null }
             else if ctx.lookup_func_return_type(&name.name).is_some()
                 && !ctx.is_extern(&name.name)

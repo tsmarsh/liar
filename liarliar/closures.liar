@@ -77,8 +77,73 @@
    clos-color: i64      ;; COLOR-* value
    clos-escapes: i64))  ;; 1 if closure escapes, 0 if local
 
-(defun make-closure-info (name: ptr env-name: ptr) -> ptr
-  (share (ClosureInfo name env-name nil COLOR-PURE 0)))
+(defun make-closure-info (fn-name: ptr envstruct-name: ptr) -> ptr
+  (share (ClosureInfo fn-name envstruct-name nil COLOR-PURE 0)))
+
+(defun closure-info-name (c: ptr) -> ptr
+  (. c clos-name))
+
+(defun closure-info-env-name (c: ptr) -> ptr
+  (. c clos-env-name))
+
+(defun closure-info-captures (c: ptr) -> ptr
+  (. c clos-captures))
+
+(defun closure-info-color (c: ptr) -> i64
+  (. c clos-color))
+
+(defun closure-info-escapes (c: ptr) -> i64
+  (. c clos-escapes))
+
+;; ============================================================
+;; Keyword Symbol Recognition
+;; ============================================================
+;;
+;; Check if a symbol matches a known keyword by name.
+;; Used to identify special forms (fn, let, if, do, etc.)
+
+(defun sym-name-eq-2 (name: ptr c0 c1: i64) -> i64
+  (if (!= (load-byte name) c0)
+      0
+      (if (!= (load-byte (ptr+ name 1)) c1)
+          0
+          (if (= 0 (load-byte (ptr+ name 2))) 1 0))))
+
+(defun sym-name-eq-3 (name: ptr c0 c1 c2: i64) -> i64
+  (if (!= (load-byte name) c0)
+      0
+      (if (!= (load-byte (ptr+ name 1)) c1)
+          0
+          (if (!= (load-byte (ptr+ name 2)) c2)
+              0
+              (if (= 0 (load-byte (ptr+ name 3))) 1 0)))))
+
+(defun sym-name-eq-4 (name: ptr c0 c1 c2 c3: i64) -> i64
+  (if (!= (load-byte name) c0)
+      0
+      (if (!= (load-byte (ptr+ name 1)) c1)
+          0
+          (if (!= (load-byte (ptr+ name 2)) c2)
+              0
+              (if (!= (load-byte (ptr+ name 3)) c3)
+                  0
+                  (if (= 0 (load-byte (ptr+ name 4))) 1 0))))))
+
+;; Check keyword names
+(defun is-fn-sym? (sym: ptr) -> i64
+  (sym-name-eq-2 (symbol-name sym) 102 110))  ;; f n
+
+(defun is-let-sym? (sym: ptr) -> i64
+  (sym-name-eq-3 (symbol-name sym) 108 101 116))  ;; l e t
+
+(defun is-plet-sym? (sym: ptr) -> i64
+  (sym-name-eq-4 (symbol-name sym) 112 108 101 116))  ;; p l e t
+
+(defun is-if-sym? (sym: ptr) -> i64
+  (sym-name-eq-2 (symbol-name sym) 105 102))  ;; i f
+
+(defun is-do-sym? (sym: ptr) -> i64
+  (sym-name-eq-2 (symbol-name sym) 100 111))  ;; d o
 
 ;; ============================================================
 ;; Free Variable Analysis
@@ -86,20 +151,23 @@
 ;;
 ;; Find variables used but not defined within a form.
 ;; Uses environment to track bound variables.
+;;
+;; Strategy: Walk the AST, maintaining a local environment of bound vars.
+;; Any symbol reference not in local env is a free variable.
 
-(defun is-bound? (env: ptr sym-id) -> i64
+(defun is-bound? (env: ptr sym-id: i64) -> i64
   (env-defined? env sym-id))
 
 ;; Add symbol to free set (simple list of sym-ids)
 ;; Returns new list with sym-id prepended (if not already present)
-(defun add-free-loop (lst: ptr sym-id) -> i64
+(defun add-free-loop (lst: ptr sym-id: i64) -> i64
   (if (nil? lst)
       0  ;; not found
       (if (= sym-id (icons-head lst))
           1  ;; already present
           (add-free-loop (icons-tail lst) sym-id))))
 
-(defun add-free (free: ptr sym-id) -> ptr
+(defun add-free (free: ptr sym-id: i64) -> ptr
   (if (= 1 (add-free-loop free sym-id))
       free  ;; already present
       (icons sym-id free)))
@@ -117,6 +185,133 @@
       (+ 1 (count-free (icons-tail lst)))))
 
 ;; ============================================================
+;; AST Walking for Free Variables
+;; ============================================================
+;;
+;; find-free-in: Main entry point for finding free variables in an expr
+;; Returns icons list of sym-ids that are free in the expression.
+;;
+;; Arguments:
+;;   expr - the expression to analyze
+;;   local - environment of locally bound variables (not free)
+;;   free - accumulator of found free variables
+
+;; Add params to local environment
+(defun add-params-to-env (local: ptr params: ptr) -> ptr
+  (if (nil? params)
+      local
+      (if (symbol? params)
+          ;; Single rest param
+          (do (env-define! local (symbol-id params) 1) local)
+          ;; List of params
+          (if (scons? params)
+              (let ((param (scons-head params)))
+                (do
+                  (if (symbol? param)
+                      (env-define! local (symbol-id param) 1)
+                      0)
+                  (add-params-to-env local (scons-tail params))))
+              local))))
+
+;; Process let bindings: ((name val) ...)
+;; Adds names to local env, returns free vars from values
+(defun find-free-in-bindings (bindings: ptr local: ptr free: ptr) -> ptr
+  (if (nil? bindings)
+      free
+      (if (scons? bindings)
+          (let ((binding (scons-head bindings)))
+            (if (scons? binding)
+                (let ((name (scons-head binding))
+                      (val-form (scons-head (scons-tail binding)))
+                      (free2 (find-free-in val-form local free)))
+                  (do
+                    (if (symbol? name)
+                        (env-define! local (symbol-id name) 1)
+                        0)
+                    (find-free-in-bindings (scons-tail bindings) local free2)))
+                free))
+          free)))
+
+;; Find free vars in a list of expressions
+(defun find-free-in-list (exprs: ptr local: ptr free: ptr) -> ptr
+  (if (nil? exprs)
+      free
+      (if (scons? exprs)
+          (let ((free2 (find-free-in (scons-head exprs) local free)))
+            (find-free-in-list (scons-tail exprs) local free2))
+          free)))
+
+;; Find free vars in a list form (dispatches on head)
+(defun find-free-in-list-form (expr: ptr local: ptr free: ptr) -> ptr
+  (let ((head (scons-head expr))
+        (tail (scons-tail expr)))
+    (if (symbol? head)
+        (if (= 1 (is-fn-sym? head))
+            ;; fn form: (fn (params...) body)
+            (let ((params (scons-head tail))
+                  (body (scons-head (scons-tail tail)))
+                  (inner-local (make-scope local)))
+              (do
+                (add-params-to-env inner-local params)
+                (find-free-in body inner-local free)))
+            (if (= 1 (is-let-sym? head))
+                ;; let form
+                (let ((bindings (scons-head tail))
+                      (body (scons-head (scons-tail tail)))
+                      (inner-local (make-scope local))
+                      (free2 (find-free-in-bindings bindings inner-local free)))
+                  (find-free-in body inner-local free2))
+                (if (= 1 (is-plet-sym? head))
+                    ;; plet form
+                    (let ((bindings (scons-head tail))
+                          (body (scons-head (scons-tail tail)))
+                          (inner-local (make-scope local))
+                          (free2 (find-free-in-bindings bindings inner-local free)))
+                      (find-free-in body inner-local free2))
+                    (if (= 1 (is-if-sym? head))
+                        ;; if form: (if cond then else)
+                        (let ((cond-expr (scons-head tail))
+                              (then-expr (scons-head (scons-tail tail)))
+                              (else-expr (scons-head (scons-tail (scons-tail tail))))
+                              (free2 (find-free-in cond-expr local free))
+                              (free3 (find-free-in then-expr local free2)))
+                          (find-free-in else-expr local free3))
+                        (if (= 1 (is-do-sym? head))
+                            ;; do form: (do expr1 expr2 ...)
+                            (find-free-in-list tail local free)
+                            ;; Function call: process all parts
+                            (let ((free2 (find-free-in head local free)))
+                              (find-free-in-list tail local free2)))))))
+        ;; Head is not a symbol - function call with expr as callee
+        (let ((free2 (find-free-in head local free)))
+          (find-free-in-list tail local free2)))))
+
+;; Main free variable finder
+(defun find-free-in (expr: ptr local: ptr free: ptr) -> ptr
+  (if (nil? expr)
+      free  ;; Nil - no free vars
+      (if (boxed-int? expr)
+          free  ;; Boxed int - no free vars
+          (if (boxed-float? expr)
+              free  ;; Boxed float - no free vars
+              (if (symbol? expr)
+                  ;; Symbol - check if bound
+                  (let ((sid (symbol-id expr)))
+                    (if (= 1 (is-bound? local sid))
+                        free  ;; bound locally, not free
+                        (add-free free sid)))
+                  (if (scons? expr)
+                      ;; List - dispatch on head
+                      (find-free-in-list-form expr local free)
+                      ;; Unknown - no free vars
+                      free))))))
+
+;; Find free variables in an expression given an outer environment
+(defun find-free-vars (expr: ptr outer-env: ptr) -> ptr
+  (let ((local (make-scope outer-env)))
+    (find-free-in expr local nil)))
+
+;; ============================================================
 ;; Closure Conversion Context
 ;; ============================================================
 
@@ -128,10 +323,71 @@
 (defun make-closure-ctx (syms: ptr) -> ptr
   (share (ClosureCtx syms 0 nil)))
 
-(defun cctx-gensym (ctx: ptr prefix) -> ptr
-  ;; Generate unique symbol name by appending counter
-  ;; TODO: proper string concat with counter
-  (intern (. ctx cctx-syms) prefix))
+(defun cctx-syms (ctx: ptr) -> ptr
+  (. ctx cctx-syms))
+
+(defun cctx-counter (ctx: ptr) -> i64
+  (. ctx cctx-counter))
+
+(defun cctx-inc-counter (ctx: ptr) -> ptr
+  (share (ClosureCtx (cctx-syms ctx) (+ 1 (cctx-counter ctx)) (. ctx cctx-lifted))))
+
+(defun cctx-add-lifted (ctx: ptr fn-def: ptr) -> ptr
+  (share (ClosureCtx (cctx-syms ctx) (cctx-counter ctx) (pcons fn-def (. ctx cctx-lifted)))))
+
+(defun cctx-lifted (ctx: ptr) -> ptr
+  (. ctx cctx-lifted))
+
+;; ============================================================
+;; Gensym - Generate unique symbols
+;; ============================================================
+;;
+;; Creates symbols like __closure_0, __closure_1, etc.
+
+(defun append-digit (buf: ptr idx n: i64) -> i64
+  (do (store-byte (ptr+ buf idx) (+ 48 (rem n 10)))
+      (+ idx 1)))
+
+(defun int-to-buf-loop (buf: ptr idx n: i64) -> i64
+  (if (< n 10)
+      (append-digit buf idx n)
+      (let ((idx2 (int-to-buf-loop buf idx (/ n 10))))
+        (append-digit buf idx2 (rem n 10)))))
+
+;; Generate a unique symbol: __closure_N or __env_N
+(defun gensym-closure (ctx: ptr) -> ptr
+  (let ((buf (heap-array 20))
+        (counter (cctx-counter ctx)))
+    (do
+      ;; __closure_
+      (store-byte buf 95)           ;; _
+      (store-byte (ptr+ buf 1) 95)  ;; _
+      (store-byte (ptr+ buf 2) 99)  ;; c
+      (store-byte (ptr+ buf 3) 108) ;; l
+      (store-byte (ptr+ buf 4) 111) ;; o
+      (store-byte (ptr+ buf 5) 115) ;; s
+      (store-byte (ptr+ buf 6) 117) ;; u
+      (store-byte (ptr+ buf 7) 114) ;; r
+      (store-byte (ptr+ buf 8) 101) ;; e
+      (store-byte (ptr+ buf 9) 95)  ;; _
+      (let ((end (int-to-buf-loop buf 10 counter)))
+        (do (store-byte (ptr+ buf end) 0)
+            (intern (cctx-syms ctx) buf))))))
+
+(defun gensym-env (ctx: ptr) -> ptr
+  (let ((buf (heap-array 20))
+        (counter (cctx-counter ctx)))
+    (do
+      ;; __env_
+      (store-byte buf 95)           ;; _
+      (store-byte (ptr+ buf 1) 95)  ;; _
+      (store-byte (ptr+ buf 2) 101) ;; e
+      (store-byte (ptr+ buf 3) 110) ;; n
+      (store-byte (ptr+ buf 4) 118) ;; v
+      (store-byte (ptr+ buf 5) 95)  ;; _
+      (let ((end (int-to-buf-loop buf 6 counter)))
+        (do (store-byte (ptr+ buf end) 0)
+            (intern (cctx-syms ctx) buf))))))
 
 ;; ============================================================
 ;; Capture Mode Determination
@@ -199,16 +455,64 @@
   (build-captures-loop free env escapes nil))
 
 ;; ============================================================
+;; Get Lambda Parts
+;; ============================================================
+;;
+;; Extract params and body from (fn (params...) body)
+
+(defun lambda-params (form: ptr) -> ptr
+  (if (scons? form)
+      (let ((tail (scons-tail form)))
+        (if (scons? tail)
+            (scons-head tail)
+            nil))
+      nil))
+
+(defun lambda-body (form: ptr) -> ptr
+  (if (scons? form)
+      (let ((tail (scons-tail form)))
+        (if (scons? tail)
+            (let ((tail2 (scons-tail tail)))
+              (if (scons? tail2)
+                  (scons-head tail2)
+                  nil))
+            nil))
+      nil))
+
+;; ============================================================
 ;; Main Conversion Entry Point
 ;; ============================================================
 ;;
-;; convert-closure: Takes a lambda form and returns ClosureInfo
+;; convert-closure: Takes a lambda form and returns a pair (ctx . ClosureInfo)
 ;; with all the information needed for code generation.
+;;
+;; Lambda form: (fn (params...) body)
+;;
+;; Returns: (new-ctx . ClosureInfo)
+;;   - new-ctx has incremented counter
+;;   - ClosureInfo has all capture information
 
 (defun convert-closure (ctx: ptr env: ptr form: ptr) -> ptr
-  ;; Analyze closure
-  (let ((escapes (closure-escapes? ctx form)))
-    ;; TODO: find free vars, build captures, determine color
-    ;; For now, return minimal closure info with nil names
-    ;; Real implementation would use gensym for unique names
-    (make-closure-info nil nil)))
+  (let ((params (lambda-params form))
+        (body (lambda-body form))
+        ;; Create local env with params bound
+        (local (make-scope env)))
+    (do
+      ;; Bind params in local env
+      (add-params-to-env local params)
+      ;; Find free variables in body
+      (let ((free (find-free-in body local nil))
+            ;; Check if closure escapes
+            (escapes (closure-escapes? ctx form))
+            ;; Build captures from free vars
+            (captures (build-captures free env escapes))
+            ;; Determine color from captures
+            (color (determine-color captures env))
+            ;; Generate unique names
+            (fn-name (gensym-closure ctx))
+            (env-struct-name (gensym-env ctx))  ;; renamed to avoid conflict with env-name function
+            ;; Build ClosureInfo
+            (info (share (ClosureInfo fn-name env-struct-name captures color escapes)))
+            ;; Increment counter for next gensym
+            (new-ctx (cctx-inc-counter ctx)))
+        (pcons new-ctx info)))))

@@ -18,7 +18,7 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-use crate::ast::{Defun, Extern, Item, Program};
+use crate::ast::{Defun, Expr, Extern, Item, Program};
 use crate::error::Result;
 use crate::span::Spanned;
 use crate::types::{Ty, TypeEnv};
@@ -63,7 +63,17 @@ pub fn generate(program: &Program, type_env: &TypeEnv) -> Result<Module> {
         }
     }
 
-    // Second pass: collect protocol methods
+    // Second pass: collect global constants (def)
+    for item in &program.items {
+        if let Item::Def(def) = &item.node {
+            // Only support integer literals for now
+            if let Expr::Int(value) = &def.value.node {
+                ctx.register_constant(&def.name.node, *value);
+            }
+        }
+    }
+
+    // Third pass: collect protocol methods
     for item in &program.items {
         if let Item::Defprotocol(protocol) = &item.node {
             for method in &protocol.methods {
