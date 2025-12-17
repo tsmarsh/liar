@@ -1,0 +1,298 @@
+;; infer.liar - Hindley-Milner type inference with unification
+;;
+;; Type inference walks AST and assigns types to all expressions.
+;; Uses type variables and unification to resolve constraints.
+;;
+;; Type representation uses tagged structs:
+;;   TyInt, TyPtr, TyDouble - concrete types
+;;   TyVar - type variable (unification target)
+;;   TyFn - function type (params + return)
+;;   TyStruct - named struct type
+;;
+;; Critical for ADR 024: type info drives codegen decisions.
+;; When inference produces concrete type, emit primitive ops.
+;; When type variable remains, emit protocol dispatch.
+
+(ns liarliar.infer
+  (:require [liarliar.symbols :refer :all]
+            [liarliar.env :refer :all]))
+
+;; ============================================================
+;; Type Tags (for instance? checks)
+;; ============================================================
+
+(def TY-INT 10)
+(def TY-PTR 11)
+(def TY-DOUBLE 12)
+(def TY-VAR 13)
+(def TY-FN 14)
+(def TY-STRUCT 15)
+(def TY-VOID 16)
+
+;; ============================================================
+;; Type Structs
+;; ============================================================
+
+;; Primitive types - no additional data needed, just tag
+(defstruct TyInt (ty-int-tag: i64))
+(defstruct TyPtr (ty-ptr-tag: i64))
+(defstruct TyDouble (ty-double-tag: i64))
+(defstruct TyVoid (ty-void-tag: i64))
+
+;; Type variable - has ID for unification tracking
+(defstruct TyVar (ty-var-tag: i64 ty-var-id: i64))
+
+;; Function type - list of param types and return type
+(defstruct TyFn (ty-fn-tag: i64 ty-fn-params: ptr ty-fn-ret: ptr))
+
+;; Struct type - has name symbol
+(defstruct TyStruct (ty-struct-tag: i64 ty-struct-name: ptr))
+
+;; ============================================================
+;; Type Constructors
+;; ============================================================
+
+(defun ty-int () -> ptr
+  (share (TyInt TY-INT)))
+
+(defun ty-ptr () -> ptr
+  (share (TyPtr TY-PTR)))
+
+(defun ty-double () -> ptr
+  (share (TyDouble TY-DOUBLE)))
+
+(defun ty-void () -> ptr
+  (share (TyVoid TY-VOID)))
+
+(defun ty-var (id) -> ptr
+  (share (TyVar TY-VAR id)))
+
+(defun ty-fn (params: ptr ret: ptr) -> ptr
+  (share (TyFn TY-FN params ret)))
+
+(defun ty-struct (name: ptr) -> ptr
+  (share (TyStruct TY-STRUCT name)))
+
+;; ============================================================
+;; Type Predicates
+;; ============================================================
+
+(defun ty-tag (t: ptr) -> i64
+  (aget t 0))
+
+(defun ty-int? (t: ptr) -> i64
+  (if (nil? t) 0
+      (if (= (ty-tag t) TY-INT) 1 0)))
+
+(defun ty-ptr? (t: ptr) -> i64
+  (if (nil? t) 0
+      (if (= (ty-tag t) TY-PTR) 1 0)))
+
+(defun ty-double? (t: ptr) -> i64
+  (if (nil? t) 0
+      (if (= (ty-tag t) TY-DOUBLE) 1 0)))
+
+(defun ty-void? (t: ptr) -> i64
+  (if (nil? t) 0
+      (if (= (ty-tag t) TY-VOID) 1 0)))
+
+(defun ty-var? (t: ptr) -> i64
+  (if (nil? t) 0
+      (if (= (ty-tag t) TY-VAR) 1 0)))
+
+(defun ty-fn? (t: ptr) -> i64
+  (if (nil? t) 0
+      (if (= (ty-tag t) TY-FN) 1 0)))
+
+(defun ty-struct? (t: ptr) -> i64
+  (if (nil? t) 0
+      (if (= (ty-tag t) TY-STRUCT) 1 0)))
+
+;; ============================================================
+;; Type Accessors
+;; ============================================================
+
+(defun ty-var-id (t: ptr) -> i64
+  (. t ty-var-id))
+
+(defun ty-fn-params (t: ptr) -> ptr
+  (. t ty-fn-params))
+
+(defun ty-fn-ret (t: ptr) -> ptr
+  (. t ty-fn-ret))
+
+(defun ty-struct-name (t: ptr) -> ptr
+  (. t ty-struct-name))
+
+;; ============================================================
+;; Substitution Storage
+;; ============================================================
+;;
+;; Substitutions map type variable IDs to types.
+;; Stored as parallel arrays: [var-id1, var-id2, ...] and [type1, type2, ...]
+;; This is simpler than a hashmap for small numbers of type variables.
+
+(defstruct Subs
+  (subs-ids: ptr      ;; i64 array of var IDs
+   subs-types: ptr    ;; ptr array of types
+   subs-count: i64
+   subs-cap: i64))
+
+(defun make-subs (cap) -> ptr
+  (share (Subs
+          (heap-array cap)
+          (heap-array-ptr cap)
+          0
+          cap)))
+
+(defun subs-lookup-loop (ids: ptr types: ptr var-id count idx) -> ptr
+  (if (>= idx count)
+      nil  ;; not found
+      (if (= (aget ids idx) var-id)
+          (aget-ptr types idx)
+          (subs-lookup-loop ids types var-id count (+ idx 1)))))
+
+(defun subs-lookup (subs: ptr var-id) -> ptr
+  (subs-lookup-loop
+    (. subs subs-ids)
+    (. subs subs-types)
+    var-id
+    (. subs subs-count)
+    0))
+
+(defun subs-extend! (subs: ptr var-id type: ptr) -> i64
+  (let ((ids (. subs subs-ids))
+        (types (. subs subs-types))
+        (count (. subs subs-count))
+        (cap (. subs subs-cap)))
+    ;; TODO: check capacity, grow if needed
+    (do
+      (aset ids count var-id)
+      (aset-ptr types count type)
+      ;; Update count - need to mutate the struct
+      ;; For now, return new count (caller must handle)
+      (+ count 1))))
+
+;; ============================================================
+;; Inference Context
+;; ============================================================
+;;
+;; Tracks:
+;;   - Type environment: symbol-id -> type mapping
+;;   - Substitutions: var-id -> type
+;;   - Next var counter: for fresh type variables
+;;   - Errors: accumulated type errors
+
+(defstruct InferCtx
+  (ictx-env: ptr       ;; Env from env.liar for type bindings
+   ictx-subs: ptr      ;; Subs for unification
+   ictx-next-var: i64  ;; counter for fresh vars
+   ictx-errors: ptr))  ;; list of error messages
+
+(defun make-infer-ctx () -> ptr
+  (share (InferCtx
+          (make-global-env)   ;; type environment
+          (make-subs 64)      ;; substitutions
+          0                   ;; next var ID
+          nil)))              ;; no errors
+
+;; ============================================================
+;; Fresh Type Variables
+;; ============================================================
+
+(defun fresh-var! (ctx: ptr) -> ptr
+  (let ((id (. ctx ictx-next-var))
+        (new-var (ty-var id)))
+    ;; Increment counter (mutation)
+    ;; TODO: proper struct field mutation
+    new-var))
+
+;; ============================================================
+;; Apply Substitutions
+;; ============================================================
+
+(defun apply-subs (ctx: ptr ty: ptr) -> ptr
+  (if (nil? ty)
+      ty
+      (if (= 1 (ty-var? ty))
+          ;; Type variable - look up in subs
+          (let ((var-id (ty-var-id ty))
+                (bound (subs-lookup (. ctx ictx-subs) var-id)))
+            (if (nil? bound)
+                ty  ;; unbound var stays as-is
+                (apply-subs ctx bound)))  ;; recursive apply
+          ;; TODO: recursively apply to TyFn params/ret
+          ty)))
+
+;; ============================================================
+;; Unification
+;; ============================================================
+
+(defun types-equal? (t1: ptr t2: ptr) -> i64
+  (if (nil? t1)
+      (if (nil? t2) 1 0)
+      (if (nil? t2)
+          0
+          (let ((tag1 (ty-tag t1))
+                (tag2 (ty-tag t2)))
+            (if (not (= tag1 tag2))
+                0
+                ;; Same tag - check additional fields
+                (if (= tag1 TY-VAR)
+                    (if (= (ty-var-id t1) (ty-var-id t2)) 1 0)
+                    ;; For primitives, same tag = equal
+                    ;; TODO: check TyFn params/ret, TyStruct name
+                    1))))))
+
+(defun occurs-in? (var-id t: ptr) -> i64
+  (if (nil? t)
+      0
+      (if (= 1 (ty-var? t))
+          (if (= var-id (ty-var-id t)) 1 0)
+          ;; TODO: check inside TyFn
+          0)))
+
+(defun unify (ctx: ptr t1: ptr t2: ptr) -> i64
+  (let ((t1 (apply-subs ctx t1))
+        (t2 (apply-subs ctx t2)))
+    (if (= 1 (types-equal? t1 t2))
+        1  ;; already equal
+        (if (= 1 (ty-var? t1))
+            ;; t1 is a type variable
+            (let ((var-id (ty-var-id t1)))
+              (if (= 1 (occurs-in? var-id t2))
+                  0  ;; occurs check failed
+                  (do
+                    (subs-extend! (. ctx ictx-subs) var-id t2)
+                    1)))
+            (if (= 1 (ty-var? t2))
+                ;; t2 is a type variable
+                (let ((var-id (ty-var-id t2)))
+                  (if (= 1 (occurs-in? var-id t1))
+                      0  ;; occurs check failed
+                      (do
+                        (subs-extend! (. ctx ictx-subs) var-id t1)
+                        1)))
+                ;; TODO: unify TyFn (check params and return)
+                0)))))  ;; types don't match
+
+;; ============================================================
+;; Builtin Types
+;; ============================================================
+
+;; Cache singleton types for efficiency
+(def TYPE-INT (ty-int))
+(def TYPE-PTR (ty-ptr))
+(def TYPE-DOUBLE (ty-double))
+(def TYPE-VOID (ty-void))
+
+;; ============================================================
+;; Infer Expressions (stub - to be expanded)
+;; ============================================================
+
+;; Main entry point for inference
+;; Takes context and S-expression, returns inferred type
+(defun infer (ctx: ptr form: ptr) -> ptr
+  ;; For now, just return ptr for everything
+  ;; TODO: implement full inference
+  TYPE-PTR)
