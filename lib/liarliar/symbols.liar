@@ -24,23 +24,26 @@
 
 ;; --- Symbol table (global state) ---
 ;; Simple design: fixed-size array with linear growth
-;; Table layout: [count, name0, name1, name2, ...]
+;; Table layout in data array: [count, cap, name0, name1, name2, ...]
+;; Uses same pattern as MutVector for mutable count/cap
 
-(defstruct SymbolTable (sym-tab-data: ptr sym-tab-cap: i64 sym-tab-count: i64))
+(defstruct SymbolTable (sym-tab-data: ptr))
 
 ;; Create a new symbol table with initial capacity
 (defun make-symbol-table (cap) -> ptr
-  (let ((data (heap-array-ptr (+ cap 1))))
-    (share (SymbolTable data cap 0))))
+  (let ((data (heap-array-ptr (+ cap 2)))  ;; +2 for count and cap slots
+        (s0 (aset data 0 0))               ;; count = 0
+        (s1 (aset data 1 cap)))            ;; cap
+    (share (SymbolTable data))))
 
 (defun sym-table-data (t: ptr) -> ptr
   (. t sym-tab-data))
 
 (defun sym-table-cap (t: ptr) -> i64
-  (. t sym-tab-cap))
+  (aget (. t sym-tab-data) 1))
 
 (defun sym-table-count (t: ptr) -> i64
-  (. t sym-tab-count))
+  (aget (. t sym-tab-data) 0))
 
 
 ;; --- String comparison ---
@@ -63,12 +66,13 @@
 ;; --- Interning ---
 
 ;; Search for a string in the table, return its id or -1 if not found
+;; idx is the logical symbol index (0-based), data index is idx + 2
 (defun find-symbol-loop (data: ptr name count idx) -> i64
   (if (>= idx count)
       -1  ;; not found
-      (let ((stored-name (aget-ptr data idx)))
+      (let ((stored-name (aget-ptr data (+ idx 2))))  ;; +2 to skip count,cap
         (if (streq stored-name name)
-            idx  ;; found at this index
+            idx  ;; found at this logical index
             (find-symbol-loop data name count (+ idx 1))))))
 
 (defun find-symbol (table: ptr name) -> i64
@@ -81,10 +85,9 @@
 (defun add-symbol (table: ptr name) -> i64
   (let ((data (sym-table-data table))
         (count (sym-table-count table))
-        (s (aset-ptr data count name)))
-    ;; Update count in table struct
-    ;; Note: this mutates the struct directly (non-persistent)
-    count))
+        (s1 (aset-ptr data (+ count 2) name))  ;; store at count+2 (skip count,cap)
+        (s2 (aset data 0 (+ count 1))))        ;; increment count
+    count))  ;; return the id (old count)
 
 ;; Intern a symbol: return existing id or create new
 ;; Returns a Symbol struct pointer
