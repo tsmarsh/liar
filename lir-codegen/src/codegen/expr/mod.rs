@@ -260,6 +260,9 @@ impl<'ctx> super::CodeGen<'ctx> {
                     .into())
             }
             Expr::HeapArray { elem_type, size } => self.compile_heap_array(elem_type, *size),
+            Expr::HeapArrayDyn { elem_type, size } => {
+                self.compile_heap_array_dyn(elem_type, size, locals)
+            }
             Expr::ArrayCopy {
                 elem_type,
                 size,
@@ -577,6 +580,48 @@ impl<'ctx> super::CodeGen<'ctx> {
         let call_site = self
             .builder
             .build_call(malloc_fn, &[byte_size.into()], "heaparray")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        let ptr = call_site
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| CodeGenError::CodeGen("malloc returned void".to_string()))?;
+
+        Ok(ptr)
+    }
+
+    /// Compile dynamic heap array allocation via malloc with runtime size
+    fn compile_heap_array_dyn(
+        &self,
+        elem_type: &ScalarType,
+        size_expr: &Expr,
+        locals: &HashMap<String, BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let llvm_ty = self.int_type(elem_type);
+        let elem_size = llvm_ty.size_of();
+
+        // Compile the size expression
+        let size_val = self
+            .compile_expr_recursive(size_expr, locals)?
+            .into_int_value();
+
+        let byte_size = self
+            .builder
+            .build_int_mul(elem_size, size_val, "bytesize")
+            .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
+
+        // Call malloc
+        let malloc_fn = self.module.get_function("malloc").unwrap_or_else(|| {
+            let fn_type = self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .fn_type(&[self.context.i64_type().into()], false);
+            self.module.add_function("malloc", fn_type, None)
+        });
+
+        let call_site = self
+            .builder
+            .build_call(malloc_fn, &[byte_size.into()], "heaparraydyn")
             .map_err(|e| CodeGenError::CodeGen(e.to_string()))?;
 
         let ptr = call_site

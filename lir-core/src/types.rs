@@ -621,6 +621,15 @@ impl TypeChecker {
                 // HeapArray returns a pointer to the heap-allocated array
                 Ok(Type::Ptr)
             }
+            Expr::HeapArrayDyn { size, .. } => {
+                // Check size is an integer
+                let size_ty = self.check(size)?;
+                if !size_ty.is_integer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                // HeapArrayDyn returns a pointer to the heap-allocated array
+                Ok(Type::Ptr)
+            }
             Expr::ArrayCopy { dest, src, .. } => {
                 // Check both dest and src are pointers
                 let dest_ty = self.check(dest)?;

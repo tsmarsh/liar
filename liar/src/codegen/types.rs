@@ -76,7 +76,8 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
                         return infer_conversion_return_type(_args);
                     }
                     // Builtins that return pointers
-                    "share" | "box" | "rc-new" | "cons" => {
+                    "share" | "box" | "rc-new" | "cons" | "heap-array" | "heap-array-ptr"
+                    | "aget-ptr" | "ptr+" => {
                         return lir::ReturnType::Ptr;
                     }
                     // nil? returns bool

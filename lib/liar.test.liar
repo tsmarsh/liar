@@ -1,0 +1,133 @@
+(ns liar.test)
+
+;; liar Unit Test Library
+;;
+;; Simple assertion functions for testing liar code.
+;;
+;; Usage:
+;;   (defun my-tests (t)
+;;     (assert-eq t (+ 1 2) 3)
+;;     (assert-eq t (+ 1 2) 4)    ; fails
+;;     (assert t (> 5 3))
+;;     (assert-not t (< 5 3)))
+;;
+;;   (run-tests my-tests)         ; returns encoded result
+;;
+;; Result encoding: (passes * 1000000 + fails)
+;; Extract with: passes = result / 1000000, fails = result % 1000000
+
+;; Test context is a 2-element array: [passes, fails]
+;; Index 0 = passes, Index 1 = fails
+
+;; Create a new test context
+(defun make-test-context () -> ptr
+  (let ((ctx (heap-array 2))
+        (s0 (aset ctx 0 0))
+        (s1 (aset ctx 1 0)))
+    ctx))
+
+;; Get pass count
+(defun get-passes (ctx: ptr) -> i64
+  (aget ctx 0))
+
+;; Get fail count
+(defun get-fails (ctx: ptr) -> i64
+  (aget ctx 1))
+
+;; Record a pass
+(defun test-pass (ctx: ptr) -> i64
+  (let ((old (aget ctx 0)))
+    (aset ctx 0 (+ old 1))))
+
+;; Record a fail
+(defun test-fail (ctx: ptr) -> i64
+  (let ((old (aget ctx 1)))
+    (aset ctx 1 (+ old 1))))
+
+;; Assert that a condition is truthy
+;; Returns 1 if passed, 0 if failed
+(defun assert (ctx: ptr condition) -> i64
+  (if condition
+      (do (test-pass ctx) 1)
+      (do (test-fail ctx) 0)))
+
+;; Assert that a condition is falsy
+(defun assert-not (ctx: ptr condition) -> i64
+  (if condition
+      (do (test-fail ctx) 0)
+      (do (test-pass ctx) 1)))
+
+;; Assert two values are equal
+(defun assert-eq (ctx: ptr actual expected) -> i64
+  (if (= actual expected)
+      (do (test-pass ctx) 1)
+      (do (test-fail ctx) 0)))
+
+;; Assert two values are not equal
+(defun assert-neq (ctx: ptr actual expected) -> i64
+  (if (= actual expected)
+      (do (test-fail ctx) 0)
+      (do (test-pass ctx) 1)))
+
+;; Get test results as (passes * 1000000 + fails)
+;; This encoding lets you extract both values from a single i64 return
+(defun test-results (ctx: ptr) -> i64
+  (+ (* (get-passes ctx) 1000000) (get-fails ctx)))
+
+;; Run a test function
+;; test-fn should take a ptr (test context) as argument
+;; Returns encoded results: (passes * 1000000 + fails)
+;; To extract: passes = result / 1000000, fails = result % 1000000
+(defun run-tests (test-fn) -> i64
+  (let ((ctx (make-test-context)))
+    (do (test-fn ctx)
+        (test-results ctx))))
+
+;; Comparison helpers
+(defun assert-lt (ctx: ptr a b) -> i64
+  (assert ctx (< a b)))
+
+(defun assert-le (ctx: ptr a b) -> i64
+  (assert ctx (<= a b)))
+
+(defun assert-gt (ctx: ptr a b) -> i64
+  (assert ctx (> a b)))
+
+(defun assert-ge (ctx: ptr a b) -> i64
+  (assert ctx (>= a b)))
+
+;; Assert value is zero
+(defun assert-zero (ctx: ptr x) -> i64
+  (assert-eq ctx x 0))
+
+;; Assert value is positive
+(defun assert-pos (ctx: ptr x) -> i64
+  (assert ctx (> x 0)))
+
+;; Assert value is negative
+(defun assert-neg (ctx: ptr x) -> i64
+  (assert ctx (< x 0)))
+
+;; Assert pointer is not nil
+(defun assert-not-nil (ctx: ptr p: ptr) -> i64
+  (assert ctx (not (nil? p))))
+
+;; Assert pointer is nil
+(defun assert-nil (ctx: ptr p: ptr) -> i64
+  (assert ctx (nil? p)))
+
+;; Print test summary
+(defun print-summary (ctx: ptr) -> i64
+  (let ((passes (get-passes ctx))
+        (fails (get-fails ctx)))
+    (do
+      (print "Passes: ") (println passes)
+      (print "Fails: ") (println fails)
+      fails)))
+
+;; Run tests and print summary
+;; Returns fail count (0 = all passed)
+(defun run-tests-verbose (test-fn) -> i64
+  (let ((ctx (make-test-context)))
+    (do (test-fn ctx)
+        (print-summary ctx))))

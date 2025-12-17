@@ -535,6 +535,11 @@ pub enum Expr {
         elem_type: ScalarType,
         size: u32,
     },
+    // (heap-array-dyn type size-expr) - allocate array with runtime size
+    HeapArrayDyn {
+        elem_type: ScalarType,
+        size: Box<Expr>,
+    },
     // (array-copy type size dest src) - copy src array to dest (memcpy)
     ArrayCopy {
         elem_type: ScalarType,

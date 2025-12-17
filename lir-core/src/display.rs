@@ -240,6 +240,9 @@ impl Display for Expr {
             Expr::HeapArray { elem_type, size } => {
                 write!(f, "(heap-array {} {})", elem_type, size)
             }
+            Expr::HeapArrayDyn { elem_type, size } => {
+                write!(f, "(heap-array-dyn {} {})", elem_type, size)
+            }
             Expr::ArrayCopy {
                 elem_type,
                 size,

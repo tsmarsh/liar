@@ -490,20 +490,11 @@ pub fn generate_builtin(
                     size: *n as u32,
                 })
             } else {
-                // Dynamic size - generate malloc call
-                ctx.set_needs_malloc();
+                // Dynamic size - use HeapArrayDyn for proper lIR tracking
                 let size_expr = generate_expr(ctx, &args[0])?;
-                // Multiply by 8 (size of i64) for byte size
-                let byte_size = lir::Expr::Mul(
-                    Box::new(size_expr),
-                    Box::new(lir::Expr::IntLit {
-                        ty: lir::ScalarType::I64,
-                        value: 8,
-                    }),
-                );
-                Some(lir::Expr::Call {
-                    name: "malloc".to_string(),
-                    args: vec![byte_size],
+                Some(lir::Expr::HeapArrayDyn {
+                    elem_type: lir::ScalarType::I64,
+                    size: Box::new(size_expr),
                 })
             }
         }
@@ -549,23 +540,14 @@ pub fn generate_builtin(
         // Pointer array operations - for heterogeneous/tagged value storage
         "heap-array-ptr" => {
             check_unary(expr, "heap-array-ptr", args)?;
-            ctx.set_needs_malloc();
             if let Expr::Int(n) = &args[0].node {
                 Some(lir::Expr::PtrArrayAlloc { size: *n as u32 })
             } else {
-                // Dynamic size - generate malloc call
+                // Dynamic size - use HeapArrayDyn (ptr is 8 bytes, same as i64)
                 let size_expr = generate_expr(ctx, &args[0])?;
-                // Multiply by 8 (size of ptr on 64-bit) for byte size
-                let byte_size = lir::Expr::Mul(
-                    Box::new(size_expr),
-                    Box::new(lir::Expr::IntLit {
-                        ty: lir::ScalarType::I64,
-                        value: 8,
-                    }),
-                );
-                Some(lir::Expr::Call {
-                    name: "malloc".to_string(),
-                    args: vec![byte_size],
+                Some(lir::Expr::HeapArrayDyn {
+                    elem_type: lir::ScalarType::I64,
+                    size: Box::new(size_expr),
                 })
             }
         }

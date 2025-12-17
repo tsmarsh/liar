@@ -65,12 +65,20 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                 Ok(ptr_type.const_null().into())
             }
 
-            // Global/function reference (returns function pointer)
+            // Global/function reference (returns pointer to global or function)
             Expr::GlobalRef(name) => {
-                let func = self.module.get_function(name).ok_or_else(|| {
-                    CodeGenError::CodeGen(format!("undefined function: {}", name))
-                })?;
-                Ok(func.as_global_value().as_pointer_value().into())
+                // Try function first
+                if let Some(func) = self.module.get_function(name) {
+                    return Ok(func.as_global_value().as_pointer_value().into());
+                }
+                // Try global variable
+                if let Some(global) = self.module.get_global(name) {
+                    return Ok(global.as_pointer_value().into());
+                }
+                Err(CodeGenError::CodeGen(format!(
+                    "undefined global or function: {}",
+                    name
+                )))
             }
 
             // Local variable reference

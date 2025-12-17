@@ -301,6 +301,7 @@ impl<'a> Parser<'a> {
             "array-len" => self.parse_array_len(),
             "array-ptr" => self.parse_array_ptr(),
             "heap-array" => self.parse_heap_array(),
+            "heap-array-dyn" => self.parse_heap_array_dyn(),
             "array-copy" => self.parse_array_copy(),
 
             // Pointer array operations
@@ -972,6 +973,30 @@ impl<'a> Parser<'a> {
         Ok(Expr::HeapArray { elem_type, size })
     }
 
+    /// Parse heap-array-dyn: (heap-array-dyn type size-expr)
+    /// Example: (heap-array-dyn i64 (popcount bitmap))
+    fn parse_heap_array_dyn(&mut self) -> Result<Expr, ParseError> {
+        // Parse element type
+        let elem_type = match self.lexer.next_token_peeked()? {
+            Some(Token::Ident(ref s)) => self.type_from_name(s)?,
+            Some(tok) => {
+                return Err(ParseError::Expected {
+                    expected: "element type".to_string(),
+                    found: format!("{}", tok),
+                })
+            }
+            None => return Err(ParseError::UnexpectedEof),
+        };
+
+        // Parse size expression
+        let size = self.parse_expr()?;
+
+        Ok(Expr::HeapArrayDyn {
+            elem_type,
+            size: Box::new(size),
+        })
+    }
+
     /// Parse array-copy: (array-copy type size dest src)
     /// Example: (array-copy i64 32 new_arr old_arr)
     fn parse_array_copy(&mut self) -> Result<Expr, ParseError> {
@@ -1634,9 +1659,15 @@ impl<'a> Parser<'a> {
     /// (global counter i32 (i32 0))
     /// (global pi double (double 3.14159) :constant)
     fn parse_global_def(&mut self) -> Result<GlobalDef, ParseError> {
-        // Parse name
+        // Parse name (strip @ prefix if present, for consistency with display format)
         let name = match self.lexer.next_token_peeked()? {
-            Some(Token::Ident(s)) => s,
+            Some(Token::Ident(s)) => {
+                if let Some(stripped) = s.strip_prefix('@') {
+                    stripped.to_string()
+                } else {
+                    s
+                }
+            }
             Some(tok) => {
                 return Err(ParseError::Expected {
                     expected: "global name".to_string(),

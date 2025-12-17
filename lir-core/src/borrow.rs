@@ -347,6 +347,10 @@ impl BorrowChecker {
 
             Expr::HeapArray { .. } => {}
 
+            Expr::HeapArrayDyn { size, .. } => {
+                self.check_expr(size);
+            }
+
             Expr::ArrayCopy { dest, src, .. } => {
                 self.check_expr(dest);
                 self.check_expr(src);
