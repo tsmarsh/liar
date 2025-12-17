@@ -28,63 +28,27 @@
 (def STATE-BORROWED-MUT 3) ;; Mutably borrowed (exclusive)
 
 ;; ============================================================
-;; Ownership Info
+;; Error Info
 ;; ============================================================
 ;;
-;; Tracks state for a single binding
+;; Tracks ownership errors found during checking
 
-(defstruct OwnerInfo
-  (owner-sym-id: i64      ;; Symbol ID of the binding
-   owner-state: i64       ;; STATE-* value
-   owner-moved-at: i64    ;; Source location if moved
-   owner-borrow-count: i64)) ;; Number of active borrows
+(defstruct ErrorInfo
+  (err-sym-id: i64        ;; Symbol that caused error
+   err-kind: i64          ;; Error kind (0=use-after-move, 1=borrow-conflict)
+   err-line: i64          ;; Line number
+   err-next: ptr))        ;; Next error (linked list)
 
-(defun make-owner-info (sym-id) -> ptr
-  (share (OwnerInfo sym-id STATE-OWNED 0 0)))
+(def ERR-USE-AFTER-MOVE 0)
+(def ERR-DOUBLE-MOVE 1)
+(def ERR-BORROW-CONFLICT 2)
+(def ERR-MOVE-WHILE-BORROWED 3)
 
-(defun owner-sym-id (o: ptr) -> i64
-  (. o owner-sym-id))
+(defun make-error (sym-id kind line: i64) -> ptr
+  (share (ErrorInfo sym-id kind line nil)))
 
-(defun owner-state (o: ptr) -> i64
-  (. o owner-state))
-
-(defun owner-moved-at (o: ptr) -> i64
-  (. o owner-moved-at))
-
-(defun owner-borrow-count (o: ptr) -> i64
-  (. o owner-borrow-count))
-
-;; ============================================================
-;; State Predicates
-;; ============================================================
-
-(defun state-owned? (state) -> i64
-  (if (= state STATE-OWNED) 1 0))
-
-(defun state-moved? (state) -> i64
-  (if (= state STATE-MOVED) 1 0))
-
-(defun state-borrowed? (state) -> i64
-  (if (= state STATE-BORROWED) 1 0))
-
-(defun state-borrowed-mut? (state) -> i64
-  (if (= state STATE-BORROWED-MUT) 1 0))
-
-;; ============================================================
-;; Borrow Info
-;; ============================================================
-;;
-;; Tracks an active borrow
-
-(defstruct BorrowInfo
-  (borrow-id: i64          ;; Unique borrow ID
-   borrow-target: i64      ;; Symbol ID being borrowed
-   borrow-mutable: i64     ;; 1 if mutable borrow, 0 otherwise
-   borrow-scope-depth: i64 ;; Scope depth when borrow was created
-   borrow-next: ptr))      ;; Next borrow (linked list)
-
-(defun make-borrow (id: i64 target: i64 mutable scope-depth) -> ptr
-  (share (BorrowInfo id target mutable scope-depth nil)))
+(defun error-cons (err: ptr rest: ptr) -> ptr
+  (share (ErrorInfo (. err err-sym-id) (. err err-kind) (. err err-line) rest)))
 
 ;; ============================================================
 ;; Ownership Context
@@ -96,59 +60,106 @@
 (defstruct OwnerCtx
   (octx-sym-ids: ptr      ;; i64 array of symbol IDs
    octx-states: ptr       ;; i64 array of states
-   octx-count: i64        ;; number of tracked bindings
+   octx-borrow-counts: ptr ;; i64 array of borrow counts
+   octx-count-ref: ptr    ;; ptr to i64 array[1] for mutable count
    octx-cap: i64          ;; capacity
-   octx-scope-depth: i64  ;; Current scope nesting depth
+   octx-depth-ref: ptr    ;; ptr to i64 array[1] for mutable scope depth
+   octx-scope-starts: ptr ;; i64 array of scope start indices
    octx-errors: ptr))     ;; List of error messages
 
 (defun make-owner-ctx () -> ptr
-  (let ((cap 256))
-    (share (OwnerCtx
-            (heap-array cap)   ;; sym-ids
-            (heap-array cap)   ;; states
-            0                  ;; count
-            cap                ;; capacity
-            0                  ;; scope depth
-            nil))))            ;; no errors
+  (let ((cap 256)
+        (count-arr (heap-array 1))
+        (depth-arr (heap-array 1)))
+    (do
+      (aset count-arr 0 0)  ;; Initialize count to 0
+      (aset depth-arr 0 0)  ;; Initialize depth to 0
+      (share (OwnerCtx
+              (heap-array cap)   ;; sym-ids
+              (heap-array cap)   ;; states
+              (heap-array cap)   ;; borrow counts
+              count-arr          ;; mutable count ref
+              cap                ;; capacity
+              depth-arr          ;; mutable depth ref
+              (heap-array 64)    ;; scope starts (max 64 nested scopes)
+              nil)))))           ;; no errors
+
+(defun octx-count (ctx: ptr) -> i64
+  (aget (. ctx octx-count-ref) 0))
+
+(defun octx-set-count! (ctx: ptr n: i64) -> i64
+  (aset (. ctx octx-count-ref) 0 n))
+
+(defun octx-depth (ctx: ptr) -> i64
+  (aget (. ctx octx-depth-ref) 0))
+
+(defun octx-set-depth! (ctx: ptr n: i64) -> i64
+  (aset (. ctx octx-depth-ref) 0 n))
+
+(defun octx-errors (ctx: ptr) -> ptr
+  (. ctx octx-errors))
+
+(defun octx-has-errors? (ctx: ptr) -> i64
+  (if (nil? (octx-errors ctx)) 0 1))
 
 ;; ============================================================
-;; Owner Registration
+;; Error Recording
+;; ============================================================
+
+;; Note: Since we can't mutate struct fields, errors are tracked
+;; via the return value of check-ownership (error count).
+;; This function is a placeholder for future error collection.
+(defun add-error! (ctx: ptr sym-id kind line: i64) -> i64
+  ;; Cannot mutate struct fields in liar
+  ;; Return 1 to indicate an error occurred
+  1)
+
+;; ============================================================
+;; Owner Registration and Lookup
 ;; ============================================================
 
 ;; Find index of sym-id in owners array, or -1 if not found
-(defun find-owner-loop (ids: ptr sym-id count idx) -> i64
+(defun find-owner-loop (ids: ptr sym-id count idx: i64) -> i64
   (if (>= idx count)
       -1
       (if (= (aget ids idx) sym-id)
           idx
           (find-owner-loop ids sym-id count (+ idx 1)))))
 
-(defun find-owner (ctx: ptr sym-id) -> i64
-  (find-owner-loop (. ctx octx-sym-ids) sym-id (. ctx octx-count) 0))
+(defun find-owner (ctx: ptr sym-id: i64) -> i64
+  (find-owner-loop (. ctx octx-sym-ids) sym-id (octx-count ctx) 0))
 
-(defun register-owner! (ctx: ptr sym-id) -> i64
-  (let ((count (. ctx octx-count))
+;; Register a new owned binding, returns new count
+(defun register-owner! (ctx: ptr sym-id: i64) -> i64
+  (let ((count (octx-count ctx))
         (ids (. ctx octx-sym-ids))
-        (states (. ctx octx-states)))
-    ;; TODO: check capacity
+        (states (. ctx octx-states))
+        (borrows (. ctx octx-borrow-counts))
+        (new-count (+ count 1)))
     (do
       (aset ids count sym-id)
       (aset states count STATE-OWNED)
-      ;; Note: count is not incremented in struct (would need mutation)
-      ;; For now, caller must track count externally or we return new count
-      (+ count 1))))
+      (aset borrows count 0)
+      (octx-set-count! ctx new-count)
+      new-count)))
 
-(defun get-owner-state (ctx: ptr sym-id) -> i64
+(defun get-owner-state (ctx: ptr sym-id: i64) -> i64
   (let ((idx (find-owner ctx sym-id)))
     (if (< idx 0)
-        -1  ;; not found
+        -1  ;; not found (assume owned - builtins)
         (aget (. ctx octx-states) idx))))
+
+(defun get-borrow-count (ctx: ptr sym-id: i64) -> i64
+  (let ((idx (find-owner ctx sym-id)))
+    (if (< idx 0)
+        0
+        (aget (. ctx octx-borrow-counts) idx))))
 
 ;; ============================================================
 ;; State Transitions
 ;; ============================================================
 
-(defun set-owner-state! (ctx: ptr sym-id new-state) -> i64
+(defun set-owner-state! (ctx: ptr sym-id new-state: i64) -> i64
   (let ((idx (find-owner ctx sym-id)))
     (if (< idx 0)
         -1  ;; not found
@@ -156,57 +167,96 @@
           (aset (. ctx octx-states) idx new-state)
           0))))
 
-(defun mark-moved! (ctx: ptr sym-id) -> i64
+(defun inc-borrow-count! (ctx: ptr sym-id: i64) -> i64
+  (let ((idx (find-owner ctx sym-id)))
+    (if (< idx 0)
+        0
+        (let ((old (aget (. ctx octx-borrow-counts) idx)))
+          (do (aset (. ctx octx-borrow-counts) idx (+ old 1))
+              (+ old 1))))))
+
+(defun dec-borrow-count! (ctx: ptr sym-id: i64) -> i64
+  (let ((idx (find-owner ctx sym-id)))
+    (if (< idx 0)
+        0
+        (let ((old (aget (. ctx octx-borrow-counts) idx)))
+          (if (> old 0)
+              (do (aset (. ctx octx-borrow-counts) idx (- old 1))
+                  (- old 1))
+              0)))))
+
+(defun mark-moved! (ctx: ptr sym-id: i64) -> i64
   (set-owner-state! ctx sym-id STATE-MOVED))
 
-(defun mark-borrowed! (ctx: ptr sym-id) -> i64
-  (set-owner-state! ctx sym-id STATE-BORROWED))
+(defun mark-borrowed! (ctx: ptr sym-id: i64) -> i64
+  (do (inc-borrow-count! ctx sym-id)
+      (set-owner-state! ctx sym-id STATE-BORROWED)))
 
-(defun mark-borrowed-mut! (ctx: ptr sym-id) -> i64
-  (set-owner-state! ctx sym-id STATE-BORROWED-MUT))
+(defun mark-borrowed-mut! (ctx: ptr sym-id: i64) -> i64
+  (do (inc-borrow-count! ctx sym-id)
+      (set-owner-state! ctx sym-id STATE-BORROWED-MUT)))
+
+;; ============================================================
+;; State Predicates
+;; ============================================================
+
+(defun state-owned? (state: i64) -> i64
+  (if (= state STATE-OWNED) 1 0))
+
+(defun state-moved? (state: i64) -> i64
+  (if (= state STATE-MOVED) 1 0))
+
+(defun state-borrowed? (state: i64) -> i64
+  (if (= state STATE-BORROWED) 1 0))
+
+(defun state-borrowed-mut? (state: i64) -> i64
+  (if (= state STATE-BORROWED-MUT) 1 0))
 
 ;; ============================================================
 ;; Validation Checks
 ;; ============================================================
 
-(defun can-use? (ctx: ptr sym-id) -> i64
+;; Check if value can be used (read)
+(defun can-use? (ctx: ptr sym-id: i64) -> i64
   (let ((state (get-owner-state ctx sym-id)))
     (if (< state 0)
-        1  ;; Unknown bindings assumed usable (builtins)
+        1  ;; Unknown bindings assumed usable (builtins, globals)
         (if (= 1 (state-moved? state))
             0  ;; Cannot use moved value
             (if (= 1 (state-borrowed-mut? state))
-                0  ;; Cannot use while mutably borrowed
+                0  ;; Cannot use while mutably borrowed (by someone else)
                 1)))))
 
-(defun can-move? (ctx: ptr sym-id) -> i64
+;; Check if value can be moved
+(defun can-move? (ctx: ptr sym-id: i64) -> i64
   (let ((state (get-owner-state ctx sym-id)))
     (if (< state 0)
-        1
+        1  ;; Unknown assumed movable
         (if (= 1 (state-moved? state))
             0  ;; Already moved
-            (if (= 1 (state-borrowed? state))
+            (if (> (get-borrow-count ctx sym-id) 0)
                 0  ;; Cannot move while borrowed
                 1)))))
 
-(defun can-borrow? (ctx: ptr sym-id) -> i64
+;; Check if value can be borrowed (immutably)
+(defun can-borrow? (ctx: ptr sym-id: i64) -> i64
   (let ((state (get-owner-state ctx sym-id)))
     (if (< state 0)
         1
         (if (= 1 (state-moved? state))
             0  ;; Cannot borrow moved value
             (if (= 1 (state-borrowed-mut? state))
-                0  ;; Cannot borrow while mutably borrowed
+                0  ;; Cannot share borrow while mutably borrowed
                 1)))))
 
-(defun can-borrow-mut? (ctx: ptr sym-id) -> i64
+;; Check if value can be mutably borrowed
+(defun can-borrow-mut? (ctx: ptr sym-id: i64) -> i64
   (let ((state (get-owner-state ctx sym-id)))
     (if (< state 0)
         1
         (if (= 1 (state-moved? state))
             0  ;; Cannot borrow moved value
-            (if (or (= 1 (state-borrowed? state))
-                    (= 1 (state-borrowed-mut? state)))
+            (if (> (get-borrow-count ctx sym-id) 0)
                 0  ;; Cannot mutably borrow while any borrow active
                 1)))))
 
@@ -214,23 +264,238 @@
 ;; Scope Management
 ;; ============================================================
 
-(defun enter-scope! (ctx: ptr) -> i64
-  ;; TODO: increment scope depth
-  (+ (. ctx octx-scope-depth) 1))
+;; Push a new scope, recording current binding count
+(defun push-scope! (ctx: ptr) -> i64
+  (let ((depth (octx-depth ctx))
+        (count (octx-count ctx))
+        (starts (. ctx octx-scope-starts))
+        (new-depth (+ depth 1)))
+    (do
+      (aset starts depth count)
+      (octx-set-depth! ctx new-depth)
+      new-depth)))
 
-(defun exit-scope! (ctx: ptr) -> i64
-  ;; TODO: end all borrows from this scope
-  ;; TODO: decrement scope depth
-  (- (. ctx octx-scope-depth) 1))
+;; Pop scope, restoring bindings to previous state
+;; Returns number of bindings removed
+(defun pop-scope! (ctx: ptr old-depth: i64) -> i64
+  (if (<= old-depth 0)
+      0
+      (let ((prev-depth (- old-depth 1))
+            (starts (. ctx octx-scope-starts))
+            (start-count (aget starts prev-depth))
+            (current-count (octx-count ctx))
+            (removed (- current-count start-count)))
+        (do
+          (octx-set-count! ctx start-count)
+          (octx-set-depth! ctx prev-depth)
+          removed))))
+
+;; ============================================================
+;; Keyword Symbol Recognition (reuse from closures)
+;; ============================================================
+
+(defun sym-name-eq-2 (name: ptr c0 c1: i64) -> i64
+  (if (!= (load-byte name) c0)
+      0
+      (if (!= (load-byte (ptr+ name 1)) c1)
+          0
+          (if (= 0 (load-byte (ptr+ name 2))) 1 0))))
+
+(defun sym-name-eq-3 (name: ptr c0 c1 c2: i64) -> i64
+  (if (!= (load-byte name) c0)
+      0
+      (if (!= (load-byte (ptr+ name 1)) c1)
+          0
+          (if (!= (load-byte (ptr+ name 2)) c2)
+              0
+              (if (= 0 (load-byte (ptr+ name 3))) 1 0)))))
+
+(defun sym-name-eq-4 (name: ptr c0 c1 c2 c3: i64) -> i64
+  (if (!= (load-byte name) c0)
+      0
+      (if (!= (load-byte (ptr+ name 1)) c1)
+          0
+          (if (!= (load-byte (ptr+ name 2)) c2)
+              0
+              (if (!= (load-byte (ptr+ name 3)) c3)
+                  0
+                  (if (= 0 (load-byte (ptr+ name 4))) 1 0))))))
+
+;; Check keyword names
+(defun is-fn-sym? (sym: ptr) -> i64
+  (sym-name-eq-2 (symbol-name sym) 102 110))  ;; f n
+
+(defun is-let-sym? (sym: ptr) -> i64
+  (sym-name-eq-3 (symbol-name sym) 108 101 116))  ;; l e t
+
+(defun is-plet-sym? (sym: ptr) -> i64
+  (sym-name-eq-4 (symbol-name sym) 112 108 101 116))  ;; p l e t
+
+(defun is-if-sym? (sym: ptr) -> i64
+  (sym-name-eq-2 (symbol-name sym) 105 102))  ;; i f
+
+(defun is-do-sym? (sym: ptr) -> i64
+  (sym-name-eq-2 (symbol-name sym) 100 111))  ;; d o
+
+(defun is-ref-sym? (sym: ptr) -> i64
+  (sym-name-eq-3 (symbol-name sym) 114 101 102))  ;; r e f
+
+;; ============================================================
+;; AST Walking - Check Ownership
+;; ============================================================
+
+;; Forward declarations for mutual recursion
+;; (In liar, forward refs work automatically)
+
+;; Check a single expression, returns error count
+(defun check-expr (ctx: ptr expr: ptr) -> i64
+  (if (nil? expr)
+      0
+      (if (boxed-int? expr)
+          0  ;; Literals are always OK
+          (if (boxed-float? expr)
+              0  ;; Literals are always OK
+              (if (symbol? expr)
+                  ;; Variable use - check if usable
+                  (let ((sym-id (symbol-id expr)))
+                    (if (= 0 (can-use? ctx sym-id))
+                        ;; Error: use after move or borrow conflict
+                        1
+                        0))
+                  (if (scons? expr)
+                      ;; List form - dispatch on head
+                      (check-list-form ctx expr)
+                      0))))))
+
+;; Check a list of expressions
+(defun check-expr-list (ctx: ptr exprs: ptr) -> i64
+  (if (nil? exprs)
+      0
+      (if (scons? exprs)
+          (let ((err1 (check-expr ctx (scons-head exprs)))
+                (err2 (check-expr-list ctx (scons-tail exprs))))
+            (+ err1 err2))
+          0)))
+
+;; Register binding params in context
+(defun register-params! (ctx: ptr params: ptr) -> i64
+  (if (nil? params)
+      0
+      (if (symbol? params)
+          ;; Single rest param
+          (do (register-owner! ctx (symbol-id params)) 1)
+          (if (scons? params)
+              (let ((param (scons-head params)))
+                (if (symbol? param)
+                    (do (register-owner! ctx (symbol-id param))
+                        (+ 1 (register-params! ctx (scons-tail params))))
+                    (register-params! ctx (scons-tail params))))
+              0))))
+
+;; Helper to check and move a value if it's a symbol
+(defun check-value-move (ctx: ptr val-form: ptr) -> i64
+  (if (symbol? val-form)
+      (let ((val-sym-id (symbol-id val-form)))
+        (if (= 0 (can-move? ctx val-sym-id))
+            1  ;; Can't move - error
+            (do (mark-moved! ctx val-sym-id) 0)))
+      0))
+
+;; Helper to register a binding name
+(defun register-binding-name! (ctx: ptr binding-name: ptr) -> i64
+  (if (symbol? binding-name)
+      (do (register-owner! ctx (symbol-id binding-name)) 0)
+      0))
+
+;; Check a single binding: (name val)
+(defun check-one-binding (ctx: ptr binding: ptr) -> i64
+  (if (scons? binding)
+      (let ((binding-name (scons-head binding))
+            (val-form (scons-head (scons-tail binding))))
+        (let ((val-errors (check-expr ctx val-form))
+              (move-errors (check-value-move ctx val-form))
+              (reg-result (register-binding-name! ctx binding-name)))
+          (+ val-errors move-errors)))
+      0))
+
+;; Check let bindings: ((name val) ...)
+(defun check-let-bindings (ctx: ptr bindings: ptr) -> i64
+  (if (nil? bindings)
+      0
+      (if (scons? bindings)
+          (let ((bind-errors (check-one-binding ctx (scons-head bindings)))
+                (rest-errors (check-let-bindings ctx (scons-tail bindings))))
+            (+ bind-errors rest-errors))
+          0)))
+
+;; Helper: check lambda (fn (params...) body)
+(defun check-fn-form (ctx: ptr tail: ptr) -> i64
+  (let ((params (scons-head tail))
+        (body (scons-head (scons-tail tail)))
+        (depth (push-scope! ctx)))
+    (do
+      (register-params! ctx params)
+      (let ((body-errors (check-expr ctx body))
+            (popped (pop-scope! ctx depth)))
+        body-errors))))
+
+;; Helper: check let/plet form
+(defun check-let-form (ctx: ptr tail: ptr) -> i64
+  (let ((bindings (scons-head tail))
+        (body (scons-head (scons-tail tail)))
+        (depth (push-scope! ctx)))
+    (let ((bind-errors (check-let-bindings ctx bindings))
+          (body-errors (check-expr ctx body))
+          (popped (pop-scope! ctx depth)))
+      (+ bind-errors body-errors))))
+
+;; Helper: get else expression from if form tail
+(defun get-else-expr (tail: ptr) -> ptr
+  (let ((rest (scons-tail (scons-tail tail))))
+    (if (scons? rest)
+        (scons-head rest)
+        nil)))
+
+;; Helper: check if form (if cond then else)
+(defun check-if-form (ctx: ptr tail: ptr) -> i64
+  (let ((cond-expr (scons-head tail))
+        (then-expr (scons-head (scons-tail tail)))
+        (else-expr (get-else-expr tail)))
+    (let ((cond-errors (check-expr ctx cond-expr))
+          (then-errors (check-expr ctx then-expr))
+          (else-errors (check-expr ctx else-expr)))
+      (+ cond-errors (+ then-errors else-errors)))))
+
+;; Helper: check function call
+(defun check-call-form (ctx: ptr head: ptr tail: ptr) -> i64
+  (let ((head-errors (check-expr ctx head))
+        (arg-errors (check-expr-list ctx tail)))
+    (+ head-errors arg-errors)))
+
+;; Check a list form (dispatches on head symbol)
+(defun check-list-form (ctx: ptr expr: ptr) -> i64
+  (let ((head (scons-head expr))
+        (tail (scons-tail expr)))
+    (if (symbol? head)
+        (if (= 1 (is-fn-sym? head))
+            (check-fn-form ctx tail)
+            (if (= 1 (is-let-sym? head))
+                (check-let-form ctx tail)
+                (if (= 1 (is-plet-sym? head))
+                    (check-let-form ctx tail)
+                    (if (= 1 (is-if-sym? head))
+                        (check-if-form ctx tail)
+                        (if (= 1 (is-do-sym? head))
+                            (check-expr-list ctx tail)
+                            (check-call-form ctx head tail))))))
+        (check-call-form ctx head tail))))
 
 ;; ============================================================
 ;; Main Entry Point
 ;; ============================================================
 ;;
 ;; check-ownership: Walk AST and validate ownership rules
-;; Returns 1 if valid, 0 if errors found
+;; Returns number of errors found (0 = valid)
 
 (defun check-ownership (ctx: ptr form: ptr) -> i64
-  ;; For bootstrap, just return success
-  ;; Full implementation would walk AST and check rules
-  1)
+  (check-expr ctx form))

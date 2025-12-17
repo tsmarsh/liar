@@ -1,0 +1,255 @@
+;; test-ownership.liar - Tests for ownership checking
+;;
+;; Tests move detection, borrow checking, and scope handling.
+
+(ns liarliar.test-ownership
+  (:require [liar.test :refer :all]
+            [liarliar.symbols :refer :all]
+            [liarliar.env :refer :all]
+            [liarliar.value :refer :all]
+            [liarliar.ownership :refer :all]))
+
+;; ============================================================
+;; Test Helpers
+;; ============================================================
+
+;; Create a symbol from ASCII codes
+(defun test-sym (syms: ptr c0 c1 c2 c3 len: i64) -> ptr
+  (let ((buf (heap-array 5)))
+    (do
+      (store-byte buf c0)
+      (store-byte (ptr+ buf 1) c1)
+      (store-byte (ptr+ buf 2) c2)
+      (store-byte (ptr+ buf 3) c3)
+      (store-byte (ptr+ buf len) 0)
+      (intern syms buf))))
+
+;; x symbol (120)
+(defun make-x-sym (syms: ptr) -> ptr
+  (test-sym syms 120 0 0 0 1))
+
+;; y symbol (121)
+(defun make-y-sym (syms: ptr) -> ptr
+  (test-sym syms 121 0 0 0 1))
+
+;; let symbol (108 101 116)
+(defun make-let-sym (syms: ptr) -> ptr
+  (test-sym syms 108 101 116 0 3))
+
+;; fn symbol (102 110)
+(defun make-fn-sym (syms: ptr) -> ptr
+  (test-sym syms 102 110 0 0 2))
+
+;; ============================================================
+;; Test: Basic ownership context creation
+;; ============================================================
+
+(defun test-make-ctx (t: ptr) -> i64
+  (let ((ctx (make-owner-ctx)))
+    (do
+      (assert-eq t (octx-count ctx) 0)
+      (assert-eq t (octx-has-errors? ctx) 0)
+      0)))
+
+;; ============================================================
+;; Test: Register and find owner
+;; ============================================================
+
+(defun test-register-owner (t: ptr) -> i64
+  (let ((ctx (make-owner-ctx))
+        (new-count (register-owner! ctx 42)))
+    (do
+      (assert-eq t new-count 1)
+      (assert-eq t (find-owner ctx 42) 0)  ;; Index 0
+      (assert-eq t (find-owner ctx 99) -1) ;; Not found
+      (assert-eq t (get-owner-state ctx 42) STATE-OWNED)
+      0)))
+
+;; ============================================================
+;; Test: Mark moved
+;; ============================================================
+
+(defun test-mark-moved (t: ptr) -> i64
+  (let ((ctx (make-owner-ctx))
+        (count1 (register-owner! ctx 42))
+        (result (mark-moved! ctx 42)))
+    (do
+      (assert-eq t (get-owner-state ctx 42) STATE-MOVED)
+      (assert-eq t (can-use? ctx 42) 0)   ;; Cannot use moved value
+      (assert-eq t (can-move? ctx 42) 0)  ;; Cannot move again
+      0)))
+
+;; ============================================================
+;; Test: Can use owned value
+;; ============================================================
+
+(defun test-can-use-owned (t: ptr) -> i64
+  (let ((ctx (make-owner-ctx))
+        (count1 (register-owner! ctx 42)))
+    (do
+      (assert-eq t (can-use? ctx 42) 1)
+      (assert-eq t (can-move? ctx 42) 1)
+      (assert-eq t (can-borrow? ctx 42) 1)
+      (assert-eq t (can-borrow-mut? ctx 42) 1)
+      0)))
+
+;; ============================================================
+;; Test: Cannot move borrowed value
+;; ============================================================
+
+(defun test-cannot-move-borrowed (t: ptr) -> i64
+  (let ((ctx (make-owner-ctx))
+        (count1 (register-owner! ctx 42))
+        (borrow-result (mark-borrowed! ctx 42)))
+    (do
+      (assert-eq t (get-owner-state ctx 42) STATE-BORROWED)
+      (assert-eq t (can-use? ctx 42) 1)     ;; Can still use
+      (assert-eq t (can-move? ctx 42) 0)    ;; Cannot move while borrowed
+      (assert-eq t (can-borrow? ctx 42) 1)  ;; Can add more shared borrows
+      (assert-eq t (can-borrow-mut? ctx 42) 0) ;; Cannot mut borrow
+      0)))
+
+;; ============================================================
+;; Test: Mutable borrow is exclusive
+;; ============================================================
+
+(defun test-mut-borrow-exclusive (t: ptr) -> i64
+  (let ((ctx (make-owner-ctx))
+        (count1 (register-owner! ctx 42))
+        (borrow-result (mark-borrowed-mut! ctx 42)))
+    (do
+      (assert-eq t (get-owner-state ctx 42) STATE-BORROWED-MUT)
+      (assert-eq t (can-use? ctx 42) 0)         ;; Cannot use during mut borrow
+      (assert-eq t (can-move? ctx 42) 0)        ;; Cannot move
+      (assert-eq t (can-borrow? ctx 42) 0)      ;; Cannot share borrow
+      (assert-eq t (can-borrow-mut? ctx 42) 0)  ;; Cannot mut borrow again
+      0)))
+
+;; ============================================================
+;; Test: Check simple expression (boxed int)
+;; ============================================================
+
+(defun test-check-literal (t: ptr) -> i64
+  (let ((ctx (make-owner-ctx))
+        (expr (box-int 42))
+        (errors (check-ownership ctx expr)))
+    (do
+      (assert-eq t errors 0)
+      0)))
+
+;; ============================================================
+;; Test: Check symbol use (owned)
+;; ============================================================
+
+(defun test-check-symbol-owned (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (ctx (make-owner-ctx))
+        (x-sym (make-x-sym syms))
+        (x-id (symbol-id x-sym))
+        (count1 (register-owner! ctx x-id))
+        (errors (check-ownership ctx x-sym)))
+    (do
+      (assert-eq t errors 0)  ;; No errors, x is owned
+      0)))
+
+;; ============================================================
+;; Test: Check symbol use (moved - should error)
+;; ============================================================
+
+(defun test-check-symbol-moved (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (ctx (make-owner-ctx))
+        (x-sym (make-x-sym syms))
+        (x-id (symbol-id x-sym))
+        (count1 (register-owner! ctx x-id))
+        (moved (mark-moved! ctx x-id))
+        (errors (check-ownership ctx x-sym)))
+    (do
+      (assert-eq t errors 1)  ;; Error: use after move
+      0)))
+
+;; ============================================================
+;; Test: Check let binding moves value
+;; ============================================================
+
+(defun test-check-let-moves (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (ctx (make-owner-ctx))
+        (let-sym (make-let-sym syms))
+        (x-sym (make-x-sym syms))
+        (y-sym (make-y-sym syms))
+        (x-id (symbol-id x-sym))
+        (y-id (symbol-id y-sym))
+        ;; Register x as owned
+        (count1 (register-owner! ctx x-id))
+        ;; Build: (let ((y x)) y)
+        ;; This should move x into y
+        (binding (scons y-sym (scons x-sym nil)))  ;; (y x)
+        (bindings (scons binding nil))              ;; ((y x))
+        (body y-sym)
+        (form (scons let-sym (scons bindings (scons body nil))))
+        (errors (check-ownership ctx form)))
+    (do
+      ;; After let, x should be moved
+      (assert-eq t errors 0)  ;; Let itself is OK
+      (assert-eq t (get-owner-state ctx x-id) STATE-MOVED)
+      0)))
+
+;; ============================================================
+;; Test: Use after move in let
+;; ============================================================
+
+(defun test-check-use-after-move (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (ctx (make-owner-ctx))
+        (let-sym (make-let-sym syms))
+        (x-sym (make-x-sym syms))
+        (y-sym (make-y-sym syms))
+        (x-id (symbol-id x-sym))
+        (y-id (symbol-id y-sym))
+        ;; Register x as owned
+        (count1 (register-owner! ctx x-id))
+        ;; Build: (let ((y x)) x)
+        ;; This should error: x used after move
+        (binding (scons y-sym (scons x-sym nil)))  ;; (y x)
+        (bindings (scons binding nil))              ;; ((y x))
+        (body x-sym)  ;; Using x after moving it to y
+        (form (scons let-sym (scons bindings (scons body nil))))
+        (errors (check-ownership ctx form)))
+    (do
+      ;; Should have error: use after move
+      (assert-eq t errors 1)
+      0)))
+
+;; ============================================================
+;; Run All Tests
+;; ============================================================
+
+(defun run-ownership-tests (t: ptr) -> i64
+  (do
+    (println "test-make-ctx")
+    (test-make-ctx t)
+    (println "test-register-owner")
+    (test-register-owner t)
+    (println "test-mark-moved")
+    (test-mark-moved t)
+    (println "test-can-use-owned")
+    (test-can-use-owned t)
+    (println "test-cannot-move-borrowed")
+    (test-cannot-move-borrowed t)
+    (println "test-mut-borrow-exclusive")
+    (test-mut-borrow-exclusive t)
+    (println "test-check-literal")
+    (test-check-literal t)
+    (println "test-check-symbol-owned")
+    (test-check-symbol-owned t)
+    (println "test-check-symbol-moved")
+    (test-check-symbol-moved t)
+    (println "test-check-let-moves")
+    (test-check-let-moves t)
+    (println "test-check-use-after-move")
+    (test-check-use-after-move t)
+    0))
+
+(defun main () -> i64
+  (run-tests-verbose run-ownership-tests))
