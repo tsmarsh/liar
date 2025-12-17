@@ -86,7 +86,14 @@ fn parse_options(args: &[String]) -> (Vec<PathBuf>, Target) {
         }
     }
 
-    // Add default lib path if it exists
+    // Add default search paths if they exist
+    // Current directory (for project-local modules like liarliar/)
+    let cwd = PathBuf::from(".");
+    if !lib_paths.contains(&cwd) {
+        lib_paths.push(cwd);
+    }
+
+    // Standard library
     let default_lib = PathBuf::from("lib");
     if default_lib.exists() && !lib_paths.contains(&default_lib) {
         lib_paths.push(default_lib);

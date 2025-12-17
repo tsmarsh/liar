@@ -36,15 +36,32 @@ impl ModuleLoader {
     }
 
     /// Find the file for a given namespace
-    /// `my.namespace` -> `my.namespace.liar`
+    /// Tries two resolution strategies:
+    /// 1. Flat: `my.namespace` -> `my.namespace.liar`
+    /// 2. Directory: `my.namespace` -> `my/namespace.liar`
     fn find_module(&self, namespace: &str) -> Option<PathBuf> {
-        let filename = format!("{}.liar", namespace);
+        // Strategy 1: Flat file (my.namespace.liar)
+        let flat_filename = format!("{}.liar", namespace);
         for dir in &self.search_paths {
-            let path = dir.join(&filename);
+            let path = dir.join(&flat_filename);
             if path.exists() {
                 return Some(path);
             }
         }
+
+        // Strategy 2: Directory structure (my/namespace.liar)
+        let parts: Vec<&str> = namespace.split('.').collect();
+        if parts.len() >= 2 {
+            let dir_path: PathBuf = parts[..parts.len() - 1].iter().collect();
+            let filename = format!("{}.liar", parts.last().unwrap());
+            for search_dir in &self.search_paths {
+                let path = search_dir.join(&dir_path).join(&filename);
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+
         None
     }
 

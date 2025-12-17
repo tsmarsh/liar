@@ -8,6 +8,8 @@
 ;;   - A symbol table (ptr array) maps ids to names
 ;;   - Interning uses linear scan (sufficient for bootstrap)
 
+(ns liarliar.symbols)
+
 ;; --- Symbol struct ---
 
 (defstruct Symbol (sym-id: i64 sym-name: ptr))

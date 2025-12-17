@@ -11,6 +11,8 @@
 ;; Note: Float cons (FCons) deferred until struct field type support is verified.
 ;; Note: Field names are prefixed to avoid ambiguity (icons-hd vs pcons-hd).
 
+(ns liarliar.value)
+
 ;; --- Integer cons (for homogeneous integer lists) ---
 ;; [1 2 3] → (icons 1 (icons 2 (icons 3 nil)))
 
