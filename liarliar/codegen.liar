@@ -1,0 +1,415 @@
+;; codegen.liar - lIR code generation for liarliar
+;;
+;; Walks the AST (SCons trees from reader.liar) and emits lIR as SCons trees.
+;; The lIR is then serialized by a printer.
+;;
+;; Per ADR 019: lIR is the universal backend - all liar code emits lIR.
+;; Per ADR 024: Type-directed codegen uses inferred types for optimal output.
+;;
+;; Design: Build lIR as data (cons cells), then print. This is cleaner than
+;; string building and allows lIR-level transformations before output.
+
+(ns liarliar.codegen
+  (:require [liar.core :refer :all]
+            [liarliar.symbols :refer :all]
+            [liarliar.value :refer :all]
+            [liarliar.env :refer :all]))
+
+;; ============================================================
+;; Codegen Context
+;; ============================================================
+
+(defstruct CodegenCtx
+  (cg-temp: i64        ;; Counter for unique temps (%0, %1, etc.)
+   cg-syms: ptr        ;; SymbolTable for interning
+   cg-env: ptr         ;; Current environment for name lookup
+   cg-fns: ptr))       ;; List of generated function definitions
+
+(defun make-codegen-ctx (syms: ptr) -> ptr
+  (share (CodegenCtx 0 syms (make-global-env) nil)))
+
+(defun cg-temp (ctx: ptr) -> i64 (. ctx cg-temp))
+(defun cg-syms (ctx: ptr) -> ptr (. ctx cg-syms))
+(defun cg-env (ctx: ptr) -> ptr (. ctx cg-env))
+(defun cg-fns (ctx: ptr) -> ptr (. ctx cg-fns))
+
+;; Get next temp and increment counter
+(defun cg-next-temp (ctx: ptr) -> ptr
+  (share (CodegenCtx (+ (cg-temp ctx) 1) (cg-syms ctx) (cg-env ctx) (cg-fns ctx))))
+
+;; Update environment
+(defun cg-with-env (ctx: ptr new-env: ptr) -> ptr
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) new-env (cg-fns ctx))))
+
+;; Add function to list
+(defun cg-add-fn (ctx: ptr fn-def: ptr) -> ptr
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx)
+                     (scons fn-def (cg-fns ctx)))))
+
+;; ============================================================
+;; Symbol/String Helpers
+;; ============================================================
+
+;; Create a symbol from bytes (for lIR keywords)
+;; Always allocate 9 bytes (8 chars + null), write all, null-terminate at len
+(defun make-sym (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 len: i64) -> ptr
+  (let ((buf (heap-array 9)))  ;; 8 + null
+    (do
+      (store-byte buf b0)
+      (store-byte (ptr+ buf 1) b1)
+      (store-byte (ptr+ buf 2) b2)
+      (store-byte (ptr+ buf 3) b3)
+      (store-byte (ptr+ buf 4) b4)
+      (store-byte (ptr+ buf 5) b5)
+      (store-byte (ptr+ buf 6) b6)
+      (store-byte (ptr+ buf 7) b7)
+      (store-byte (ptr+ buf len) 0)  ;; null terminate at len
+      (intern syms buf))))
+
+;; Common lIR symbols
+(defun sym-i64 (s: ptr) -> ptr     (make-sym s 105 54 52 0 0 0 0 0 3))       ;; i64
+(defun sym-i1 (s: ptr) -> ptr      (make-sym s 105 49 0 0 0 0 0 0 2))        ;; i1
+(defun sym-ptr (s: ptr) -> ptr     (make-sym s 112 116 114 0 0 0 0 0 3))     ;; ptr
+(defun sym-double (s: ptr) -> ptr  (make-sym s 100 111 117 98 108 101 0 0 6)) ;; double
+(defun sym-add (s: ptr) -> ptr     (make-sym s 97 100 100 0 0 0 0 0 3))      ;; add
+(defun sym-sub (s: ptr) -> ptr     (make-sym s 115 117 98 0 0 0 0 0 3))      ;; sub
+(defun sym-mul (s: ptr) -> ptr     (make-sym s 109 117 108 0 0 0 0 0 3))     ;; mul
+(defun sym-sdiv (s: ptr) -> ptr    (make-sym s 115 100 105 118 0 0 0 0 4))   ;; sdiv
+(defun sym-icmp (s: ptr) -> ptr    (make-sym s 105 99 109 112 0 0 0 0 4))    ;; icmp
+(defun sym-eq (s: ptr) -> ptr      (make-sym s 101 113 0 0 0 0 0 0 2))       ;; eq
+(defun sym-slt (s: ptr) -> ptr     (make-sym s 115 108 116 0 0 0 0 0 3))     ;; slt
+(defun sym-sgt (s: ptr) -> ptr     (make-sym s 115 103 116 0 0 0 0 0 3))     ;; sgt
+(defun sym-sle (s: ptr) -> ptr     (make-sym s 115 108 101 0 0 0 0 0 3))     ;; sle
+(defun sym-sge (s: ptr) -> ptr     (make-sym s 115 103 101 0 0 0 0 0 3))     ;; sge
+(defun sym-select (s: ptr) -> ptr  (make-sym s 115 101 108 101 99 116 0 0 6)) ;; select
+(defun sym-call (s: ptr) -> ptr    (make-sym s 99 97 108 108 0 0 0 0 4))     ;; call
+(defun sym-ret (s: ptr) -> ptr     (make-sym s 114 101 116 0 0 0 0 0 3))     ;; ret
+(defun sym-define (s: ptr) -> ptr  (make-sym s 100 101 102 105 110 101 0 0 6)) ;; define
+(defun sym-block (s: ptr) -> ptr   (make-sym s 98 108 111 99 107 0 0 0 5))   ;; block
+(defun sym-entry (s: ptr) -> ptr   (make-sym s 101 110 116 114 121 0 0 0 5)) ;; entry
+(defun sym-let (s: ptr) -> ptr     (make-sym s 108 101 116 0 0 0 0 0 3))     ;; let
+
+;; Liar special forms (for dispatch)
+(defun str-if () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 105) (store-byte (ptr+ b 1) 102) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-let () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 108) (store-byte (ptr+ b 1) 101)
+        (store-byte (ptr+ b 2) 116) (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-defun () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 100) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 102)
+        (store-byte (ptr+ b 3) 117) (store-byte (ptr+ b 4) 110) (store-byte (ptr+ b 5) 0) b)))
+
+(defun str-do () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 100) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-fn () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 110) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-plus () -> ptr
+  (let ((b (heap-array 2))) (do (store-byte b 43) (store-byte (ptr+ b 1) 0) b)))
+
+(defun str-minus () -> ptr
+  (let ((b (heap-array 2))) (do (store-byte b 45) (store-byte (ptr+ b 1) 0) b)))
+
+(defun str-star () -> ptr
+  (let ((b (heap-array 2))) (do (store-byte b 42) (store-byte (ptr+ b 1) 0) b)))
+
+(defun str-slash () -> ptr
+  (let ((b (heap-array 2))) (do (store-byte b 47) (store-byte (ptr+ b 1) 0) b)))
+
+(defun str-eq () -> ptr
+  (let ((b (heap-array 2))) (do (store-byte b 61) (store-byte (ptr+ b 1) 0) b)))
+
+(defun str-lt () -> ptr
+  (let ((b (heap-array 2))) (do (store-byte b 60) (store-byte (ptr+ b 1) 0) b)))
+
+(defun str-gt () -> ptr
+  (let ((b (heap-array 2))) (do (store-byte b 62) (store-byte (ptr+ b 1) 0) b)))
+
+(defun str-lte () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 60) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-gte () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 62) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+
+;; ============================================================
+;; AST Predicates
+;; ============================================================
+
+(defun ast-symbol? (form: ptr) (symbol? form))
+(defun ast-int? (form: ptr) (boxed-int? form))
+(defun ast-float? (form: ptr) (boxed-float? form))
+(defun ast-string? (form: ptr) (liar-string? form))
+(defun ast-list? (form: ptr) (scons? form))
+
+;; List accessors
+(defun car (lst: ptr) -> ptr (scons-head lst))
+(defun cdr (lst: ptr) -> ptr (scons-tail lst))
+(defun cadr (lst: ptr) -> ptr (car (cdr lst)))
+(defun caddr (lst: ptr) -> ptr (car (cdr (cdr lst))))
+(defun cadddr (lst: ptr) -> ptr (car (cdr (cdr (cdr lst)))))
+
+;; ============================================================
+;; lIR Construction Helpers
+;; ============================================================
+
+;; Build: (i64 N)
+(defun lir-int (syms: ptr val: i64) -> ptr
+  (scons (sym-i64 syms) (scons (box-int val) nil)))
+
+;; Build: %N (temp reference as symbol)
+(defun lir-temp (syms: ptr n: i64) -> ptr
+  ;; Create %N symbol - for now just use the number as a boxed int marker
+  ;; Real impl would create "%0", "%1" etc symbols
+  (box-int n))
+
+;; Build: (op left right)
+(defun lir-binop (syms: ptr op: ptr left: ptr right: ptr) -> ptr
+  (scons op (scons left (scons right nil))))
+
+;; Build: (icmp pred left right)
+(defun lir-icmp (syms: ptr pred: ptr left: ptr right: ptr) -> ptr
+  (scons (sym-icmp syms) (scons pred (scons left (scons right nil)))))
+
+;; Build: (select cond then else)
+(defun lir-select (syms: ptr cond-v: ptr then-v: ptr else-v: ptr) -> ptr
+  (scons (sym-select syms) (scons cond-v (scons then-v (scons else-v nil)))))
+
+;; Build: (call @fn args...)
+(defun lir-call (syms: ptr fn-name: ptr args: ptr) -> ptr
+  (scons (sym-call syms) (scons fn-name args)))
+
+;; Build: (ret val)
+(defun lir-ret (syms: ptr val: ptr) -> ptr
+  (scons (sym-ret syms) (scons val nil)))
+
+;; Build: (let ((name val)) body)
+(defun lir-let1 (syms: ptr name: ptr val: ptr body: ptr) -> ptr
+  (scons (sym-let syms)
+         (scons (scons (scons name (scons val nil)) nil)
+                (scons body nil))))
+
+;; ============================================================
+;; Expression Codegen
+;; ============================================================
+
+;; Returns (ctx . lir-expr)
+(defun codegen-expr (ctx: ptr form: ptr) -> ptr
+  (cond
+    ((ast-int? form)    (codegen-int ctx form))
+    ((ast-float? form)  (codegen-float ctx form))
+    ((ast-symbol? form) (codegen-symbol ctx form))
+    ((ast-string? form) (codegen-string ctx form))
+    ((ast-list? form)   (codegen-list ctx form))
+    (else               (pcons ctx (box-int 0)))))
+
+;; Integer literal: (i64 N)
+(defun codegen-int (ctx: ptr form: ptr) -> ptr
+  (let ((syms (cg-syms ctx))
+        (val (unbox-int form)))
+    (pcons ctx (lir-int syms val))))
+
+;; Float literal: (double N.M) - simplified
+(defun codegen-float (ctx: ptr form: ptr) -> ptr
+  (let ((syms (cg-syms ctx))
+        (int-part (boxed-float-int form)))
+    ;; For now, just emit the integer part
+    (pcons ctx (lir-int syms int-part))))
+
+;; Symbol reference - pass through for now
+(defun codegen-symbol (ctx: ptr form: ptr) -> ptr
+  (pcons ctx form))
+
+;; String literal - stub
+(defun codegen-string (ctx: ptr form: ptr) -> ptr
+  (pcons ctx (box-int 0)))
+
+;; ============================================================
+;; List Form Dispatch
+;; ============================================================
+
+(defun codegen-list (ctx: ptr form: ptr) -> ptr
+  (let ((head (car form)))
+    (if (symbol? head)
+        (let ((name (symbol-name head)))
+          (cond
+            ((streq name (str-if))     (codegen-if ctx form))
+            ((streq name (str-let))    (codegen-let ctx form))
+            ((streq name (str-defun))  (codegen-defun ctx form))
+            ((streq name (str-do))     (codegen-do ctx form))
+            ((streq name (str-fn))     (codegen-fn ctx form))
+            ((streq name (str-plus))   (codegen-binop ctx form (sym-add (cg-syms ctx))))
+            ((streq name (str-minus))  (codegen-binop ctx form (sym-sub (cg-syms ctx))))
+            ((streq name (str-star))   (codegen-binop ctx form (sym-mul (cg-syms ctx))))
+            ((streq name (str-slash))  (codegen-binop ctx form (sym-sdiv (cg-syms ctx))))
+            ((streq name (str-eq))     (codegen-cmp ctx form (sym-eq (cg-syms ctx))))
+            ((streq name (str-lt))     (codegen-cmp ctx form (sym-slt (cg-syms ctx))))
+            ((streq name (str-gt))     (codegen-cmp ctx form (sym-sgt (cg-syms ctx))))
+            ((streq name (str-lte))    (codegen-cmp ctx form (sym-sle (cg-syms ctx))))
+            ((streq name (str-gte))    (codegen-cmp ctx form (sym-sge (cg-syms ctx))))
+            (else                      (codegen-call ctx form))))
+        (codegen-call ctx form))))
+
+;; ============================================================
+;; Binary Operations
+;; ============================================================
+
+(defun codegen-binop (ctx: ptr form: ptr op: ptr) -> ptr
+  (let ((left-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head left-result))
+        (left-v (pcons-tail left-result))
+        (right-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head right-result))
+        (right-v (pcons-tail right-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (lir-binop syms op left-v right-v))))
+
+(defun codegen-cmp (ctx: ptr form: ptr pred: ptr) -> ptr
+  (let ((left-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head left-result))
+        (left-v (pcons-tail left-result))
+        (right-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head right-result))
+        (right-v (pcons-tail right-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (lir-icmp syms pred left-v right-v))))
+
+;; ============================================================
+;; If Expression
+;; ============================================================
+
+(defun codegen-if (ctx: ptr form: ptr) -> ptr
+  (let ((cond-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head cond-result))
+        (cond-v (pcons-tail cond-result))
+        (then-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head then-result))
+        (then-v (pcons-tail then-result))
+        (else-result (codegen-expr ctx (cadddr form)))
+        (ctx (pcons-head else-result))
+        (else-v (pcons-tail else-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (lir-select syms cond-v then-v else-v))))
+
+;; ============================================================
+;; Let Bindings
+;; ============================================================
+
+(defun codegen-let-body (ctx: ptr bindings: ptr body: ptr) -> ptr
+  (if (nil? bindings)
+      (codegen-expr ctx body)
+      (let ((binding (car bindings))
+            (name (car binding))
+            (val-form (cadr binding))
+            (val-result (codegen-expr ctx val-form))
+            (ctx (pcons-head val-result))
+            (val-v (pcons-tail val-result))
+            (rest-result (codegen-let-body ctx (cdr bindings) body))
+            (ctx (pcons-head rest-result))
+            (rest-v (pcons-tail rest-result))
+            (syms (cg-syms ctx)))
+        (pcons ctx (lir-let1 syms name val-v rest-v)))))
+
+(defun codegen-let (ctx: ptr form: ptr) -> ptr
+  (let ((bindings (cadr form))
+        (body (caddr form)))
+    (codegen-let-body ctx bindings body)))
+
+;; ============================================================
+;; Do Block
+;; ============================================================
+
+(defun codegen-do-loop (ctx: ptr exprs: ptr last-v: ptr) -> ptr
+  (if (nil? exprs)
+      (pcons ctx last-v)
+      (let ((result (codegen-expr ctx (car exprs)))
+            (ctx (pcons-head result))
+            (v (pcons-tail result)))
+        (codegen-do-loop ctx (cdr exprs) v))))
+
+(defun codegen-do (ctx: ptr form: ptr) -> ptr
+  (codegen-do-loop ctx (cdr form) (box-int 0)))
+
+;; ============================================================
+;; Function Call
+;; ============================================================
+
+(defun codegen-args (ctx: ptr args: ptr acc: ptr) -> ptr
+  (if (nil? args)
+      (pcons ctx acc)
+      (let ((result (codegen-expr ctx (car args)))
+            (ctx (pcons-head result))
+            (v (pcons-tail result)))
+        (codegen-args ctx (cdr args) (scons v acc)))))
+
+(defun reverse-scons (lst: ptr acc: ptr) -> ptr
+  (if (nil? lst)
+      acc
+      (reverse-scons (scons-tail lst) (scons (scons-head lst) acc))))
+
+(defun codegen-call (ctx: ptr form: ptr) -> ptr
+  (let ((head (car form))
+        (args (cdr form))
+        (args-result (codegen-args ctx args nil))
+        (ctx (pcons-head args-result))
+        (args-rev (pcons-tail args-result))
+        (args-v (reverse-scons args-rev nil))
+        (syms (cg-syms ctx)))
+    (pcons ctx (lir-call syms head args-v))))
+
+;; ============================================================
+;; Function Definition
+;; ============================================================
+
+(defun codegen-defun (ctx: ptr form: ptr) -> ptr
+  (let ((name (cadr form))
+        (params (caddr form))
+        (body (cadddr form))
+        ;; Reset temp counter for function body
+        (fn-ctx (share (CodegenCtx 0 (cg-syms ctx) (cg-env ctx) nil)))
+        (body-result (codegen-expr fn-ctx body))
+        (fn-ctx (pcons-head body-result))
+        (body-v (pcons-tail body-result))
+        (syms (cg-syms ctx))
+        ;; Build: (define i64 @name (params) (block entry body (ret body)))
+        (fn-def (scons (sym-define syms)
+                       (scons (sym-i64 syms)
+                              (scons name
+                                     (scons params
+                                            (scons (scons (sym-block syms)
+                                                          (scons (sym-entry syms)
+                                                                 (scons (lir-ret syms body-v) nil)))
+                                                   nil))))))
+        ;; Add function to context
+        (ctx (cg-add-fn ctx fn-def)))
+    (pcons ctx fn-def)))
+
+;; Lambda - stub for now
+(defun codegen-fn (ctx: ptr form: ptr) -> ptr
+  (pcons ctx (box-int 0)))
+
+;; ============================================================
+;; Top-Level
+;; ============================================================
+
+(defun codegen-toplevel (ctx: ptr forms: ptr) -> ptr
+  (if (nil? forms)
+      ctx
+      (let ((result (codegen-expr ctx (car forms)))
+            (ctx (pcons-head result)))
+        (codegen-toplevel ctx (cdr forms)))))
+
+(defun codegen-module (forms: ptr syms: ptr) -> ptr
+  (let ((ctx (make-codegen-ctx syms))
+        (ctx (codegen-toplevel ctx forms)))
+    (cg-fns ctx)))
+

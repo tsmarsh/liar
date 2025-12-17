@@ -78,20 +78,47 @@ pub fn generate_if(
 
     // End current block with conditional branch
     // Flatten cond_expr in case it contains nested phi from inner if
-    let (cond_bindings, cond_ref) = flatten_for_phi(cond_expr, cond_var.clone());
+    let (cond_bindings, cond_ref) = flatten_for_phi(cond_expr.clone(), cond_var.clone());
     let mut entry_bindings = cond_bindings;
     // Add the actual condition check
-    let final_cond = if let lir::Expr::LocalRef(_) = &cond_ref {
+    let final_cond_expr = if let lir::Expr::LocalRef(_) = &cond_ref {
         cond_ref
     } else {
         entry_bindings.push((cond_var.clone(), Box::new(cond_ref)));
-        lir::Expr::LocalRef(cond_var)
+        lir::Expr::LocalRef(cond_var.clone())
+    };
+
+    // Ensure condition is i1 - if not, compare with 0 for Clojure-style truthiness
+    // (anything non-zero is truthy)
+    let cond_type = infer_return_type(ctx, &cond_expr);
+    let branch_cond = if matches!(cond_type, lir::ReturnType::Scalar(lir::ScalarType::I1)) {
+        // Already boolean, use directly
+        final_cond_expr
+    } else {
+        // Non-boolean: compare != 0 for truthiness
+        // Bind the value first if not already a LocalRef
+        let cond_val = if let lir::Expr::LocalRef(ref name) = final_cond_expr {
+            lir::Expr::LocalRef(name.clone())
+        } else {
+            let truthiness_var = ctx.fresh_var("truthy");
+            entry_bindings.push((truthiness_var.clone(), Box::new(final_cond_expr)));
+            lir::Expr::LocalRef(truthiness_var)
+        };
+        // Compare with 0: value != 0
+        lir::Expr::ICmp {
+            pred: lir::ICmpPred::Ne,
+            lhs: Box::new(cond_val),
+            rhs: Box::new(lir::Expr::IntLit {
+                ty: lir::ScalarType::I64,
+                value: 0,
+            }),
+        }
     };
 
     ctx.end_block(lir::Expr::Let {
         bindings: entry_bindings,
         body: vec![lir::Expr::Br(lir::BranchTarget::Conditional {
-            cond: Box::new(final_cond),
+            cond: Box::new(branch_cond),
             true_label: then_label.clone(),
             false_label: else_label.clone(),
         })],
@@ -263,6 +290,9 @@ pub fn generate_let(
         ctx.set_tail_position(false);
         for binding in bindings.iter() {
             let value = generate_expr(ctx, &binding.value)?;
+            // Register the variable type so phi nodes can infer correct types
+            let var_type = infer_return_type(ctx, &value);
+            ctx.register_var_type(&binding.name.node, var_type);
             if in_entry {
                 ctx.add_entry_binding(binding.name.node.clone(), value);
             } else {

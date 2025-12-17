@@ -1,0 +1,22 @@
+;; test-infer.liar - Tests for type inference
+(ns liarliar.test-infer
+  (:require [liar.test :refer :all]
+            [liarliar.infer :refer :all]))
+
+;; Test type constructors
+;; Note: TY-INT = 10 (def constants not inlined yet)
+(defun test-types (t: ptr) -> i64
+  (let ((ti (ty-int)))
+    (do
+      (assert-eq t (ty-tag ti) 10)  ;; TY-INT
+      0)))
+
+;; Run all tests
+(defun run-infer-tests (t: ptr) -> i64
+  (do
+    (test-types t)
+    0))
+
+;; Main
+(defun main () -> i64
+  (run-tests-verbose run-infer-tests))

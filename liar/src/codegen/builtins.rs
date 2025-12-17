@@ -261,12 +261,27 @@ pub fn generate_builtin(
         "not" => {
             check_unary(expr, "not", args)?;
             let a = generate_expr(ctx, &args[0])?;
+            // Ensure operand is i1 - convert non-boolean to bool via != 0
+            let a_type = super::types::infer_return_type(ctx, &a);
+            let a_bool = if matches!(a_type, lir::ReturnType::Scalar(lir::ScalarType::I1)) {
+                a
+            } else {
+                // Convert to bool: a != 0
+                lir::Expr::ICmp {
+                    pred: lir::ICmpPred::Ne,
+                    lhs: Box::new(a),
+                    rhs: Box::new(lir::Expr::IntLit {
+                        ty: lir::ScalarType::I64,
+                        value: 0,
+                    }),
+                }
+            };
             Some(lir::Expr::Xor(
                 Box::new(lir::Expr::IntLit {
                     ty: lir::ScalarType::I1,
                     value: 1,
                 }),
-                Box::new(a),
+                Box::new(a_bool),
             ))
         }
         "and" => {

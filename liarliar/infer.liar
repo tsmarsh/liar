@@ -15,7 +15,8 @@
 
 (ns liarliar.infer
   (:require [liarliar.symbols :refer :all]
-            [liarliar.env :refer :all]))
+            [liarliar.env :refer :all]
+            [liarliar.value :refer :all]))
 
 ;; ============================================================
 ;; Type Tags (for instance? checks)
@@ -52,61 +53,65 @@
 ;; Type Constructors
 ;; ============================================================
 
+;; Note: Using literal values since def constants aren't inlined yet
+;; TY-INT=10, TY-PTR=11, TY-DOUBLE=12, TY-VAR=13, TY-FN=14, TY-STRUCT=15, TY-VOID=16
+
 (defun ty-int () -> ptr
-  (share (TyInt TY-INT)))
+  (share (TyInt 10)))  ;; TY-INT
 
 (defun ty-ptr () -> ptr
-  (share (TyPtr TY-PTR)))
+  (share (TyPtr 11)))  ;; TY-PTR
 
 (defun ty-double () -> ptr
-  (share (TyDouble TY-DOUBLE)))
+  (share (TyDouble 12)))  ;; TY-DOUBLE
 
 (defun ty-void () -> ptr
-  (share (TyVoid TY-VOID)))
+  (share (TyVoid 16)))  ;; TY-VOID
 
 (defun ty-var (id) -> ptr
-  (share (TyVar TY-VAR id)))
+  (share (TyVar 13 id)))  ;; TY-VAR
 
 (defun ty-fn (params: ptr ret: ptr) -> ptr
-  (share (TyFn TY-FN params ret)))
+  (share (TyFn 14 params ret)))  ;; TY-FN
 
 (defun ty-struct (name: ptr) -> ptr
-  (share (TyStruct TY-STRUCT name)))
+  (share (TyStruct 15 name)))  ;; TY-STRUCT
 
 ;; ============================================================
 ;; Type Predicates
 ;; ============================================================
 
+;; Tag is at index 1 because index 0 is the __type_id prepended by compiler
 (defun ty-tag (t: ptr) -> i64
-  (aget t 0))
+  (aget t 1))
 
 (defun ty-int? (t: ptr) -> i64
   (if (nil? t) 0
-      (if (= (ty-tag t) TY-INT) 1 0)))
+      (if (= (ty-tag t) 10) 1 0)))  ;; TY-INT
 
 (defun ty-ptr? (t: ptr) -> i64
   (if (nil? t) 0
-      (if (= (ty-tag t) TY-PTR) 1 0)))
+      (if (= (ty-tag t) 11) 1 0)))  ;; TY-PTR
 
 (defun ty-double? (t: ptr) -> i64
   (if (nil? t) 0
-      (if (= (ty-tag t) TY-DOUBLE) 1 0)))
+      (if (= (ty-tag t) 12) 1 0)))  ;; TY-DOUBLE
 
 (defun ty-void? (t: ptr) -> i64
   (if (nil? t) 0
-      (if (= (ty-tag t) TY-VOID) 1 0)))
+      (if (= (ty-tag t) 16) 1 0)))  ;; TY-VOID
 
 (defun ty-var? (t: ptr) -> i64
   (if (nil? t) 0
-      (if (= (ty-tag t) TY-VAR) 1 0)))
+      (if (= (ty-tag t) 13) 1 0)))  ;; TY-VAR
 
 (defun ty-fn? (t: ptr) -> i64
   (if (nil? t) 0
-      (if (= (ty-tag t) TY-FN) 1 0)))
+      (if (= (ty-tag t) 14) 1 0)))  ;; TY-FN
 
 (defun ty-struct? (t: ptr) -> i64
   (if (nil? t) 0
-      (if (= (ty-tag t) TY-STRUCT) 1 0)))
+      (if (= (ty-tag t) 15) 1 0)))  ;; TY-STRUCT
 
 ;; ============================================================
 ;; Type Accessors
@@ -238,7 +243,7 @@
             (if (not (= tag1 tag2))
                 0
                 ;; Same tag - check additional fields
-                (if (= tag1 TY-VAR)
+                (if (= tag1 13)  ;; TY-VAR
                     (if (= (ty-var-id t1) (ty-var-id t2)) 1 0)
                     ;; For primitives, same tag = equal
                     ;; TODO: check TyFn params/ret, TyStruct name
@@ -287,12 +292,159 @@
 (def TYPE-VOID (ty-void))
 
 ;; ============================================================
-;; Infer Expressions (stub - to be expanded)
+;; AST Helpers
 ;; ============================================================
+
+;; Get car/cdr of SCons
+(defun scar (x: ptr) -> ptr
+  (. x scons-hd))
+
+(defun scdr (x: ptr) -> ptr
+  (. x scons-tl))
+
+;; Get second element
+(defun scadr (x: ptr) -> ptr
+  (scar (scdr x)))
+
+;; Get third element
+(defun scaddr (x: ptr) -> ptr
+  (scar (scdr (scdr x))))
+
+;; Check if symbol matches a name (by comparing symbol IDs)
+(defun sym-eq? (sym: ptr name-id) -> i64
+  (if (nil? sym)
+      0
+      (if (symbol? sym)
+          (if (= (symbol-id sym) name-id) 1 0)
+          0)))
+
+;; ============================================================
+;; Builtin Symbol IDs
+;; ============================================================
+;; These would normally come from interning, but we use fixed IDs for builtins
+
+(def SYM-IF 0)
+(def SYM-LET 1)
+(def SYM-FN 2)
+(def SYM-DO 3)
+(def SYM-PLUS 4)
+(def SYM-MINUS 5)
+(def SYM-TIMES 6)
+(def SYM-DIVIDE 7)
+
+;; ============================================================
+;; Infer Expressions
+;; ============================================================
+
+;; Infer type of a literal integer
+(defun infer-int (ctx: ptr val) -> ptr
+  (ty-int))
+
+;; Infer type of a literal string
+(defun infer-string (ctx: ptr s: ptr) -> ptr
+  (ty-ptr))
+
+;; Infer type of a symbol reference
+(defun infer-symbol (ctx: ptr sym: ptr) -> ptr
+  ;; For now, return fresh type var
+  ;; TODO: lookup in type environment (need ptr storage, not i64)
+  (fresh-var! ctx))
+
+;; Infer type of if expression: (if cond then else)
+(defun infer-if (ctx: ptr form: ptr) -> ptr
+  (let ((cond-form (scadr form))
+        (then-form (scaddr form))
+        (else-form (scar (scdr (scdr (scdr form)))))
+        ;; Infer condition (should be bool/int)
+        (cond-ty (infer ctx cond-form))
+        ;; Infer both branches
+        (then-ty (infer ctx then-form))
+        (else-ty (infer ctx else-form)))
+    ;; Unify branches - they must have same type
+    (do
+      (unify ctx then-ty else-ty)
+      then-ty)))
+
+;; Infer type of arithmetic: (+ a b)
+(defun infer-arith (ctx: ptr form: ptr) -> ptr
+  (let ((a-form (scadr form))
+        (b-form (scaddr form))
+        (a-ty (infer ctx a-form))
+        (b-ty (infer ctx b-form))
+        (int-ty (ty-int)))
+    ;; Both operands should be same numeric type
+    (do
+      (unify ctx a-ty b-ty)
+      (unify ctx a-ty int-ty)
+      int-ty)))
+
+;; Infer type of do block: (do e1 e2 ... en)
+(defun infer-do-loop (ctx: ptr forms: ptr) -> ptr
+  (if (nil? forms)
+      (ty-void)
+      (let ((first-ty (infer ctx (scar forms)))
+            (rest (scdr forms)))
+        (if (nil? rest)
+            first-ty  ;; last expression is result
+            (infer-do-loop ctx rest)))))
+
+(defun infer-do (ctx: ptr form: ptr) -> ptr
+  (infer-do-loop ctx (scdr form)))
+
+;; Infer type of let: (let ((x e1) ...) body)
+(defun infer-let-bindings (ctx: ptr bindings: ptr) -> i64
+  (if (nil? bindings)
+      0
+      (let ((binding (scar bindings))
+            (val-form (scadr binding))
+            (val-ty (infer ctx val-form)))
+        ;; TODO: bind name to val-ty in type env (needs ptr storage)
+        (infer-let-bindings ctx (scdr bindings)))))
+
+(defun infer-let (ctx: ptr form: ptr) -> ptr
+  (let ((bindings (scadr form))
+        (body (scaddr form))
+        (ignored (infer-let-bindings ctx bindings)))
+    (infer ctx body)))
+
+;; Infer type of function call: (f arg1 arg2 ...)
+(defun infer-call (ctx: ptr form: ptr) -> ptr
+  ;; For now, return fresh type var (proper impl needs function types)
+  (fresh-var! ctx))
 
 ;; Main entry point for inference
 ;; Takes context and S-expression, returns inferred type
 (defun infer (ctx: ptr form: ptr) -> ptr
-  ;; For now, just return ptr for everything
-  ;; TODO: implement full inference
-  TYPE-PTR)
+  (if (nil? form)
+      (ty-ptr)
+      ;; Check what kind of form
+      (if (symbol? form)
+          ;; Symbol reference
+          (infer-symbol ctx form)
+          (if (not (scons? form))
+              ;; Not a list - assume integer literal
+              (ty-int)
+              ;; List - check head for special forms
+              (let ((head (scar form)))
+                (if (not (symbol? head))
+                    ;; Head not a symbol - generic call
+                    (infer-call ctx form)
+                    ;; Check for special forms by symbol ID
+                    ;; SYM-IF=0, SYM-LET=1, SYM-FN=2, SYM-DO=3, SYM-PLUS=4, SYM-MINUS=5, SYM-TIMES=6, SYM-DIVIDE=7
+                    (let ((head-id (symbol-id head)))
+                      (if (= head-id 0)  ;; SYM-IF
+                          (infer-if ctx form)
+                          (if (= head-id 1)  ;; SYM-LET
+                              (infer-let ctx form)
+                              (if (= head-id 3)  ;; SYM-DO
+                                  (infer-do ctx form)
+                                  (if (= head-id 4)  ;; SYM-PLUS
+                                      (infer-arith ctx form)
+                                      (if (= head-id 5)  ;; SYM-MINUS
+                                          (infer-arith ctx form)
+                                          (if (= head-id 6)  ;; SYM-TIMES
+                                              (infer-arith ctx form)
+                                              (if (= head-id 7)  ;; SYM-DIVIDE
+                                                  (infer-arith ctx form)
+                                                  ;; Default: function call
+                                                  (infer-call ctx form)))))))))))))))

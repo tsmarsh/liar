@@ -1,0 +1,67 @@
+;; test-codegen.liar - Minimal test for codegen
+;;
+;; Simplified to avoid liar.seq dependencies
+
+(ns liarliar.test-codegen
+  (:require [liar.core :refer :all]
+            [liar.test :refer :all]
+            [liarliar.symbols :refer :all]
+            [liarliar.value :refer :all]
+            [liarliar.codegen :refer :all]))
+
+(extern puts i64 (ptr))
+
+;; ============================================================
+;; AST Construction
+;; ============================================================
+
+(defun make-test-sym (syms: ptr b0 b1 b2 b3 len: i64) -> ptr
+  (let ((buf (heap-array 5)))
+    (do
+      (store-byte buf b0)
+      (store-byte (ptr+ buf 1) b1)
+      (store-byte (ptr+ buf 2) b2)
+      (store-byte (ptr+ buf 3) b3)
+      (store-byte (ptr+ buf len) 0)
+      (intern syms buf))))
+
+;; Build AST for (+ 1 2)
+(defun make-add-ast (syms: ptr) -> ptr
+  (let ((plus-sym (make-test-sym syms 43 0 0 0 1))
+        (one (box-int 1))
+        (two (box-int 2)))
+    (scons plus-sym (scons one (scons two nil)))))
+
+;; ============================================================
+;; Tests
+;; ============================================================
+
+(defun test-codegen-int (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (val (box-int 42))
+        (ctx (make-codegen-ctx syms))
+        (result (codegen-expr ctx val))
+        (lir (pcons-tail result)))
+    (do
+      (assert t (scons? lir))
+      (assert t (symbol? (scons-head lir)))
+      0)))
+
+(defun test-codegen-add (t: ptr) -> i64
+  (let ((syms (make-symbol-table 64))
+        (ast (make-add-ast syms))
+        (ctx (make-codegen-ctx syms))
+        (result (codegen-expr ctx ast))
+        (lir (pcons-tail result)))
+    (do
+      (assert t (scons? lir))
+      0)))
+
+(defun run-codegen-tests (t: ptr) -> i64
+  (do
+    (test-codegen-int t)
+    (test-codegen-add t)
+    0))
+
+(defun main () -> i64
+  (run-tests-verbose run-codegen-tests))

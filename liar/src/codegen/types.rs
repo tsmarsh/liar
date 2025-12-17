@@ -340,6 +340,31 @@ pub fn infer_return_type(ctx: &CodegenContext, expr: &lir::Expr) -> lir::ReturnT
         // Global ref is a function pointer
         lir::Expr::GlobalRef(_) => lir::ReturnType::Ptr,
 
+        // HeapStruct returns a pointer to the allocated struct
+        lir::Expr::HeapStruct { .. } => lir::ReturnType::Ptr,
+
+        // Load returns the type being loaded - convert ParamType to ReturnType
+        lir::Expr::Load { ty, .. } => match ty {
+            lir::ParamType::Scalar(s) => lir::ReturnType::Scalar(s.clone()),
+            lir::ParamType::Ptr
+            | lir::ParamType::Own(_)
+            | lir::ParamType::Ref(_)
+            | lir::ParamType::RefMut(_)
+            | lir::ParamType::Rc(_) => lir::ReturnType::Ptr,
+            lir::ParamType::AnonStruct(fields) => lir::ReturnType::AnonStruct(fields.clone()),
+        },
+
+        // GetElementPtr returns a pointer
+        lir::Expr::GetElementPtr { .. } => lir::ReturnType::Ptr,
+
+        // Array operations
+        lir::Expr::ArrayGet { elem_type, .. } => lir::ReturnType::Scalar(elem_type.clone()),
+        lir::Expr::ArraySet { .. } => lir::ReturnType::Scalar(lir::ScalarType::I64), // Returns old value
+        lir::Expr::HeapArray { .. } => lir::ReturnType::Ptr,
+        lir::Expr::HeapArrayDyn { .. } => lir::ReturnType::Ptr,
+        lir::Expr::PtrArrayGet { .. } => lir::ReturnType::Ptr,
+        lir::Expr::PtrArraySet { .. } => lir::ReturnType::Ptr,
+
         // Default to i64
         _ => lir::ReturnType::Scalar(lir::ScalarType::I64),
     }

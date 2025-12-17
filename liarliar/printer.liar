@@ -1,0 +1,213 @@
+;; printer.liar - S-expression printer for liarliar
+;;
+;; Serializes SCons trees (lIR or any S-expression) to text using StringBuilder.
+;; Inverse of reader.liar: reader parses text -> SCons, printer prints SCons -> text.
+
+(ns liarliar.printer
+  (:require [liar.core :refer :all]
+            [liarliar.strings :refer :all]
+            [liarliar.symbols :refer :all]
+            [liarliar.value :refer :all]))
+
+;; ============================================================
+;; Printer State
+;; ============================================================
+
+(defstruct PrinterCtx
+  (pr-sb: ptr        ;; StringBuilder for output
+   pr-indent: i64))  ;; Current indentation level
+
+(defun make-printer () -> ptr
+  (share (PrinterCtx (string-builder-cap 4096) 0)))
+
+(defun pr-sb (ctx: ptr) -> ptr (. ctx pr-sb))
+(defun pr-indent (ctx: ptr) -> i64 (. ctx pr-indent))
+
+(defun pr-with-sb (ctx: ptr sb: ptr) -> ptr
+  (share (PrinterCtx sb (pr-indent ctx))))
+
+(defun pr-indent-inc (ctx: ptr) -> ptr
+  (share (PrinterCtx (pr-sb ctx) (+ (pr-indent ctx) 2))))
+
+(defun pr-indent-dec (ctx: ptr) -> ptr
+  (share (PrinterCtx (pr-sb ctx) (- (pr-indent ctx) 2))))
+
+;; ============================================================
+;; Output Helpers
+;; ============================================================
+
+;; Emit indentation spaces
+(defun emit-indent-loop (sb: ptr n: i64) -> ptr
+  (if (<= n 0)
+      sb
+      (emit-indent-loop (conj sb 32) (- n 1))))  ;; space = 32
+
+(defun emit-indent (ctx: ptr) -> ptr
+  (pr-with-sb ctx (emit-indent-loop (pr-sb ctx) (pr-indent ctx))))
+
+(defun emit-newline (ctx: ptr) -> ptr
+  (pr-with-sb ctx (conj (pr-sb ctx) 10)))  ;; newline = 10
+
+(defun emit-space (ctx: ptr) -> ptr
+  (pr-with-sb ctx (conj (pr-sb ctx) 32)))
+
+(defun emit-lparen (ctx: ptr) -> ptr
+  (pr-with-sb ctx (conj (pr-sb ctx) 40)))  ;; ( = 40
+
+(defun emit-rparen (ctx: ptr) -> ptr
+  (pr-with-sb ctx (conj (pr-sb ctx) 41)))  ;; ) = 41
+
+;; ============================================================
+;; Print Atoms
+;; ============================================================
+
+;; Print a symbol name
+(defun print-symbol-name-loop (sb: ptr name: ptr idx: i64) -> ptr
+  (let ((c (load-byte (ptr+ name idx))))
+    (if (= c 0)
+        sb
+        (print-symbol-name-loop (conj sb c) name (+ idx 1)))))
+
+(defun print-symbol (ctx: ptr sym: ptr) -> ptr
+  (pr-with-sb ctx (print-symbol-name-loop (pr-sb ctx) (symbol-name sym) 0)))
+
+;; Print a boxed integer
+(defun print-int (ctx: ptr n: ptr) -> ptr
+  (pr-with-sb ctx (append-int (pr-sb ctx) (unbox-int n))))
+
+;; Print a string (with quotes)
+(defun print-string-loop (sb: ptr data: ptr idx: i64 len: i64) -> ptr
+  (if (>= idx len)
+      sb
+      (let ((c (load-byte (ptr+ data idx)))
+            (sb (if (= c 10)  ;; newline -> \n
+                    (conj (conj sb 92) 110)  ;; \ n
+                    (if (= c 34)  ;; quote -> \"
+                        (conj (conj sb 92) 34)
+                        (conj sb c)))))
+        (print-string-loop sb data (+ idx 1) len))))
+
+(defun print-liar-string (ctx: ptr s: ptr) -> ptr
+  (let ((sb (pr-sb ctx))
+        (sb (conj sb 34))  ;; opening quote
+        (sb (print-string-loop sb (liar-string-data s) 0 (liar-string-len s)))
+        (sb (conj sb 34))) ;; closing quote
+    (pr-with-sb ctx sb)))
+
+;; ============================================================
+;; Print Lists
+;; ============================================================
+
+;; Print list elements separated by spaces
+(defun print-list-elements (ctx: ptr lst: ptr first: i64) -> ptr
+  (if (nil? lst)
+      ctx
+      (let ((ctx (if (= first 1) ctx (emit-space ctx)))
+            (ctx (print-sexp ctx (scons-head lst))))
+        (print-list-elements ctx (scons-tail lst) 0))))
+
+;; Print an S-expression list
+(defun print-list (ctx: ptr lst: ptr) -> ptr
+  (let ((ctx (emit-lparen ctx))
+        (ctx (print-list-elements ctx lst 1))
+        (ctx (emit-rparen ctx)))
+    ctx))
+
+;; ============================================================
+;; Main Print Dispatcher
+;; ============================================================
+
+(defun print-sexp (ctx: ptr form: ptr) -> ptr
+  (cond
+    ((nil? form)
+     (pr-with-sb ctx (append (pr-sb ctx) (str-nil))))
+
+    ((symbol? form)
+     (print-symbol ctx form))
+
+    ((boxed-int? form)
+     (print-int ctx form))
+
+    ((liar-string? form)
+     (print-liar-string ctx form))
+
+    ((scons? form)
+     (print-list ctx form))
+
+    ;; PCons (pointer cons) - print as list too
+    ((pcons? form)
+     (let ((ctx (emit-lparen ctx))
+            (ctx (print-sexp ctx (pcons-head form)))
+            (ctx (emit-space ctx))
+            (ctx (pr-with-sb ctx (append (pr-sb ctx) (str-dot))))
+            (ctx (emit-space ctx))
+            (ctx (print-sexp ctx (pcons-tail form)))
+            (ctx (emit-rparen ctx)))
+       ctx))
+
+    ;; ICons (integer cons) - print as list
+    ((icons? form)
+     (let ((ctx (emit-lparen ctx))
+            (ctx (pr-with-sb ctx (append-int (pr-sb ctx) (icons-head form))))
+            (ctx (emit-space ctx))
+            (ctx (pr-with-sb ctx (append (pr-sb ctx) (str-dot))))
+            (ctx (emit-space ctx))
+            (ctx (print-sexp ctx (icons-tail form)))
+            (ctx (emit-rparen ctx)))
+       ctx))
+
+    (else
+     ;; Unknown type - print as <unknown>
+     (pr-with-sb ctx (append (pr-sb ctx) (str-unknown))))))
+
+;; ============================================================
+;; String Constants
+;; ============================================================
+
+(defun str-nil () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 110) (store-byte (ptr+ b 1) 105)
+        (store-byte (ptr+ b 2) 108) (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-dot () -> ptr
+  (let ((b (heap-array 2)))
+    (do (store-byte b 46) (store-byte (ptr+ b 1) 0) b)))
+
+(defun str-unknown () -> ptr
+  (let ((b (heap-array 10)))
+    (do (store-byte b 60)  ;; <
+        (store-byte (ptr+ b 1) 117) (store-byte (ptr+ b 2) 110)
+        (store-byte (ptr+ b 3) 107) (store-byte (ptr+ b 4) 110)
+        (store-byte (ptr+ b 5) 111) (store-byte (ptr+ b 6) 119)
+        (store-byte (ptr+ b 7) 110) (store-byte (ptr+ b 8) 62)  ;; >
+        (store-byte (ptr+ b 9) 0) b)))
+
+;; ============================================================
+;; Top-Level Interface
+;; ============================================================
+
+;; Print a single S-expression to string
+(defun sexp-to-string (form: ptr) -> ptr
+  (let ((ctx (make-printer))
+        (ctx (print-sexp ctx form)))
+    (to-string (pr-sb ctx))))
+
+;; Print multiple forms separated by newlines
+(defun print-forms-loop (ctx: ptr forms: ptr) -> ptr
+  (if (nil? forms)
+      ctx
+      (let ((ctx (print-sexp ctx (scons-head forms)))
+            (ctx (emit-newline ctx)))
+        (print-forms-loop ctx (scons-tail forms)))))
+
+(defun forms-to-string (forms: ptr) -> ptr
+  (let ((ctx (make-printer))
+        (ctx (print-forms-loop ctx forms)))
+    (to-string (pr-sb ctx))))
+
+;; ============================================================
+;; Test
+;; ============================================================
+
+(defun main () -> i64
+  42)
