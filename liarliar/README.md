@@ -5,7 +5,8 @@ A bootstrap liar compiler written in liar itself. Compiles liar source to lIR.
 ## Status
 
 **Working features:**
-- Integer literals and arithmetic (`+`, `-`, `*`, `/`)
+- Integer literals and arithmetic (`+`, `-`, `*`, `/`, `rem`)
+- Float literals and arithmetic (`+.`, `-.`, `*.`, `/.`, `%.`, `fadd`, `fsub`, `fmul`, `fdiv`, `frem`)
 - Comparisons (`<`, `>`, `=`, `<=`, `>=`)
 - Let bindings (single and multiple)
 - If expressions with proper branching (`br`/`phi`) - recursion works!
@@ -56,7 +57,9 @@ cargo run --release -p liar -- liarliar/main.liar 2>/dev/null > /tmp/liarliar.li
 USE_LIARLIAR=1 cargo test --release -p liar-cert --test cert
 ```
 
-This runs all 118 scenarios from `liar-cert/features/*.feature` against liarliar instead of the Rust compiler. Currently **7 scenarios pass** (basic arithmetic, let bindings, simple macros). As liarliar gains features, more scenarios will pass.
+This runs all 118 scenarios from `liar-cert/features/*.feature` against liarliar instead of the Rust compiler. Currently **8 scenarios pass** (basic arithmetic, let bindings, simple macros). As liarliar gains features, more scenarios will pass.
+
+**Note:** Float tests require return type inference or explicit annotations. Since the test harness uses exit codes (integers), float return values don't work yet.
 
 Without `USE_LIARLIAR`, the same tests run against the Rust liar compiler (all 118 pass).
 

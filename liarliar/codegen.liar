@@ -108,6 +108,7 @@
 (defun sym-sub (s: ptr) -> ptr     (make-sym s 115 117 98 0 0 0 0 0 3))      ;; sub
 (defun sym-mul (s: ptr) -> ptr     (make-sym s 109 117 108 0 0 0 0 0 3))     ;; mul
 (defun sym-sdiv (s: ptr) -> ptr    (make-sym s 115 100 105 118 0 0 0 0 4))   ;; sdiv
+(defun sym-srem (s: ptr) -> ptr    (make-sym s 115 114 101 109 0 0 0 0 4))   ;; srem
 (defun sym-icmp (s: ptr) -> ptr    (make-sym s 105 99 109 112 0 0 0 0 4))    ;; icmp
 (defun sym-eq (s: ptr) -> ptr      (make-sym s 101 113 0 0 0 0 0 0 2))       ;; eq
 (defun sym-slt (s: ptr) -> ptr     (make-sym s 115 108 116 0 0 0 0 0 3))     ;; slt
@@ -124,6 +125,13 @@
 (defun sym-string (s: ptr) -> ptr  (make-sym s 115 116 114 105 110 103 0 0 6)) ;; string
 (defun sym-br (s: ptr) -> ptr      (make-sym s 98 114 0 0 0 0 0 0 2))        ;; br
 (defun sym-phi (s: ptr) -> ptr     (make-sym s 112 104 105 0 0 0 0 0 3))     ;; phi
+
+;; Float arithmetic lIR symbols
+(defun sym-fadd (s: ptr) -> ptr    (make-sym s 102 97 100 100 0 0 0 0 4))    ;; fadd
+(defun sym-fsub (s: ptr) -> ptr    (make-sym s 102 115 117 98 0 0 0 0 4))    ;; fsub
+(defun sym-fmul (s: ptr) -> ptr    (make-sym s 102 109 117 108 0 0 0 0 4))   ;; fmul
+(defun sym-fdiv (s: ptr) -> ptr    (make-sym s 102 100 105 118 0 0 0 0 4))   ;; fdiv
+(defun sym-frem (s: ptr) -> ptr    (make-sym s 102 114 101 109 0 0 0 0 4))   ;; frem
 
 ;; Liar special forms (for dispatch)
 (defun str-if () -> ptr
@@ -160,6 +168,11 @@
 (defun str-slash () -> ptr
   (let ((b (heap-array 2))) (do (store-byte b 47) (store-byte (ptr+ b 1) 0) b)))
 
+(defun str-rem () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 114) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 109)
+        (store-byte (ptr+ b 3) 0) b)))
+
 (defun str-eq () -> ptr
   (let ((b (heap-array 2))) (do (store-byte b 61) (store-byte (ptr+ b 1) 0) b)))
 
@@ -176,6 +189,53 @@
 (defun str-gte () -> ptr
   (let ((b (heap-array 3)))
     (do (store-byte b 62) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+
+;; Float operator strings (+., -., *., /., %.)
+(defun str-plus-dot () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 43) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-minus-dot () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 45) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-star-dot () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 42) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-slash-dot () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 47) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-percent-dot () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 37) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+
+;; Named float operator strings (fadd, fsub, fmul, fdiv, frem)
+(defun str-fadd () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 97) (store-byte (ptr+ b 2) 100)
+        (store-byte (ptr+ b 3) 100) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-fsub () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 117)
+        (store-byte (ptr+ b 3) 98) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-fmul () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 109) (store-byte (ptr+ b 2) 117)
+        (store-byte (ptr+ b 3) 108) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-fdiv () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 100) (store-byte (ptr+ b 2) 105)
+        (store-byte (ptr+ b 3) 118) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-frem () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 101)
+        (store-byte (ptr+ b 3) 109) (store-byte (ptr+ b 4) 0) b)))
 
 ;; ============================================================
 ;; AST Predicates
@@ -341,12 +401,14 @@
         (val (unbox-int form)))
     (pcons ctx (lir-int syms val))))
 
-;; Float literal: (double N.M) - simplified
+;; Float literal: (double N.M)
+;; BoxedFloat stores: int-part, frac-part, scale (10^digits in frac)
+;; E.g., 3.14 => int=3, frac=14, scale=100
+;; We emit (double ...) with the reconstructed float value
 (defun codegen-float (ctx: ptr form: ptr) -> ptr
-  (let ((syms (cg-syms ctx))
-        (int-part (boxed-float-int form)))
-    ;; For now, just emit the integer part
-    (pcons ctx (lir-int syms int-part))))
+  (let ((syms (cg-syms ctx)))
+    ;; Emit the BoxedFloat directly - the lIR printer will handle it
+    (pcons ctx (scons (sym-double syms) (scons form nil)))))
 
 ;; Symbol reference - pass through for now
 (defun codegen-symbol (ctx: ptr form: ptr) -> ptr
@@ -376,11 +438,23 @@
             ((streq name (str-minus))  (codegen-binop ctx form (sym-sub (cg-syms ctx))))
             ((streq name (str-star))   (codegen-binop ctx form (sym-mul (cg-syms ctx))))
             ((streq name (str-slash))  (codegen-binop ctx form (sym-sdiv (cg-syms ctx))))
+            ((streq name (str-rem))    (codegen-binop ctx form (sym-srem (cg-syms ctx))))
             ((streq name (str-eq))     (codegen-cmp ctx form (sym-eq (cg-syms ctx))))
             ((streq name (str-lt))     (codegen-cmp ctx form (sym-slt (cg-syms ctx))))
             ((streq name (str-gt))     (codegen-cmp ctx form (sym-sgt (cg-syms ctx))))
             ((streq name (str-lte))    (codegen-cmp ctx form (sym-sle (cg-syms ctx))))
             ((streq name (str-gte))    (codegen-cmp ctx form (sym-sge (cg-syms ctx))))
+            ;; Float arithmetic operators
+            ((streq name (str-plus-dot))    (codegen-float-binop ctx form (sym-fadd (cg-syms ctx))))
+            ((streq name (str-minus-dot))   (codegen-float-binop ctx form (sym-fsub (cg-syms ctx))))
+            ((streq name (str-star-dot))    (codegen-float-binop ctx form (sym-fmul (cg-syms ctx))))
+            ((streq name (str-slash-dot))   (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx))))
+            ((streq name (str-percent-dot)) (codegen-float-binop ctx form (sym-frem (cg-syms ctx))))
+            ((streq name (str-fadd))        (codegen-float-binop ctx form (sym-fadd (cg-syms ctx))))
+            ((streq name (str-fsub))        (codegen-float-binop ctx form (sym-fsub (cg-syms ctx))))
+            ((streq name (str-fmul))        (codegen-float-binop ctx form (sym-fmul (cg-syms ctx))))
+            ((streq name (str-fdiv))        (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx))))
+            ((streq name (str-frem))        (codegen-float-binop ctx form (sym-frem (cg-syms ctx))))
             (else                      (codegen-call ctx form))))
         (codegen-call ctx form))))
 
@@ -407,6 +481,17 @@
         (right-v (pcons-tail right-result))
         (syms (cg-syms ctx)))
     (pcons ctx (lir-icmp syms pred left-v right-v))))
+
+;; Float binary operations - same as codegen-binop but for float ops
+(defun codegen-float-binop (ctx: ptr form: ptr op: ptr) -> ptr
+  (let ((left-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head left-result))
+        (left-v (pcons-tail left-result))
+        (right-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head right-result))
+        (right-v (pcons-tail right-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (lir-binop syms op left-v right-v))))
 
 ;; ============================================================
 ;; If Expression (with proper branching)

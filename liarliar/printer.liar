@@ -75,6 +75,39 @@
 (defun print-int (ctx: ptr n: ptr) -> ptr
   (pr-with-sb ctx (append-int (pr-sb ctx) (unbox-int n))))
 
+;; Print a boxed float (int-part.frac-part)
+;; BoxedFloat stores: int-part, frac-part, scale
+(defun print-float (ctx: ptr f: ptr) -> ptr
+  (let ((sb (pr-sb ctx))
+        (int-part (boxed-float-int f))
+        (frac-part (boxed-float-frac f))
+        (scale (boxed-float-scale f))
+        ;; Print integer part
+        (sb (append-int sb int-part))
+        ;; Print decimal point
+        (sb (conj sb 46))  ;; '.' = 46
+        ;; Print fractional part with leading zeros if needed
+        (sb (print-frac-with-zeros sb frac-part scale)))
+    (pr-with-sb ctx sb)))
+
+;; Print fractional part with leading zeros
+;; E.g., 3.05 has frac=5, scale=100, needs "05" not "5"
+(defun print-frac-with-zeros (sb: ptr frac: i64 scale: i64) -> ptr
+  (if (<= scale 10)
+      ;; scale is 10 or 1, just print frac
+      (append-int sb frac)
+      (let ((leading-scale (/ scale 10)))
+        (print-frac-zeros-loop sb frac leading-scale))))
+
+(defun print-frac-zeros-loop (sb: ptr frac: i64 scale: i64) -> ptr
+  (if (<= scale 1)
+      (append-int sb frac)
+      (if (< frac scale)
+          ;; Need a leading zero
+          (print-frac-zeros-loop (conj sb 48) frac (/ scale 10))  ;; '0' = 48
+          ;; No more leading zeros needed
+          (append-int sb frac))))
+
 ;; Print a string (with quotes)
 (defun print-string-loop (sb: ptr data: ptr idx: i64 len: i64) -> ptr
   (if (>= idx len)
@@ -127,6 +160,9 @@
 
     ((boxed-int? form)
      (print-int ctx form))
+
+    ((boxed-float? form)
+     (print-float ctx form))
 
     ((liar-string? form)
      (print-liar-string ctx form))
