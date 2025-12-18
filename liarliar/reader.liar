@@ -10,6 +10,10 @@
 ;; String literals in liar have type 'string', which is incompatible with ptr.
 ;; The reader expects ptr to raw byte data (from slurp or heap-array).
 
+(ns liarliar.reader
+  (:require [liarliar.symbols :refer :all]
+            [liarliar.value :refer :all]))
+
 ;; ============================================================================
 ;; Lexer State
 ;; ============================================================================

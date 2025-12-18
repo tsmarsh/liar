@@ -93,8 +93,12 @@ impl ModuleLoader {
             CompileError::resolve(span, format!("Failed to read {}: {}", path.display(), e))
         })?;
 
-        let mut parser = Parser::new(&source)?;
-        let program = parser.parse_program()?;
+        let path_str = path.display().to_string();
+        let mut parser =
+            Parser::new(&source).map_err(|e| e.with_file(&path_str).with_source(&source))?;
+        let program = parser
+            .parse_program()
+            .map_err(|e| e.with_file(&path_str).with_source(&source))?;
 
         // Load dependencies first
         self.load_dependencies(&program, span)?;
@@ -190,8 +194,12 @@ pub fn compile_file(
         )]
     })?;
 
-    let mut parser = Parser::new(&source).map_err(|e| vec![e])?;
-    let program = parser.parse_program().map_err(|e| vec![e])?;
+    let path_str = path.display().to_string();
+    let mut parser =
+        Parser::new(&source).map_err(|e| vec![e.with_file(&path_str).with_source(&source)])?;
+    let program = parser
+        .parse_program()
+        .map_err(|e| vec![e.with_file(&path_str).with_source(&source)])?;
 
     // Check if this file has a namespace
     let namespace = ModuleLoader::extract_namespace(&program);
@@ -247,8 +255,12 @@ pub fn compile_file_with_target(
         )]
     })?;
 
-    let mut parser = Parser::new(&source).map_err(|e| vec![e])?;
-    let program = parser.parse_program().map_err(|e| vec![e])?;
+    let path_str = path.display().to_string();
+    let mut parser =
+        Parser::new(&source).map_err(|e| vec![e.with_file(&path_str).with_source(&source)])?;
+    let program = parser
+        .parse_program()
+        .map_err(|e| vec![e.with_file(&path_str).with_source(&source)])?;
 
     // Check if this file has a namespace
     let namespace = ModuleLoader::extract_namespace(&program);

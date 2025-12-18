@@ -8,6 +8,10 @@ pub struct CompileError {
     pub kind: ErrorKind,
     pub span: Span,
     pub message: String,
+    /// Optional file path where error occurred
+    pub file: Option<String>,
+    /// Optional source text for formatting
+    pub source: Option<String>,
 }
 
 impl CompileError {
@@ -16,7 +20,21 @@ impl CompileError {
             kind,
             span,
             message: message.into(),
+            file: None,
+            source: None,
         }
+    }
+
+    /// Add file path context to error
+    pub fn with_file(mut self, file: impl Into<String>) -> Self {
+        self.file = Some(file.into());
+        self
+    }
+
+    /// Add source text context to error
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
     }
 
     pub fn lex(span: Span, message: impl Into<String>) -> Self {
@@ -54,12 +72,85 @@ impl CompileError {
 
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Convert byte offset to line:column if we have source
+        let location = if let Some(ref source) = self.source {
+            let (line, col) = byte_offset_to_line_col(source, self.span.start);
+            format!("{}:{}", line, col)
+        } else {
+            format!("{}..{}", self.span.start, self.span.end)
+        };
+
+        // Include file path if available
+        let file_prefix = match &self.file {
+            Some(f) => format!("{}:", f),
+            None => String::new(),
+        };
+
         write!(
             f,
-            "{}: {} (at {}..{})",
-            self.kind, self.message, self.span.start, self.span.end
-        )
+            "{}{}: {} {}",
+            file_prefix, location, self.kind, self.message
+        )?;
+
+        // Show source snippet if available
+        if let Some(ref source) = self.source {
+            let snippet = format_source_snippet(source, self.span.start);
+            if !snippet.is_empty() {
+                write!(f, "\n{}", snippet)?;
+            }
+        }
+
+        Ok(())
     }
+}
+
+/// Convert byte offset to (line, column), 1-indexed
+fn byte_offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, c) in source.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+/// Format a source snippet with caret pointing to error
+fn format_source_snippet(source: &str, offset: usize) -> String {
+    // Find the line containing the offset
+    let mut line_start = 0;
+    let mut line_num = 1;
+    for (i, c) in source.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if c == '\n' {
+            line_start = i + 1;
+            line_num += 1;
+        }
+    }
+
+    // Find the end of this line
+    let line_end = source[line_start..]
+        .find('\n')
+        .map(|i| line_start + i)
+        .unwrap_or(source.len());
+
+    let line_text = &source[line_start..line_end];
+    let col = offset.saturating_sub(line_start);
+
+    // Format with line number and caret
+    let line_num_str = format!("{:>4} | ", line_num);
+    let caret_padding = " ".repeat(line_num_str.len() + col);
+
+    format!("{}{}\n{}^", line_num_str, line_text, caret_padding)
 }
 
 impl std::error::Error for CompileError {}

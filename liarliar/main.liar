@@ -1,0 +1,98 @@
+;; main.liar - liarliar compiler entry point
+;;
+;; A self-hosted liar compiler written in liar.
+;; Compiles liar source to lIR output.
+
+(ns liarliar.main
+  (:require [liar.io :refer :all]
+            [liar.core :refer :all]
+            [liarliar.symbols :refer :all]
+            [liarliar.value :refer :all]
+            [liarliar.reader :refer :all]
+            [liarliar.expand :refer :all]
+            [liarliar.codegen :refer :all]
+            [liarliar.printer :refer :all]))
+
+;; ============================================================
+;; FFI for string length
+;; ============================================================
+
+(extern strlen i64 (ptr))
+
+;; ============================================================
+;; Compiler Context
+;; ============================================================
+
+(defstruct CompilerCtx
+  (cctx-symbols: ptr
+   cctx-errors: ptr
+   cctx-fresh-id: i64))
+
+(defun make-compiler-ctx () -> ptr
+  (let ((syms (make-symbol-table 256)))
+    (share (CompilerCtx syms nil 0))))
+
+;; ============================================================
+;; Compilation Pipeline
+;; ============================================================
+
+(defun compile-source (src: ptr len: i64 syms: ptr) -> ptr
+  (let ((forms (read-all src len syms)))
+    (if (nil? forms)
+        (do (println "Error: Failed to parse source") nil)
+        (let ((expanded (expand-toplevel syms forms)))
+          (if (nil? expanded)
+              (do (println "Error: Failed to expand macros") nil)
+              (codegen-module expanded syms))))))
+
+(defun print-lir (forms: ptr) -> i64
+  (let ((output (forms-to-string forms)))
+    (if (nil? output)
+        (do (println "Error: Failed to format lIR") 1)
+        (do (print output) 0))))
+
+(defun compile-file (path: ptr) -> i64
+  (let ((src (slurp path)))
+    (if (nil? src)
+        (do (print "Error: Could not read file: ") (println path) 1)
+        (let ((len (strlen src))
+              (syms (make-symbol-table 256)))
+          (let ((lir (compile-source src len syms)))
+            (if (nil? lir)
+                1
+                (print-lir lir)))))))
+
+;; ============================================================
+;; Main Entry Point
+;; ============================================================
+
+(defun read-stdin-loop (buf: ptr pos: i64 max: i64) -> i64
+  (if (>= pos max)
+      pos
+      (let ((n (read-blocking 0 (ptr+ buf pos) 1)))
+        (if (<= n 0)
+            pos
+            (read-stdin-loop buf (+ pos 1) max)))))
+
+(defun read-stdin (buf: ptr max: i64) -> i64
+  (read-stdin-loop buf 0 max))
+
+(defun compile-stdin () -> i64
+  (let ((max-size 1048576)
+        (buf (malloc (+ max-size 1))))
+    (if (nil? buf)
+        (do (println "Error: Failed to allocate buffer") 1)
+        (let ((len (read-stdin buf max-size)))
+          (do
+            (store-byte (ptr+ buf len) 0)
+            (let ((syms (make-symbol-table 256)))
+              (let ((lir (compile-source buf len syms)))
+                (if (nil? lir)
+                    1
+                    (print-lir lir)))))))))
+
+(defun main (argc: i64 argv: ptr) -> i64
+  (if (< argc 2)
+      (compile-stdin)
+      (let ((path (aget argv 1)))
+        (compile-file path))))

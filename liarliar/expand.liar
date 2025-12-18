@@ -5,6 +5,10 @@
 ;;
 ;; Dependencies: value.liar, symbols.liar
 
+(ns liarliar.expand
+  (:require [liarliar.symbols :refer :all]
+            [liarliar.value :refer :all]))
+
 ;; ============================================================================
 ;; Expansion Context
 ;; ============================================================================
