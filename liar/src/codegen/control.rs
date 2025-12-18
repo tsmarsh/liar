@@ -278,26 +278,45 @@ pub fn generate_let(
         }
     }
 
-    // Check if body will create multi-block code (if expression)
-    // If so, we need to emit bindings BEFORE the body generates branches
+    // Check if body OR any binding value will create multi-block code (if expression)
+    // If so, we need to emit bindings BEFORE branches are generated
+    // This is critical when a binding value contains an if that uses an earlier binding
     let body_is_multiblock = will_generate_multiblock(&body.node);
+    let any_binding_multiblock = bindings
+        .iter()
+        .any(|b| will_generate_multiblock(&b.value.node));
 
-    if body_is_multiblock {
-        // Multi-block body: emit bindings BEFORE branches are generated
-        // Use entry bindings for entry block, block bindings for other blocks
-        let in_entry = ctx.current_block() == "entry";
-
+    if body_is_multiblock || any_binding_multiblock {
+        // Multi-block code path: bindings need to be emitted carefully
+        // Each binding might create blocks (if expressions), so we track which block
+        // we're in AFTER generating each binding value
         ctx.set_tail_position(false);
         for binding in bindings.iter() {
+            // Track which block we're in before generating the value
+            let block_before = ctx.current_block().to_string();
+
             let value = generate_expr(ctx, &binding.value)?;
+
             // Register the variable type so phi nodes can infer correct types
             let var_type = infer_return_type(ctx, &value);
             ctx.register_var_type(&binding.name.node, var_type);
-            if in_entry {
+
+            // Track which block we're in after generating the value
+            let block_after = ctx.current_block().to_string();
+
+            // Add binding to the appropriate block
+            // If we're still in the same block, add to that block's bindings
+            // If we moved to a new block (due to if expression), add to the new block
+            if block_after == "entry" {
                 ctx.add_entry_binding(binding.name.node.clone(), value);
             } else {
                 ctx.add_block_binding(binding.name.node.clone(), value);
             }
+
+            // If the block changed (multiblock binding value), the bindings
+            // accumulated so far in the old block need to be in the block_before block
+            // This is handled by how generate_if ends blocks properly
+            let _ = block_before; // Suppress unused warning
         }
         ctx.set_tail_position(was_tail);
 

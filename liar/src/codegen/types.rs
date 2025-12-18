@@ -2,8 +2,11 @@
 //!
 //! Functions to convert liar types to lIR types.
 
+use std::collections::HashMap;
+
 use crate::ast::{Defun, Expr, Type};
 use crate::span::Spanned;
+use crate::types::Ty;
 use lir_core::ast as lir;
 
 use super::context::CodegenContext;
@@ -40,6 +43,16 @@ pub fn infer_function_return_type(ctx: &CodegenContext, defun: &Defun) -> lir::R
 
 /// Infer the return type of a liar expression (before lowering to lIR)
 pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnType {
+    // Start with empty local scope
+    infer_liar_expr_type_with_scope(ctx, expr, &HashMap::new())
+}
+
+/// Infer type with local scope tracking for let-bound variables
+fn infer_liar_expr_type_with_scope(
+    ctx: &CodegenContext,
+    expr: &Expr,
+    local_scope: &HashMap<String, lir::ReturnType>,
+) -> lir::ReturnType {
     match expr {
         // Literals
         Expr::Int(_) => lir::ReturnType::Scalar(lir::ScalarType::I64),
@@ -101,24 +114,48 @@ pub fn infer_liar_expr_type(ctx: &CodegenContext, expr: &Expr) -> lir::ReturnTyp
         }
 
         // If inherits from branches (check true branch)
-        Expr::If(_cond, then_branch, _else_branch) => infer_liar_expr_type(ctx, &then_branch.node),
+        Expr::If(_cond, then_branch, _else_branch) => {
+            infer_liar_expr_type_with_scope(ctx, &then_branch.node, local_scope)
+        }
 
-        // Let inherits from body
-        Expr::Let(_bindings, body) => infer_liar_expr_type(ctx, &body.node),
-        Expr::Plet(_bindings, body) => infer_liar_expr_type(ctx, &body.node),
+        // Let inherits from body, but we need to track let-bound variable types
+        Expr::Let(bindings, body) => {
+            // Build up local scope with binding types
+            let mut new_scope = local_scope.clone();
+            for binding in bindings {
+                let binding_type =
+                    infer_liar_expr_type_with_scope(ctx, &binding.value.node, &new_scope);
+                new_scope.insert(binding.name.node.clone(), binding_type);
+            }
+            infer_liar_expr_type_with_scope(ctx, &body.node, &new_scope)
+        }
+        Expr::Plet(bindings, body) => {
+            // For plet, all bindings are evaluated in parallel (original scope)
+            let mut new_scope = local_scope.clone();
+            for binding in bindings {
+                let binding_type =
+                    infer_liar_expr_type_with_scope(ctx, &binding.value.node, local_scope);
+                new_scope.insert(binding.name.node.clone(), binding_type);
+            }
+            infer_liar_expr_type_with_scope(ctx, &body.node, &new_scope)
+        }
 
         // Do block inherits from last expression
         Expr::Do(exprs) => {
             if let Some(last) = exprs.last() {
-                infer_liar_expr_type(ctx, &last.node)
+                infer_liar_expr_type_with_scope(ctx, &last.node, local_scope)
             } else {
                 lir::ReturnType::Scalar(lir::ScalarType::I64)
             }
         }
 
-        // Variable - look up registered type, special case for 'self'
+        // Variable - check local scope first, then registered type, special case for 'self'
         Expr::Var(name) => {
-            if let Some(ty) = ctx.lookup_var_type(&name.name) {
+            // First check local scope (let-bound variables)
+            if let Some(ty) = local_scope.get(&name.name) {
+                ty.clone()
+            } else if let Some(ty) = ctx.lookup_var_type(&name.name) {
+                // Then check context (parameters)
                 ty.clone()
             } else if name.name == "self" {
                 lir::ReturnType::Ptr
@@ -265,6 +302,29 @@ pub fn liar_type_to_return(ty: &Type) -> lir::ReturnType {
             lir::ReturnType::AnonStruct(vec![lir::ParamType::Ptr, lir::ParamType::Ptr])
         }
         _ => lir::ReturnType::Scalar(lir::ScalarType::I64),
+    }
+}
+
+/// Convert internal Ty representation to lIR ReturnType
+/// Used for closure return type inference from TypeEnv
+pub fn ty_to_lir_return(ty: &Ty) -> lir::ReturnType {
+    match ty {
+        Ty::I8 => lir::ReturnType::Scalar(lir::ScalarType::I8),
+        Ty::I16 => lir::ReturnType::Scalar(lir::ScalarType::I16),
+        Ty::I32 => lir::ReturnType::Scalar(lir::ScalarType::I32),
+        Ty::I64 => lir::ReturnType::Scalar(lir::ScalarType::I64),
+        Ty::Float => lir::ReturnType::Scalar(lir::ScalarType::Float),
+        Ty::Double => lir::ReturnType::Scalar(lir::ScalarType::Double),
+        Ty::Bool => lir::ReturnType::Scalar(lir::ScalarType::I1),
+        Ty::Ptr => lir::ReturnType::Ptr,
+        Ty::Ref(_) | Ty::RefMut(_) => lir::ReturnType::Ptr,
+        Ty::Fn(_, ret) => ty_to_lir_return(ret), // For nested closures, return the inner return type
+        Ty::Named(_) => lir::ReturnType::Ptr,    // User-defined types are pointers
+        Ty::Unit => lir::ReturnType::Scalar(lir::ScalarType::Void),
+        Ty::Char => lir::ReturnType::Scalar(lir::ScalarType::I8),
+        Ty::String => lir::ReturnType::Ptr,
+        Ty::Tuple(_) => lir::ReturnType::Ptr,
+        Ty::Never | Ty::Error | Ty::Var(_) => lir::ReturnType::Scalar(lir::ScalarType::I64),
     }
 }
 

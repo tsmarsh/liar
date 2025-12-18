@@ -11,8 +11,7 @@
 ;; The reader expects ptr to raw byte data (from slurp or heap-array).
 
 (ns liarliar.reader
-  (:require [liar.vector :refer :all]
-            [liar.hashmap :refer :all]
+  (:require [liar.core :refer :all]
             [liarliar.symbols :refer :all]
             [liarliar.value :refer :all]))
 
@@ -318,25 +317,21 @@
 ;; Vector Parsing - produces actual PersistentVector
 ;; ============================================================================
 
-;; Read vector elements until ], building a PersistentVector
-;; acc is the vector being built
-(defun read-vector-elements (lex: ptr table: ptr acc: ptr) -> ptr
-  (let ((lex2 (skip-ws lex))
-        (c (peek-char lex2)))
+;; Read vector elements until ] - STUB for bootstrap
+;; Vector literals not supported in bootstrap compiler
+(defun skip-until-bracket (lex: ptr) -> ptr
+  (let ((c (peek-char lex)))
     (if (= c 93)  ;; ]
-        (pcons (advance-char lex2) acc)
+        (advance-char lex)
         (if (eof? c)
-            (pcons lex2 acc)  ;; unclosed vector
-            (let ((elem-result (read-value lex2 table))
-                  (elem-lex (pcons-head elem-result))
-                  (elem-val (pcons-tail elem-result)))
-              (read-vector-elements elem-lex table (vec-conj acc elem-val)))))))
+            lex
+            (skip-until-bracket (advance-char lex))))))
 
-;; Read a vector: [ ... ]
-;; Returns (lexer . PersistentVector)
+;; Read a vector: [ ... ] - STUB returns nil
+;; Vector literals not supported in bootstrap compiler
 (defun read-vector (lex: ptr table: ptr) -> ptr
-  (let ((start-lex (advance-char lex)))  ;; skip [
-    (read-vector-elements start-lex table (vector))))
+  (let ((end-lex (skip-until-bracket (advance-char lex))))
+    (pcons end-lex nil)))
 
 ;; ============================================================================
 ;; Quote Handling
@@ -388,33 +383,23 @@
     (pcons new-lex sym)))
 
 ;; ============================================================================
-;; Map Parsing - produces actual PersistentHashMap
+;; Map Parsing - STUB for bootstrap
 ;; ============================================================================
 
-;; Read map entries until }, building a PersistentHashMap
-;; Maps have alternating key-value pairs: {k1 v1 k2 v2 ...}
-(defun read-map-elements (lex: ptr table: ptr acc: ptr) -> ptr
-  (let ((lex2 (skip-ws lex))
-        (c (peek-char lex2)))
+;; Skip until closing brace
+(defun skip-until-brace (lex: ptr) -> ptr
+  (let ((c (peek-char lex)))
     (if (= c 125)  ;; }
-        (pcons (advance-char lex2) acc)
+        (advance-char lex)
         (if (eof? c)
-            (pcons lex2 acc)  ;; unclosed map
-            ;; Read key
-            (let ((key-result (read-value lex2 table))
-                  (key-lex (pcons-head key-result))
-                  (key-val (pcons-tail key-result))
-                  ;; Read value
-                  (val-result (read-value key-lex table))
-                  (val-lex (pcons-head val-result))
-                  (val-val (pcons-tail val-result)))
-              (read-map-elements val-lex table (hm-assoc acc key-val val-val)))))))
+            lex
+            (skip-until-brace (advance-char lex))))))
 
-;; Read a map: { k1 v1 k2 v2 ... }
-;; Returns (lexer . PersistentHashMap)
+;; Read a map: { k1 v1 k2 v2 ... } - STUB returns nil
+;; Map literals not supported in bootstrap compiler
 (defun read-map (lex: ptr table: ptr) -> ptr
-  (let ((start-lex (advance-char lex)))  ;; skip {
-    (read-map-elements start-lex table (hash-map))))
+  (let ((end-lex (skip-until-brace (advance-char lex))))
+    (pcons end-lex nil)))
 
 ;; ============================================================================
 ;; Quasiquote / Unquote Handling
@@ -573,11 +558,5 @@
         (exprs (read-all-loop lex table nil)))
     (reverse-list exprs)))
 
-;; String length helper (count until null byte)
-(defun strlen-loop (s: ptr idx: i64) -> i64
-  (if (= 0 (load-byte (ptr+ s idx)))
-      idx
-      (strlen-loop s (+ idx 1))))
-
-(defun strlen (s: ptr) -> i64
-  (strlen-loop s 0))
+;; Note: strlen is declared as extern in main.liar and io.liar
+;; We used to have a liar implementation here but it's not needed

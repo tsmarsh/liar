@@ -49,6 +49,20 @@ impl<'ctx> super::CodeGen<'ctx> {
 
         // Build locals map from parameters
         let mut locals: HashMap<String, BasicValueEnum<'ctx>> = HashMap::new();
+        let llvm_param_count = function.count_params();
+        let lir_param_count = func.params.len() as u32;
+        if llvm_param_count != lir_param_count {
+            return Err(CodeGenError::CodeGen(format!(
+                "Function '{}' param count mismatch: LLVM has {} params, lIR has {}. Params: {:?}",
+                func.name,
+                llvm_param_count,
+                lir_param_count,
+                func.params
+                    .iter()
+                    .map(|p| format!("{}: {:?}", p.name, p.ty))
+                    .collect::<Vec<_>>()
+            )));
+        }
         for (i, param) in func.params.iter().enumerate() {
             let param_value = function.get_nth_param(i as u32).unwrap();
             locals.insert(param.name.clone(), param_value);

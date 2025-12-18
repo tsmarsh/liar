@@ -31,7 +31,7 @@ use protocols::generate_extend_protocol;
 use structs::generate_defstruct;
 use types::{
     infer_function_return_type, infer_liar_expr_type, liar_type_to_lir_param,
-    liar_type_to_lir_return, liar_type_to_return,
+    liar_type_to_lir_return, liar_type_to_return, ty_to_lir_return,
 };
 
 /// Generate lIR module from a liar program
@@ -309,6 +309,12 @@ fn generate_defun(
             if ctx.lookup_struct(struct_name).is_some() {
                 ctx.register_var_struct_type(&p.name.node, struct_name);
             }
+        }
+
+        // Check type_env for closure types and register their return types
+        if let Some(Ty::Fn(_, ret_ty)) = type_env.get(&scoped_key) {
+            let return_type = ty_to_lir_return(ret_ty);
+            ctx.register_closure_return_type(&p.name.node, return_type);
         }
     }
 

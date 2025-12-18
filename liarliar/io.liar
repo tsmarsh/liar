@@ -9,7 +9,7 @@
 (extern lseek i64 (i32 i64 i32))
 (extern malloc ptr (i64))
 (extern free void (ptr))
-(extern strlen i64 (ptr))
+;; strlen is declared in main.liar
 
 ;; Open flags
 (defun O_RDONLY () -> i64 0)
@@ -25,12 +25,12 @@
   (read fd buf len))
 
 (defun file-open-read (path: ptr) -> i64
-  (open path (trunc i32 (O_RDONLY)) (i32 0)))
+  (open path (O_RDONLY) 0))
 
 (defun file-size (fd) -> i64
-  (let ((current (lseek fd 0 (trunc i32 (SEEK_SET))))
-        (end (lseek fd 0 (trunc i32 (SEEK_END))))
-        (reset (lseek fd 0 (trunc i32 (SEEK_SET)))))
+  (let ((current (lseek fd 0 (SEEK_SET)))
+        (end (lseek fd 0 (SEEK_END)))
+        (reset (lseek fd 0 (SEEK_SET))))
     end))
 
 (defun read-loop (fd buf: ptr pos len) -> i64

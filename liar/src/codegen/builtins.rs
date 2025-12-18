@@ -9,6 +9,7 @@ use lir_core::ast as lir;
 
 use super::context::CodegenContext;
 use super::expr::generate_expr;
+use super::types::infer_liar_expr_type;
 
 /// Parse a scalar type from an expression (should be a symbol like i8, i64, float, double)
 fn parse_scalar_type(expr: &Spanned<Expr>, type_expr: &Spanned<Expr>) -> Result<lir::ScalarType> {
@@ -616,8 +617,9 @@ pub fn generate_builtin(
             ctx.set_needs_printf();
             let a = generate_expr(ctx, &args[0])?;
             // Use %s for strings (ptr type), %ld for integers
-            let format = match &args[0].node {
-                Expr::String(_) => "%s",
+            let arg_type = infer_liar_expr_type(ctx, &args[0].node);
+            let format = match arg_type {
+                lir::ReturnType::Ptr => "%s",
                 _ => "%ld",
             };
             Some(lir::Expr::Call {
@@ -630,8 +632,9 @@ pub fn generate_builtin(
             ctx.set_needs_printf();
             let a = generate_expr(ctx, &args[0])?;
             // Use %s\n for strings (ptr type), %ld\n for integers
-            let format = match &args[0].node {
-                Expr::String(_) => "%s\n",
+            let arg_type = infer_liar_expr_type(ctx, &args[0].node);
+            let format = match arg_type {
+                lir::ReturnType::Ptr => "%s\n",
                 _ => "%ld\n",
             };
             Some(lir::Expr::Call {

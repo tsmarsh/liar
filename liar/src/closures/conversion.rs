@@ -238,6 +238,9 @@ pub struct ClosureConverter {
     known_functions: HashSet<String>,
     /// Current enclosing function name (for scoped type lookups)
     current_function: Option<String>,
+    /// Set of local variables in scope (parameters, let-bound vars)
+    /// These shadow global functions when used as values
+    local_vars: HashSet<String>,
 }
 
 impl ClosureConverter {
@@ -254,6 +257,7 @@ impl ClosureConverter {
             generated_structs: Vec::new(),
             known_functions: HashSet::new(),
             current_function: None,
+            local_vars: HashSet::new(),
         }
     }
 
@@ -314,6 +318,9 @@ impl ClosureConverter {
         let prev_function = self.current_function.take();
         self.current_function = Some(defun.name.node.clone());
 
+        // Save and reset local_vars for this function scope
+        let prev_local_vars = std::mem::take(&mut self.local_vars);
+
         // First, find which parameters are used as callables in the body
         // This includes direct calls AND captures used as callables in lambdas
         let param_names: HashSet<String> =
@@ -357,11 +364,17 @@ impl ClosureConverter {
             params
         };
 
+        // Register all parameters as local variables (they shadow global functions)
+        for param in &new_params {
+            self.local_vars.insert(param.name.node.clone());
+        }
+
         // Convert the body, which may contain lambdas
         let new_body = self.convert_expr(defun.body)?;
 
-        // Restore previous function context
+        // Restore previous function context and local vars
         self.current_function = prev_function;
+        self.local_vars = prev_local_vars;
 
         Ok(Defun {
             name: defun.name,
@@ -446,13 +459,22 @@ impl ClosureConverter {
             }
 
             Expr::Let(bindings, body) => {
-                let new_bindings = self.convert_bindings(bindings)?;
+                // Convert bindings and register bound names as local variables
+                let new_bindings = self.convert_bindings_tracking_locals(bindings)?;
                 let new_body = Box::new(self.convert_expr(*body)?);
+                // Note: we don't pop local_vars here because let is sequential -
+                // later bindings should see earlier ones, and body sees all
                 Expr::Let(new_bindings, new_body)
             }
 
             Expr::Plet(bindings, body) => {
+                // For plet, bindings are parallel so first convert all values
+                // then register all names before converting body
                 let new_bindings = self.convert_bindings(bindings)?;
+                // Register all bound names for the body
+                for binding in &new_bindings {
+                    self.local_vars.insert(binding.name.node.clone());
+                }
                 let new_body = Box::new(self.convert_expr(*body)?);
                 Expr::Plet(new_bindings, new_body)
             }
@@ -655,7 +677,11 @@ impl ClosureConverter {
             }
 
             // Function references used as values get wrapped in ClosureLit
-            Expr::Var(ref name) if self.known_functions.contains(&name.name) => {
+            // BUT only if not shadowed by a local variable
+            Expr::Var(ref name)
+                if self.known_functions.contains(&name.name)
+                    && !self.local_vars.contains(&name.name) =>
+            {
                 // Function used as a value - wrap in ClosureLit { fn_name, None }
                 Expr::ClosureLit {
                     fn_name: name.name.clone(),
@@ -693,6 +719,28 @@ impl ClosureConverter {
             .collect()
     }
 
+    /// Convert let bindings sequentially, registering each name as a local var
+    /// after processing its value. This ensures later bindings see earlier ones
+    /// as local vars (shadowing global functions).
+    fn convert_bindings_tracking_locals(
+        &mut self,
+        bindings: Vec<LetBinding>,
+    ) -> Result<Vec<LetBinding>> {
+        let mut result = Vec::with_capacity(bindings.len());
+        for binding in bindings {
+            let new_value = self.convert_expr(binding.value)?;
+            // Register this name as local AFTER processing its value
+            // (the value shouldn't see itself as a local)
+            self.local_vars.insert(binding.name.node.clone());
+            result.push(LetBinding {
+                name: binding.name,
+                ty: binding.ty,
+                value: new_value,
+            });
+        }
+        Ok(result)
+    }
+
     /// Convert a lambda to a ClosureLit
     fn convert_lambda(
         &mut self,
@@ -706,8 +754,19 @@ impl ClosureConverter {
         // Generate unique names
         let fn_name = fresh_lambda_name();
 
+        // Save current local vars and add lambda params as locals
+        let prev_local_vars = self.local_vars.clone();
+        // Add __env (will be first param) and all user params as local vars
+        self.local_vars.insert("__env".to_string());
+        for param in &params {
+            self.local_vars.insert(param.name.node.clone());
+        }
+
         // Convert the body (may contain nested lambdas)
         let converted_body = self.convert_expr(body)?;
+
+        // Restore previous local vars
+        self.local_vars = prev_local_vars;
 
         // Track the env struct name (if any) for use in RcAlloc later
         let mut env_struct_name_for_alloc: Option<String> = None;

@@ -250,11 +250,25 @@ pub fn generate_closure_call(
     // Restore tail position state
     ctx.set_tail_position(was_tail);
 
+    // Get the closure's return type (from type inference) or default to i64
+    let ret_ty = ctx
+        .lookup_closure_return_type(closure_var)
+        .map(|rt| match rt {
+            lir::ReturnType::Scalar(lir::ScalarType::Void) => {
+                // Void closures shouldn't happen, but default to i64 if they do
+                lir::ParamType::Scalar(lir::ScalarType::I64)
+            }
+            lir::ReturnType::Scalar(s) => lir::ParamType::Scalar(s.clone()),
+            lir::ReturnType::Ptr => lir::ParamType::Ptr,
+            lir::ReturnType::AnonStruct(fields) => lir::ParamType::AnonStruct(fields.clone()),
+        })
+        .unwrap_or(lir::ParamType::Scalar(lir::ScalarType::I64));
+
     // Build the call expression - use IndirectTailCall if in tail position
     let call_expr = if was_tail && ctx.can_emit_tailcall() {
         lir::Expr::IndirectTailCall {
             fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var.clone())),
-            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
+            ret_ty,
             args: std::iter::once(lir::Expr::LocalRef(env_ptr_var.clone()))
                 .chain(call_args)
                 .collect(),
@@ -262,7 +276,7 @@ pub fn generate_closure_call(
     } else {
         lir::Expr::IndirectCall {
             fn_ptr: Box::new(lir::Expr::LocalRef(fn_ptr_var.clone())),
-            ret_ty: lir::ParamType::Scalar(lir::ScalarType::I64), // TODO: infer return type
+            ret_ty,
             args: std::iter::once(lir::Expr::LocalRef(env_ptr_var.clone()))
                 .chain(call_args)
                 .collect(),

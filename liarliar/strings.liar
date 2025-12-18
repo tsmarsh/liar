@@ -7,8 +7,18 @@
 ;;
 ;; Implements Countable, Indexable, Collection protocols.
 
-(ns liarliar.strings
-  (:require [liar.seq :refer :all]))
+(ns liarliar.strings)
+
+;; Protocols needed by StringBuilder (local definitions to avoid liar.seq)
+(defprotocol Countable
+  (count [self]))
+
+(defprotocol Indexable
+  (nth [self idx]))
+
+(defprotocol Collection
+  (conj [self x])
+  (pop [self]))
 
 ;; --- External declarations ---
 

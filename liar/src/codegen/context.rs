@@ -27,6 +27,9 @@ pub struct CodegenContext {
     pub var_struct_types: HashMap<String, String>,
     /// Variable types for phi inference
     var_types: HashMap<String, lir::ReturnType>,
+    /// Closure variable return types (for indirect calls)
+    /// Maps closure variable name -> return type of calling that closure
+    closure_return_types: HashMap<String, lir::ReturnType>,
     /// Global constants (from def) - maps name to literal value
     pub constants: HashMap<String, i64>,
     /// Protocol method to protocol name mapping
@@ -91,6 +94,7 @@ impl CodegenContext {
             struct_defs: HashMap::new(),
             var_struct_types: HashMap::new(),
             var_types: HashMap::new(),
+            closure_return_types: HashMap::new(),
             constants: HashMap::new(),
             protocol_methods: HashMap::new(),
             protocol_impls: HashMap::new(),
@@ -119,6 +123,7 @@ impl CodegenContext {
         self.struct_defs.clear();
         self.var_struct_types.clear();
         self.var_types.clear();
+        self.closure_return_types.clear();
         self.protocol_methods.clear();
         self.protocol_impls.clear();
         self.type_protocols.clear();
@@ -186,6 +191,16 @@ impl CodegenContext {
         self.var_types.get(var_name)
     }
 
+    /// Register a closure variable's return type (for indirect calls)
+    pub fn register_closure_return_type(&mut self, var_name: &str, ty: lir::ReturnType) {
+        self.closure_return_types.insert(var_name.to_string(), ty);
+    }
+
+    /// Look up a closure variable's return type
+    pub fn lookup_closure_return_type(&self, var_name: &str) -> Option<&lir::ReturnType> {
+        self.closure_return_types.get(var_name)
+    }
+
     /// Register a global constant (from def)
     pub fn register_constant(&mut self, name: &str, value: i64) {
         self.constants.insert(name.to_string(), value);
@@ -207,6 +222,7 @@ impl CodegenContext {
         self.entry_bindings.clear();
         self.block_bindings.clear();
         self.var_types.clear();
+        self.closure_return_types.clear();
         self.var_struct_types.clear(); // Clear struct type tracking between functions
         self.in_tail_position = false;
         self.can_emit_tailcall = true;
@@ -229,25 +245,27 @@ impl CodegenContext {
     /// If this is the entry block and there are entry bindings, they are emitted first
     /// Block bindings are always emitted first (for let bindings before if branches)
     pub fn end_block(&mut self, terminator: lir::Expr) -> lir::BasicBlock {
-        // Take any pending phi bindings
+        // Take any pending phi bindings and block bindings
         let pending = std::mem::take(&mut self.pending_phis);
+        let block_binds = std::mem::take(&mut self.block_bindings);
 
-        // If there are pending phis, wrap them around the terminator
-        let mut instr = if pending.is_empty() {
+        // Order matters: phi nodes must be defined BEFORE block bindings that reference them
+        // Structure: Let(phis, [Let(block_binds, [terminator])])
+
+        // First wrap terminator with block bindings (innermost)
+        let mut instr = if block_binds.is_empty() {
             terminator
         } else {
             lir::Expr::Let {
-                bindings: pending,
+                bindings: block_binds,
                 body: vec![terminator],
             }
         };
 
-        // Block bindings for let expressions with multiblock bodies
-        // These need to be available before any branches
-        if !self.block_bindings.is_empty() {
-            let block_binds = std::mem::take(&mut self.block_bindings);
+        // Then wrap with phi bindings (outermost, so phis are evaluated first)
+        if !pending.is_empty() {
             instr = lir::Expr::Let {
-                bindings: block_binds,
+                bindings: pending,
                 body: vec![instr],
             };
         }
