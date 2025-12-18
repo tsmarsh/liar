@@ -1,2 +1,9 @@
 /target/
 Cargo.lock
+
+# IDE config
+.clj-kondo/
+.lsp/
+
+# Test artifacts
+*.ll
