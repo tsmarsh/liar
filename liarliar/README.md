@@ -37,9 +37,28 @@ cargo run --release -p liar -- liarliar/main.liar > /tmp/liarliar.lir
 
 ## Testing
 
+### Unit Tests
+
 ```bash
-./liarliar/tests/run-tests.sh
+LIARLIAR=/tmp/liarliar ./liarliar/tests/run-tests.sh
 ```
+
+### Certification Tests
+
+Run the full liar certification suite against liarliar to measure progress toward bootstrap:
+
+```bash
+# Build liarliar first
+cargo run --release -p liar -- liarliar/main.liar 2>/dev/null > /tmp/liarliar.lir
+./target/release/lair /tmp/liarliar.lir -o /tmp/liarliar
+
+# Run cert tests with liarliar backend
+USE_LIARLIAR=1 cargo test --release -p liar-cert --test cert
+```
+
+This runs all 118 scenarios from `liar-cert/features/*.feature` against liarliar instead of the Rust compiler. Currently **7 scenarios pass** (basic arithmetic, let bindings, simple macros). As liarliar gains features, more scenarios will pass.
+
+Without `USE_LIARLIAR`, the same tests run against the Rust liar compiler (all 118 pass).
 
 ## Usage
 

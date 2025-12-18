@@ -267,6 +267,96 @@ fn strip_namespace(source: &str) -> String {
     result
 }
 
+/// Compile liar source via liarliar (self-hosted compiler) and call a function
+/// This shells out to the liarliar binary and lair assembler
+pub fn compile_and_call_liarliar(source: &str, func_name: &str) -> Result<Value, String> {
+    use std::process::Command;
+
+    // Create temp files
+    let tmp_dir = std::env::temp_dir();
+    let source_file = tmp_dir.join("liarliar_test.liar");
+    let lir_file = tmp_dir.join("liarliar_test.lir");
+    let bin_file = tmp_dir.join("liarliar_test");
+
+    // The source needs a main function that calls the test function
+    // and returns i64 (for exit code based result checking)
+    let full_source = format!("{}\n(defun main () -> i64 ({}))", source, func_name);
+
+    // Write source to file
+    std::fs::write(&source_file, &full_source)
+        .map_err(|e| format!("Failed to write source file: {}", e))?;
+
+    // Get liarliar path from environment or default
+    let liarliar = std::env::var("LIARLIAR").unwrap_or_else(|_| "/tmp/liarliar".to_string());
+
+    // Check if liarliar exists
+    if !std::path::Path::new(&liarliar).exists() {
+        return Err(format!(
+            "liarliar binary not found at {}. Build it first with:\n\
+             cargo run --release -p liar -- liarliar/main.liar 2>/dev/null > /tmp/liarliar.lir && \
+             ./target/release/lair /tmp/liarliar.lir -o /tmp/liarliar",
+            liarliar
+        ));
+    }
+
+    // Run liarliar to compile to lIR
+    let liarliar_output = Command::new(&liarliar)
+        .arg(&source_file)
+        .output()
+        .map_err(|e| format!("Failed to run liarliar: {}", e))?;
+
+    if !liarliar_output.status.success() {
+        let stderr = String::from_utf8_lossy(&liarliar_output.stderr);
+        let stdout = String::from_utf8_lossy(&liarliar_output.stdout);
+        return Err(format!(
+            "liarliar compilation failed:\nstdout: {}\nstderr: {}",
+            stdout, stderr
+        ));
+    }
+
+    // Write lIR output to file
+    std::fs::write(&lir_file, &liarliar_output.stdout)
+        .map_err(|e| format!("Failed to write lIR file: {}", e))?;
+
+    // Get lair path
+    let lair = std::env::var("LAIR").unwrap_or_else(|_| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../target/release/lair").to_string()
+    });
+
+    // Run lair to compile to native
+    let lair_output = Command::new(&lair)
+        .arg(&lir_file)
+        .arg("-o")
+        .arg(&bin_file)
+        .output()
+        .map_err(|e| format!("Failed to run lair: {}", e))?;
+
+    if !lair_output.status.success() {
+        let stderr = String::from_utf8_lossy(&lair_output.stderr);
+        return Err(format!("lair compilation failed: {}", stderr));
+    }
+
+    // Run the compiled binary
+    let run_output = Command::new(&bin_file)
+        .output()
+        .map_err(|e| format!("Failed to run compiled binary: {}", e))?;
+
+    // Get exit code as result
+    let exit_code = run_output.status.code().unwrap_or(-1);
+
+    // Clean up temp files (ignore errors)
+    let _ = std::fs::remove_file(&source_file);
+    let _ = std::fs::remove_file(&lir_file);
+    let _ = std::fs::remove_file(&bin_file);
+
+    Ok(Value::I64(exit_code as i64))
+}
+
+/// Check if we should use liarliar backend
+pub fn use_liarliar() -> bool {
+    std::env::var("USE_LIARLIAR").is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

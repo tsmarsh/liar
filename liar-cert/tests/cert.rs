@@ -3,7 +3,10 @@
 //! Uses cucumber features to verify liar semantics.
 
 use cucumber::{given, then, when, World};
-use liar_cert::{compile_and_call, compile_and_call_with_stdlib, format_value};
+use liar_cert::{
+    compile_and_call, compile_and_call_liarliar, compile_and_call_with_stdlib, format_value,
+    use_liarliar,
+};
 use lir_codegen::codegen::Value;
 
 #[derive(Debug, Default, World)]
@@ -22,7 +25,10 @@ pub struct LiarWorld {
 
 impl LiarWorld {
     fn call_function(&mut self, name: &str) {
-        let result = if self.with_stdlib {
+        let result = if use_liarliar() {
+            // Use self-hosted liarliar compiler
+            compile_and_call_liarliar(&self.source, name)
+        } else if self.with_stdlib {
             compile_and_call_with_stdlib(&self.source, name, true)
         } else {
             compile_and_call(&self.source, name)
