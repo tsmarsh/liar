@@ -150,46 +150,6 @@
   (form-starts-with form (make-defmacro-name)))
 
 ;; ============================================================================
-;; List Accessors
-;; ============================================================================
-
-;; cadr = (car (cdr x)) = second element
-(defun cadr (form: ptr) -> ptr
-  (if (scons? form)
-      (let ((tail (scons-tail form)))
-        (if (scons? tail)
-            (scons-head tail)
-            nil))
-      nil))
-
-;; caddr = (car (cdr (cdr x))) = third element
-(defun caddr (form: ptr) -> ptr
-  (if (scons? form)
-      (let ((tail (scons-tail form)))
-        (if (scons? tail)
-            (let ((tail2 (scons-tail tail)))
-              (if (scons? tail2)
-                  (scons-head tail2)
-                  nil))
-            nil))
-      nil))
-
-;; cadddr = (car (cdr (cdr (cdr x)))) = fourth element
-(defun cadddr (form: ptr) -> ptr
-  (if (scons? form)
-      (let ((tail (scons-tail form)))
-        (if (scons? tail)
-            (let ((tail2 (scons-tail tail)))
-              (if (scons? tail2)
-                  (let ((tail3 (scons-tail tail2)))
-                    (if (scons? tail3)
-                        (scons-head tail3)
-                        nil))
-                  nil))
-            nil))
-      nil))
-
-;; ============================================================================
 ;; Macro Table Operations
 ;; ============================================================================
 
@@ -422,15 +382,6 @@
             ;; Expand and include in output
             (let ((expanded (expand ctx form)))
               (expand-toplevel-loop ctx rest (scons expanded acc)))))))
-
-;; Reverse an scons list
-(defun reverse-scons-loop (lst: ptr acc: ptr) -> ptr
-  (if (nil? lst)
-      acc
-      (reverse-scons-loop (scons-tail lst) (scons (scons-head lst) acc))))
-
-(defun reverse-scons (lst: ptr) -> ptr
-  (reverse-scons-loop lst nil))
 
 ;; Main entry: expand all top-level forms
 ;; Returns pcons of (final-context . expanded-forms)

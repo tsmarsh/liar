@@ -1,0 +1,57 @@
+;; io.liar - Minimal I/O for liarliar compiler
+;;
+;; Only includes what the compiler needs: slurp for file reading
+
+(ns liarliar.io)
+
+(extern open i32 (ptr i32 i32))
+(extern close i32 (i32))
+(extern lseek i64 (i32 i64 i32))
+(extern malloc ptr (i64))
+(extern free void (ptr))
+(extern strlen i64 (ptr))
+
+;; Open flags
+(defun O_RDONLY () -> i64 0)
+
+;; Seek
+(defun SEEK_SET () -> i64 0)
+(defun SEEK_END () -> i64 2)
+
+;; read-blocking: blocking read syscall
+(extern read i64 (i32 ptr i64))
+
+(defun read-blocking (fd buf: ptr len) -> i64
+  (read fd buf len))
+
+(defun file-open-read (path: ptr) -> i64
+  (open path (trunc i32 (O_RDONLY)) (i32 0)))
+
+(defun file-size (fd) -> i64
+  (let ((current (lseek fd 0 (trunc i32 (SEEK_SET))))
+        (end (lseek fd 0 (trunc i32 (SEEK_END))))
+        (reset (lseek fd 0 (trunc i32 (SEEK_SET)))))
+    end))
+
+(defun read-loop (fd buf: ptr pos len) -> i64
+  (if (>= pos len)
+      pos
+      (let ((n (read-blocking fd (ptr+ buf pos) (- len pos))))
+        (if (<= n 0)
+            pos
+            (read-loop fd buf (+ pos n) len)))))
+
+;; Read entire file as null-terminated string. Returns ptr or nil.
+(defun slurp (path: ptr) -> ptr
+  (let ((fd (file-open-read path)))
+    (if (< fd 0)
+        nil
+        (let ((size (file-size fd)))
+          (let ((buf (malloc (+ size 1))))
+            (if (nil? buf)
+                (do (close fd) nil)
+                (let ((bytes-read (read-loop fd buf 0 size)))
+                  (do
+                    (store-byte (ptr+ buf bytes-read) 0)
+                    (close fd)
+                    buf))))))))

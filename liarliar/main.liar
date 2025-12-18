@@ -4,14 +4,14 @@
 ;; Compiles liar source to lIR output.
 
 (ns liarliar.main
-  (:require [liar.io :refer :all]
-            [liar.core :refer :all]
-            [liarliar.symbols :refer :all]
-            [liarliar.value :refer :all]
-            [liarliar.reader :refer :all]
-            [liarliar.expand :refer :all]
-            [liarliar.codegen :refer :all]
-            [liarliar.printer :refer :all]))
+  (:require [liar.core :as core]
+            [liarliar.io :as io]
+            [liarliar.symbols :as sym]
+            [liarliar.value :as val]
+            [liarliar.reader :as reader]
+            [liarliar.expand :as expand]
+            [liarliar.codegen :as codegen]
+            [liarliar.printer :as printer]))
 
 ;; ============================================================
 ;; FFI for string length
@@ -29,7 +29,7 @@
    cctx-fresh-id: i64))
 
 (defun make-compiler-ctx () -> ptr
-  (let ((syms (make-symbol-table 256)))
+  (let ((syms (sym/make-symbol-table 256)))
     (share (CompilerCtx syms nil 0))))
 
 ;; ============================================================
@@ -37,26 +37,26 @@
 ;; ============================================================
 
 (defun compile-source (src: ptr len: i64 syms: ptr) -> ptr
-  (let ((forms (read-all src len syms)))
+  (let ((forms (reader/read-all src len syms)))
     (if (nil? forms)
         (do (println "Error: Failed to parse source") nil)
-        (let ((expanded (expand-toplevel syms forms)))
+        (let ((expanded (expand/expand-toplevel syms forms)))
           (if (nil? expanded)
               (do (println "Error: Failed to expand macros") nil)
-              (codegen-module expanded syms))))))
+              (codegen/codegen-module expanded syms))))))
 
 (defun print-lir (forms: ptr) -> i64
-  (let ((output (forms-to-string forms)))
+  (let ((output (printer/forms-to-string forms)))
     (if (nil? output)
         (do (println "Error: Failed to format lIR") 1)
         (do (print output) 0))))
 
 (defun compile-file (path: ptr) -> i64
-  (let ((src (slurp path)))
+  (let ((src (io/slurp path)))
     (if (nil? src)
         (do (print "Error: Could not read file: ") (println path) 1)
         (let ((len (strlen src))
-              (syms (make-symbol-table 256)))
+              (syms (sym/make-symbol-table 256)))
           (let ((lir (compile-source src len syms)))
             (if (nil? lir)
                 1
@@ -69,7 +69,7 @@
 (defun read-stdin-loop (buf: ptr pos: i64 max: i64) -> i64
   (if (>= pos max)
       pos
-      (let ((n (read-blocking 0 (ptr+ buf pos) 1)))
+      (let ((n (io/read-blocking 0 (ptr+ buf pos) 1)))
         (if (<= n 0)
             pos
             (read-stdin-loop buf (+ pos 1) max)))))
@@ -85,7 +85,7 @@
         (let ((len (read-stdin buf max-size)))
           (do
             (store-byte (ptr+ buf len) 0)
-            (let ((syms (make-symbol-table 256)))
+            (let ((syms (sym/make-symbol-table 256)))
               (let ((lir (compile-source buf len syms)))
                 (if (nil? lir)
                     1

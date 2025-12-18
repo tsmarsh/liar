@@ -93,19 +93,19 @@
 ;;; ============================================
 
 (defun read-async (fd buf len)
-  "Start an async read. Returns a ReadFuture ptr."
+  ;; Start an async read. Returns a ReadFuture ptr.
   (liar_io_read fd buf len))
 
 (defun write-async (fd buf len)
-  "Start an async write. Returns a WriteFuture ptr."
+  ;; Start an async write. Returns a WriteFuture ptr.
   (liar_io_write fd buf len))
 
 (defun poll-read (future waker)
-  "Poll a read future. Returns bytes read or negative if pending/error."
+  ;; Poll a read future. Returns bytes read or negative if pending/error.
   (liar_io_read_poll future waker))
 
 (defun poll-write (future waker)
-  "Poll a write future. Returns bytes written or negative if pending/error."
+  ;; Poll a write future. Returns bytes written or negative if pending/error.
   (liar_io_write_poll future waker))
 
 (defun free-read-future (future)
@@ -125,29 +125,29 @@
 ;; i64::MIN (-9223372036854775808): Pending
 
 (defun POLL_PENDING () -> i64
-  "Sentinel value for pending (i64::MIN)."
+  ;; Sentinel value for pending (i64::MIN).
   -9223372036854775808)
 
 (defun pending? (poll-result)
-  "Check if poll result indicates pending."
+  ;; Check if poll result indicates pending.
   (= poll-result (POLL_PENDING)))
 
 (defun poll-until-ready (future poll-fn) -> i64
-  "Spin-poll until future is ready. Returns result."
+  ;; Spin-poll until future is ready. Returns result.
   (let ((result (poll-fn future nil)))
     (if (pending? result)
         (poll-until-ready future poll-fn)
         result)))
 
 (defun read-blocking (fd buf len) -> i64
-  "Read from fd, blocking until complete. Returns bytes read or -1."
+  ;; Read from fd, blocking until complete. Returns bytes read or -1.
   (let ((future (read-async fd buf len)))
     (let ((result (poll-until-ready future poll-read)))
       (let ((_ (free-read-future future)))
         result))))
 
 (defun write-blocking (fd buf len) -> i64
-  "Write to fd, blocking until complete. Returns bytes written or -1."
+  ;; Write to fd, blocking until complete. Returns bytes written or -1.
   (let ((future (write-async fd buf len)))
     (let ((result (poll-until-ready future poll-write)))
       (let ((_ (free-write-future future)))
@@ -159,27 +159,27 @@
 ;;; ============================================
 
 (defun file-open (path flags mode) -> i64
-  "Open a file. Returns fd or -1 on error."
+  ;; Open a file. Returns fd or -1 on error.
   (open path flags mode))
 
 (defun file-open-read (path) -> i64
-  "Open file for reading."
+  ;; Open file for reading.
   (file-open path (O_RDONLY) 0))
 
 (defun file-open-write (path) -> i64
-  "Open file for writing (create/truncate). Mode 0644."
+  ;; Open file for writing (create/truncate). Mode 0644.
   (file-open path (bit-or (O_WRONLY) (bit-or (O_CREAT) (O_TRUNC))) 420))
 
 (defun file-open-append (path) -> i64
-  "Open file for appending."
+  ;; Open file for appending.
   (file-open path (bit-or (O_WRONLY) (bit-or (O_CREAT) (O_APPEND))) 420))
 
 (defun file-close (fd) -> i64
-  "Close a file descriptor."
+  ;; Close a file descriptor.
   (close fd))
 
 (defun file-size (fd) -> i64
-  "Get file size by seeking to end."
+  ;; Get file size by seeking to end.
   (let ((pos (lseek fd 0 (SEEK_CUR))))
     (let ((size (lseek fd 0 (SEEK_END))))
       (let ((_ (lseek fd pos (SEEK_SET))))
@@ -191,7 +191,7 @@
 ;;; ============================================
 
 (defun read-all-loop (fd buf: ptr offset remaining) -> i64
-  "Read loop handling partial reads."
+  ;; Read loop handling partial reads.
   (if (<= remaining 0)
       offset
       (let ((n (read-blocking fd (ptr+ buf offset) remaining)))
@@ -200,11 +200,11 @@
             (read-all-loop fd buf (+ offset n) (- remaining n))))))
 
 (defun read-all-blocking (fd buf size) -> i64
-  "Read all bytes, handling partial reads."
+  ;; Read all bytes, handling partial reads.
   (read-all-loop fd buf 0 size))
 
 (defun write-all-loop (fd buf: ptr offset remaining) -> i64
-  "Write loop handling partial writes."
+  ;; Write loop handling partial writes.
   (if (<= remaining 0)
       offset
       (let ((n (write-blocking fd (ptr+ buf offset) remaining)))
@@ -213,7 +213,7 @@
             (write-all-loop fd buf (+ offset n) (- remaining n))))))
 
 (defun write-all-blocking (fd buf len) -> i64
-  "Write all bytes, handling partial writes."
+  ;; Write all bytes, handling partial writes.
   (write-all-loop fd buf 0 len))
 
 
@@ -221,11 +221,10 @@
 ;;; High-Level Conveniences
 ;;; ============================================
 
+;; Read entire file as null-terminated string. Returns ptr or nil.
+;; Caller is responsible for freeing the returned buffer.
+;; This is async-native but blocks the current task until complete.
 (defun slurp (path) -> ptr
-  "Read entire file as null-terminated string. Returns ptr or nil.
-   Caller is responsible for freeing the returned buffer.
-
-   This is async-native but blocks the current task until complete."
   (let ((fd (file-open-read path)))
     (if (< fd 0)
         nil
@@ -243,7 +242,7 @@
                             buf)))))))))))
 
 (defun spit (path contents) -> i64
-  "Write null-terminated string to file. Returns bytes written or -1."
+  ;; Write null-terminated string to file. Returns bytes written or -1.
   (let ((fd (file-open-write path)))
     (if (< fd 0)
         -1
@@ -253,7 +252,7 @@
               written))))))
 
 (defun spit-append (path contents) -> i64
-  "Append null-terminated string to file. Returns bytes written or -1."
+  ;; Append null-terminated string to file. Returns bytes written or -1.
   (let ((fd (file-open-append path)))
     (if (< fd 0)
         -1
@@ -268,20 +267,20 @@
 ;;; ============================================
 
 (defun print-str (s) -> i64
-  "Write string to stdout."
+  ;; Write string to stdout.
   (write-blocking (STDOUT_FD) s (strlen s)))
 
 (defun println-str (s) -> i64
-  "Write string + newline to stdout."
+  ;; Write string + newline to stdout.
   (let ((_ (print-str s)))
     (write-blocking (STDOUT_FD) "\n" 1)))
 
 (defun eprint (s) -> i64
-  "Write string to stderr."
+  ;; Write string to stderr.
   (write-blocking (STDERR_FD) s (strlen s)))
 
 (defun eprintln (s) -> i64
-  "Write string + newline to stderr."
+  ;; Write string + newline to stderr.
   (let ((_ (eprint s)))
     (write-blocking (STDERR_FD) "\n" 1)))
 
@@ -291,7 +290,7 @@
 ;;; ============================================
 
 (defun read-line-check (fd buf: ptr pos n max-len) -> i64
-  "Helper: check if we found newline or should continue."
+  ;; Helper: check if we found newline or should continue.
   (if (<= n 0)
       pos
       (if (= (load-byte (ptr+ buf pos)) 10)
@@ -299,15 +298,15 @@
           (read-line-loop fd buf (+ pos 1) max-len))))
 
 (defun read-line-loop (fd buf: ptr pos max-len) -> i64
-  "Read one byte at a time until newline or max-len."
+  ;; Read one byte at a time until newline or max-len.
   (if (>= pos max-len)
       pos
       (let ((n (read-blocking fd (ptr+ buf pos) 1)))
         (read-line-check fd buf pos n max-len))))
 
+;; Read a line from fd into buf. Stops at newline or max-len.
+;; Returns bytes read (including newline if present).
 (defun read-line (fd buf: ptr max-len) -> i64
-  "Read a line from fd into buf. Stops at newline or max-len.
-   Returns bytes read (including newline if present)."
   (read-line-loop fd buf 0 max-len))
 
 
@@ -315,9 +314,9 @@
 ;;; Pipes
 ;;; ============================================
 
+;; Create a pipe. Returns ptr to 2-element i32 array [read-fd, write-fd].
+;; Returns nil on error. Caller must free the returned array.
 (defun make-pipe () -> ptr
-  "Create a pipe. Returns ptr to 2-element i32 array [read-fd, write-fd].
-   Returns nil on error. Caller must free the returned array."
   (let ((fds (heap-array 2)))
     (if (nil? fds)
         nil
@@ -326,19 +325,19 @@
             fds))))
 
 (defun pipe-read-fd (pipe-fds: ptr) -> i64
-  "Get the read end of a pipe."
+  ;; Get the read end of a pipe.
   (aget pipe-fds 0))
 
 (defun pipe-write-fd (pipe-fds: ptr) -> i64
-  "Get the write end of a pipe."
+  ;; Get the write end of a pipe.
   (aget pipe-fds 1))
 
 (defun pipe-close (pipe-fds: ptr) -> i64
-  "Close both ends of a pipe and free the array."
+  ;; Close both ends of a pipe and free the array.
   (let ((_ (close (pipe-read-fd pipe-fds))))
     (let ((_ (close (pipe-write-fd pipe-fds))))
-      (free pipe-fds)
-      0)))
+      (let ((_ (free pipe-fds)))
+        0))))
 
 
 ;;; ============================================
@@ -346,14 +345,14 @@
 ;;; ============================================
 
 (defun set-nonblocking (fd) -> i64
-  "Set a file descriptor to non-blocking mode. Returns 0 on success."
+  ;; Set a file descriptor to non-blocking mode. Returns 0 on success.
   (let ((flags (fcntl fd (F_GETFL) 0)))
     (if (< flags 0)
         -1
         (fcntl fd (F_SETFL) (bit-or flags (O_NONBLOCK))))))
 
 (defun set-blocking (fd) -> i64
-  "Set a file descriptor to blocking mode. Returns 0 on success."
+  ;; Set a file descriptor to blocking mode. Returns 0 on success.
   (let ((flags (fcntl fd (F_GETFL) 0)))
     (if (< flags 0)
         -1
@@ -365,23 +364,23 @@
 ;;; ============================================
 
 (defun tcp-socket () -> i64
-  "Create a TCP socket. Returns fd or -1 on error."
+  ;; Create a TCP socket. Returns fd or -1 on error.
   (socket (AF_INET) (SOCK_STREAM) 0))
 
 (defun tcp6-socket () -> i64
-  "Create a TCP IPv6 socket. Returns fd or -1 on error."
+  ;; Create a TCP IPv6 socket. Returns fd or -1 on error.
   (socket (AF_INET6) (SOCK_STREAM) 0))
 
 (defun udp-socket () -> i64
-  "Create a UDP socket. Returns fd or -1 on error."
+  ;; Create a UDP socket. Returns fd or -1 on error.
   (socket (AF_INET) (SOCK_DGRAM) 0))
 
 (defun unix-socket () -> i64
-  "Create a Unix domain stream socket. Returns fd or -1 on error."
+  ;; Create a Unix domain stream socket. Returns fd or -1 on error.
   (socket (AF_UNIX) (SOCK_STREAM) 0))
 
 (defun socket-set-reuseaddr (fd) -> i64
-  "Enable SO_REUSEADDR on socket. Returns 0 on success."
+  ;; Enable SO_REUSEADDR on socket. Returns 0 on success.
   (let ((one (heap-array 1)))
     (let ((_ (aset one 0 1)))
       (let ((result (setsockopt fd (SOL_SOCKET) (SO_REUSEADDR) one 4)))
@@ -389,15 +388,15 @@
           result)))))
 
 (defun socket-listen (fd backlog) -> i64
-  "Start listening on socket. Returns 0 on success."
+  ;; Start listening on socket. Returns 0 on success.
   (listen fd backlog))
 
 (defun socket-shutdown (fd how) -> i64
-  "Shutdown socket. how: SHUT_RD, SHUT_WR, or SHUT_RDWR."
+  ;; Shutdown socket. how: SHUT_RD, SHUT_WR, or SHUT_RDWR.
   (shutdown fd how))
 
 (defun socket-close (fd) -> i64
-  "Close a socket."
+  ;; Close a socket.
   (close fd))
 
 ;;; ============================================
@@ -405,36 +404,36 @@
 ;;; ============================================
 
 (defun accept-async (fd)
-  "Start an async accept. Returns an AcceptFuture ptr."
+  ;; Start an async accept. Returns an AcceptFuture ptr.
   (liar_io_accept fd))
 
 (defun poll-accept (future waker)
-  "Poll an accept future. Returns client fd or negative if pending/error."
+  ;; Poll an accept future. Returns client fd or negative if pending/error.
   (liar_io_accept_poll future waker))
 
 (defun free-accept-future (future)
   (liar_io_accept_free future))
 
 (defun connect-async (fd addr addr-len)
-  "Start an async connect. Returns a ConnectFuture ptr."
+  ;; Start an async connect. Returns a ConnectFuture ptr.
   (liar_io_connect fd addr addr-len))
 
 (defun poll-connect (future waker)
-  "Poll a connect future. Returns 0 (success), -1 (error), or pending."
+  ;; Poll a connect future. Returns 0 (success), -1 (error), or pending.
   (liar_io_connect_poll future waker))
 
 (defun free-connect-future (future)
   (liar_io_connect_free future))
 
 (defun accept-blocking (fd) -> i64
-  "Accept a connection, blocking until one arrives. Returns client fd or -1."
+  ;; Accept a connection, blocking until one arrives. Returns client fd or -1.
   (let ((future (accept-async fd)))
     (let ((result (poll-until-ready future poll-accept)))
       (let ((_ (free-accept-future future)))
         result))))
 
 (defun connect-blocking (fd addr addr-len) -> i64
-  "Connect to address, blocking until complete. Returns 0 on success, -1 on error."
+  ;; Connect to address, blocking until complete. Returns 0 on success, -1 on error.
   (let ((future (connect-async fd addr addr-len)))
     (let ((result (poll-until-ready future poll-connect)))
       (let ((_ (free-connect-future future)))
@@ -451,10 +450,10 @@
 ;;   u32 sin_addr    (offset 4, network byte order)
 ;;   u8[8] padding   (offset 8)
 
+;; Create a sockaddr_in structure. port in host order, addr as u32.
+;; Use INADDR_ANY (0) for any address, or pack-ipv4 for specific.
+;; Caller must free the returned buffer.
 (defun make-sockaddr-in (port addr) -> ptr
-  "Create a sockaddr_in structure. port in host order, addr as u32.
-   Use INADDR_ANY (0) for any address, or pack-ipv4 for specific.
-   Caller must free the returned buffer."
   (let ((sa (malloc 16)))
     (if (nil? sa)
         nil
@@ -472,7 +471,7 @@
 (defun INADDR_LOOPBACK () 2130706433)  ; 127.0.0.1
 
 (defun pack-ipv4 (a b c d) -> i64
-  "Pack IPv4 address bytes into u32. E.g., (pack-ipv4 192 168 1 1)"
+  ;; Pack IPv4 address bytes into u32. E.g., (pack-ipv4 192 168 1 1)
   (bit-or (bit-shift-left a 24)
           (bit-or (bit-shift-left b 16)
                   (bit-or (bit-shift-left c 8) d))))

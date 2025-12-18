@@ -151,13 +151,6 @@
 (defun ast-string? (form: ptr) (liar-string? form))
 (defun ast-list? (form: ptr) (scons? form))
 
-;; List accessors
-(defun car (lst: ptr) -> ptr (scons-head lst))
-(defun cdr (lst: ptr) -> ptr (scons-tail lst))
-(defun cadr (lst: ptr) -> ptr (car (cdr lst)))
-(defun caddr (lst: ptr) -> ptr (car (cdr (cdr lst))))
-(defun cadddr (lst: ptr) -> ptr (car (cdr (cdr (cdr lst)))))
-
 ;; ============================================================
 ;; lIR Construction Helpers
 ;; ============================================================
@@ -351,18 +344,13 @@
             (v (pcons-tail result)))
         (codegen-args ctx (cdr args) (scons v acc)))))
 
-(defun reverse-scons (lst: ptr acc: ptr) -> ptr
-  (if (nil? lst)
-      acc
-      (reverse-scons (scons-tail lst) (scons (scons-head lst) acc))))
-
 (defun codegen-call (ctx: ptr form: ptr) -> ptr
   (let ((head (car form))
         (args (cdr form))
         (args-result (codegen-args ctx args nil))
         (ctx (pcons-head args-result))
         (args-rev (pcons-tail args-result))
-        (args-v (reverse-scons args-rev nil))
+        (args-v (reverse-scons args-rev))
         (syms (cg-syms ctx)))
     (pcons ctx (lir-call syms head args-v))))
 

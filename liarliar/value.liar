@@ -134,3 +134,37 @@
 
 (defun liar-string-len (s: ptr) -> i64
   (. s liar-str-len))
+
+
+;; --- Standard list accessors ---
+;; Safe car/cdr that return nil for nil/non-cons input
+
+(defun car (lst: ptr) -> ptr
+  (if (scons? lst) (scons-head lst) nil))
+
+(defun cdr (lst: ptr) -> ptr
+  (if (scons? lst) (scons-tail lst) nil))
+
+(defun cadr (lst: ptr) -> ptr
+  (car (cdr lst)))
+
+(defun caddr (lst: ptr) -> ptr
+  (car (cdr (cdr lst))))
+
+(defun cadddr (lst: ptr) -> ptr
+  (car (cdr (cdr (cdr lst)))))
+
+(defun cddr (lst: ptr) -> ptr
+  (cdr (cdr lst)))
+
+(defun cdddr (lst: ptr) -> ptr
+  (cdr (cdr (cdr lst))))
+
+;; Reverse an SCons list
+(defun reverse-scons-acc (lst: ptr acc: ptr) -> ptr
+  (if (nil? lst)
+      acc
+      (reverse-scons-acc (cdr lst) (scons (car lst) acc))))
+
+(defun reverse-scons (lst: ptr) -> ptr
+  (reverse-scons-acc lst nil))

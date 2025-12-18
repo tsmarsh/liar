@@ -11,7 +11,9 @@
 ;; The reader expects ptr to raw byte data (from slurp or heap-array).
 
 (ns liarliar.reader
-  (:require [liarliar.symbols :refer :all]
+  (:require [liar.vector :refer :all]
+            [liar.hashmap :refer :all]
+            [liarliar.symbols :refer :all]
             [liarliar.value :refer :all]))
 
 ;; ============================================================================
