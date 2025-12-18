@@ -8,13 +8,13 @@ A bootstrap liar compiler written in liar itself. Compiles liar source to lIR.
 - Integer literals and arithmetic (`+`, `-`, `*`, `/`)
 - Comparisons (`<`, `>`, `=`, `<=`, `>=`)
 - Let bindings (single and multiple)
-- If expressions (with pure branches)
+- If expressions with proper branching (`br`/`phi`) - recursion works!
+- Recursive functions (countdown, sum-to-n, fibonacci, mutual recursion)
 - Function definitions with typed parameters
 - Function calls (direct, no closures)
 - Return type annotations (`-> i64`)
 
 **Known limitations:**
-- `select` evaluates both branches - recursive calls in if-branches cause stack overflow
 - No `ns` (namespace) support
 - No `defstruct` 
 - No `extern` (FFI)
@@ -53,8 +53,7 @@ echo '(defun main () -> i64 42)' | /tmp/liarliar
 
 ## Next Steps
 
-1. **Proper branching**: Implement `br`/`phi` for if expressions with side effects
-2. **Namespace support**: Handle `ns` declarations
-3. **Struct support**: `defstruct`, field access, `instance?`
-4. **FFI**: `extern` declarations
-5. **Self-compilation**: Compile liarliar with itself
+1. **Namespace support**: Handle `ns` declarations
+2. **Struct support**: `defstruct`, field access, `instance?`
+3. **FFI**: `extern` declarations
+4. **Self-compilation**: Compile liarliar with itself

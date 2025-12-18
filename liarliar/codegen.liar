@@ -23,28 +23,61 @@
   (cg-temp: i64        ;; Counter for unique temps (%0, %1, etc.)
    cg-syms: ptr        ;; SymbolTable for interning
    cg-env: ptr         ;; Current environment for name lookup
-   cg-fns: ptr))       ;; List of generated function definitions
+   cg-fns: ptr         ;; List of generated function definitions
+   cg-block-counter: i64  ;; Counter for unique block labels
+   cg-blocks: ptr      ;; List of accumulated blocks (for branching)
+   cg-merge-label: ptr)) ;; Label for merge block (set by if)
 
 (defun make-codegen-ctx (syms: ptr) -> ptr
-  (share (CodegenCtx 0 syms (make-global-env) nil)))
+  (share (CodegenCtx 0 syms (make-global-env) nil 0 nil nil)))
 
 (defun cg-temp (ctx: ptr) -> i64 (. ctx cg-temp))
 (defun cg-syms (ctx: ptr) -> ptr (. ctx cg-syms))
 (defun cg-env (ctx: ptr) -> ptr (. ctx cg-env))
 (defun cg-fns (ctx: ptr) -> ptr (. ctx cg-fns))
+(defun cg-block-counter (ctx: ptr) -> i64 (. ctx cg-block-counter))
+(defun cg-blocks (ctx: ptr) -> ptr (. ctx cg-blocks))
+(defun cg-merge-label (ctx: ptr) -> ptr (. ctx cg-merge-label))
 
 ;; Get next temp and increment counter
 (defun cg-next-temp (ctx: ptr) -> ptr
-  (share (CodegenCtx (+ (cg-temp ctx) 1) (cg-syms ctx) (cg-env ctx) (cg-fns ctx))))
+  (share (CodegenCtx (+ (cg-temp ctx) 1) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
+                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx))))
 
 ;; Update environment
 (defun cg-with-env (ctx: ptr new-env: ptr) -> ptr
-  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) new-env (cg-fns ctx))))
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) new-env (cg-fns ctx)
+                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx))))
 
 ;; Add function to list
 (defun cg-add-fn (ctx: ptr fn-def: ptr) -> ptr
   (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx)
-                     (scons fn-def (cg-fns ctx)))))
+                     (scons fn-def (cg-fns ctx))
+                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx))))
+
+;; ============================================================
+;; Block Management Helpers
+;; ============================================================
+
+;; Increment block counter and return updated context
+(defun cg-inc-block-counter (ctx: ptr) -> ptr
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
+                     (+ (cg-block-counter ctx) 1) (cg-blocks ctx) (cg-merge-label ctx))))
+
+;; Add a block to the accumulated blocks list
+(defun cg-add-block (ctx: ptr block: ptr) -> ptr
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
+                     (cg-block-counter ctx) (scons block (cg-blocks ctx)) (cg-merge-label ctx))))
+
+;; Set the merge label for the if expression
+(defun cg-set-merge-label (ctx: ptr label: ptr) -> ptr
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
+                     (cg-block-counter ctx) (cg-blocks ctx) label)))
+
+;; Reset block state for new function
+(defun cg-reset-blocks (ctx: ptr) -> ptr
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
+                     0 nil nil)))
 
 ;; ============================================================
 ;; Symbol/String Helpers
@@ -89,6 +122,8 @@
 (defun sym-entry (s: ptr) -> ptr   (make-sym s 101 110 116 114 121 0 0 0 5)) ;; entry
 (defun sym-let (s: ptr) -> ptr     (make-sym s 108 101 116 0 0 0 0 0 3))     ;; let
 (defun sym-string (s: ptr) -> ptr  (make-sym s 115 116 114 105 110 103 0 0 6)) ;; string
+(defun sym-br (s: ptr) -> ptr      (make-sym s 98 114 0 0 0 0 0 0 2))        ;; br
+(defun sym-phi (s: ptr) -> ptr     (make-sym s 112 104 105 0 0 0 0 0 3))     ;; phi
 
 ;; Liar special forms (for dispatch)
 (defun str-if () -> ptr
@@ -213,6 +248,76 @@
          (scons (scons (scons name (scons val nil)) nil)
                 (scons body nil))))
 
+;; Build: (br label) - unconditional branch
+(defun lir-br (syms: ptr label: ptr) -> ptr
+  (scons (sym-br syms) (scons label nil)))
+
+;; Build: (br cond then-label else-label) - conditional branch
+(defun lir-br-cond (syms: ptr cond-v: ptr then-lbl: ptr else-lbl: ptr) -> ptr
+  (scons (sym-br syms) (scons cond-v (scons then-lbl (scons else-lbl nil)))))
+
+;; Build: (phi type (label val) (label val))
+(defun lir-phi (syms: ptr ty: ptr lbl1: ptr val1: ptr lbl2: ptr val2: ptr) -> ptr
+  (scons (sym-phi syms)
+         (scons ty
+                (scons (scons lbl1 (scons val1 nil))
+                       (scons (scons lbl2 (scons val2 nil)) nil)))))
+
+;; Build: (block label body...)
+(defun lir-block (syms: ptr label: ptr body: ptr) -> ptr
+  (scons (sym-block syms) (scons label body)))
+
+;; ============================================================
+;; Block Label Generation
+;; ============================================================
+
+;; Helper to write a digit to buffer
+(defun write-digit (buf: ptr idx: i64 n: i64) -> i64
+  (do (store-byte (ptr+ buf idx) (+ 48 n)) (+ idx 1)))
+
+;; Write number to buffer, return new index
+(defun write-number (buf: ptr idx: i64 n: i64) -> i64
+  (if (< n 10)
+      (write-digit buf idx n)
+      (let ((idx2 (write-number buf idx (/ n 10))))
+        (write-digit buf idx2 (- n (* (/ n 10) 10))))))
+
+;; Generate fresh block label like "then.0", "else.1", "merge.2"
+;; Returns (ctx . label-symbol)
+(defun cg-fresh-label (ctx: ptr prefix: ptr) -> ptr
+  (let ((syms (cg-syms ctx))
+        (counter (cg-block-counter ctx))
+        (prefix-len (strlen prefix))
+        (buf (heap-array 20)))  ;; enough for prefix.NNNN
+    (do
+      ;; Copy prefix to buffer
+      (copy-str-loop buf 0 prefix 0 prefix-len)
+      ;; Add dot separator
+      (store-byte (ptr+ buf prefix-len) 46)  ;; '.' = 46
+      ;; Write the counter number
+      (let ((end-idx (write-number buf (+ prefix-len 1) counter)))
+        (do
+          ;; Null terminate
+          (store-byte (ptr+ buf end-idx) 0)
+          ;; Intern as symbol and return with incremented counter
+          (pcons (cg-inc-block-counter ctx) (intern syms buf)))))))
+
+;; String constants for label prefixes
+(defun str-then-prefix () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 116) (store-byte (ptr+ b 1) 104) (store-byte (ptr+ b 2) 101)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-else-prefix () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 101) (store-byte (ptr+ b 1) 108) (store-byte (ptr+ b 2) 115)
+        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-merge-prefix () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 109) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 114)
+        (store-byte (ptr+ b 3) 103) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 0) b)))
+
 ;; ============================================================
 ;; Expression Codegen
 ;; ============================================================
@@ -304,21 +409,79 @@
     (pcons ctx (lir-icmp syms pred left-v right-v))))
 
 ;; ============================================================
-;; If Expression
+;; If Expression (with proper branching)
 ;; ============================================================
 
+;; Emit proper control flow using br/phi for short-circuit evaluation
+;; This enables recursion to work correctly (unlike select which evaluates both branches)
+;;
+;; For (if cond then else), we generate:
+;;   (block entry (br cond-v then-label else-label))
+;;   (block then-label (let ((then-var then-v)) (br merge-label)))
+;;   (block else-label (let ((else-var else-v)) (br merge-label)))
+;;   (block merge-label (ret (phi i64 (then-label then-var) (else-label else-var))))
+;;
+;; The then-var/else-var let bindings ensure values are computed in their blocks
+;; before being referenced by phi in the merge block.
+
 (defun codegen-if (ctx: ptr form: ptr) -> ptr
-  (let ((cond-result (codegen-expr ctx (cadr form)))
+  (let ((syms (cg-syms ctx))
+
+        ;; Generate unique block labels
+        (then-result (cg-fresh-label ctx (str-then-prefix)))
+        (ctx (pcons-head then-result))
+        (then-lbl (pcons-tail then-result))
+
+        (else-result (cg-fresh-label ctx (str-else-prefix)))
+        (ctx (pcons-head else-result))
+        (else-lbl (pcons-tail else-result))
+
+        (merge-result (cg-fresh-label ctx (str-merge-prefix)))
+        (ctx (pcons-head merge-result))
+        (merge-lbl (pcons-tail merge-result))
+
+        ;; Compile condition expression
+        (cond-result (codegen-expr ctx (cadr form)))
         (ctx (pcons-head cond-result))
         (cond-v (pcons-tail cond-result))
+
+        ;; Compile then expression
         (then-result (codegen-expr ctx (caddr form)))
         (ctx (pcons-head then-result))
         (then-v (pcons-tail then-result))
+
+        ;; Compile else expression
         (else-result (codegen-expr ctx (cadddr form)))
         (ctx (pcons-head else-result))
         (else-v (pcons-tail else-result))
-        (syms (cg-syms ctx)))
-    (pcons ctx (lir-select syms cond-v then-v else-v))))
+
+        ;; Build entry block: (block entry (br cond then else))
+        (entry-block (lir-block syms (sym-entry syms)
+                                (scons (lir-br-cond syms cond-v then-lbl else-lbl) nil)))
+
+        ;; Build then block: (block then (let ((then-var then-v)) (br merge)))
+        ;; We wrap then-v in a let to ensure it's computed in the then block
+        (then-block (lir-block syms then-lbl
+                               (scons (lir-let1 syms then-lbl then-v
+                                               (lir-br syms merge-lbl)) nil)))
+
+        ;; Build else block: (block else (let ((else-var else-v)) (br merge)))
+        (else-block (lir-block syms else-lbl
+                               (scons (lir-let1 syms else-lbl else-v
+                                               (lir-br syms merge-lbl)) nil)))
+
+        ;; Add blocks to context (in reverse order so they come out right)
+        (ctx (cg-add-block ctx else-block))
+        (ctx (cg-add-block ctx then-block))
+        (ctx (cg-add-block ctx entry-block))
+
+        ;; Set merge label for defun to use
+        (ctx (cg-set-merge-label ctx merge-lbl))
+
+        ;; Build phi expression that will be in the merge block
+        (phi-expr (lir-phi syms (sym-i64 syms) then-lbl then-lbl else-lbl else-lbl)))
+
+    (pcons ctx phi-expr)))
 
 ;; ============================================================
 ;; Let Bindings
@@ -429,28 +592,54 @@
                         (pair (scons typ (scons name nil))))
                     (transform-params rest3 (scons pair acc)))))))))
 
+;; Build the list of blocks for a function with branching
+;; Blocks are already in correct order [entry, then, else], just append merge
+(defun build-function-blocks (syms: ptr blocks: ptr merge-lbl: ptr body-v: ptr) -> ptr
+  (let ((merge-block (lir-block syms merge-lbl
+                                (scons (lir-ret syms body-v) nil))))
+    ;; Append merge block to the end
+    (append-scons blocks (scons merge-block nil))))
+
+;; Append two scons lists
+(defun append-scons (lst1: ptr lst2: ptr) -> ptr
+  (if (nil? lst1)
+      lst2
+      (scons (car lst1) (append-scons (cdr lst1) lst2))))
+
+;; Helper to build function body based on whether there are blocks
+(defun build-fn-body (syms: ptr blocks: ptr merge-lbl: ptr body-v: ptr) -> ptr
+  (if (nil? blocks)
+      ;; No branching: simple single-block function
+      (scons (scons (sym-block syms)
+                    (scons (sym-entry syms)
+                           (scons (lir-ret syms body-v) nil)))
+             nil)
+      ;; Has branching: use accumulated blocks + merge block
+      (build-function-blocks syms blocks merge-lbl body-v)))
+
 (defun codegen-defun (ctx: ptr form: ptr) -> ptr
   ;; (defun name (params) body) OR (defun name (params) -> type body)
   (let ((name (cadr form))
         (raw-params (caddr form))
         (lir-params (transform-params raw-params nil))
         (body (get-defun-body form))
-        ;; Reset temp counter for function body
-        (fn-ctx (share (CodegenCtx 0 (cg-syms ctx) (cg-env ctx) nil)))
+        (syms (cg-syms ctx))
+        ;; Reset temp and block counters for function body
+        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) nil 0 nil nil)))
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
-        (syms (cg-syms ctx))
-        ;; Build: (define (name i64) ((type param)...) (block entry (ret body)))
-        ;; Function signature is (name return-type)
+        ;; Check if body generated any blocks (from if expressions)
+        (blocks (cg-blocks fn-ctx))
+        (merge-lbl (cg-merge-label fn-ctx))
+        ;; Build function signature: (name return-type)
         (fn-sig (scons name (scons (sym-i64 syms) nil)))
+        ;; Build function body - call helper to avoid if in let binding
+        (fn-body (build-fn-body syms blocks merge-lbl body-v))
+        ;; Build complete function definition
         (fn-def (scons (sym-define syms)
                        (scons fn-sig
-                              (scons lir-params
-                                     (scons (scons (sym-block syms)
-                                                   (scons (sym-entry syms)
-                                                          (scons (lir-ret syms body-v) nil)))
-                                            nil)))))
+                              (scons lir-params fn-body))))
         ;; Add function to context
         (ctx (cg-add-fn ctx fn-def)))
     (pcons ctx fn-def)))

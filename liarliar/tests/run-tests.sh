@@ -88,6 +88,36 @@ run_test "fn-with-let" '(defun calc (x: i64) -> i64 (let ((y (* x 2))) (+ y 1)))
 run_test "fn-with-if" '(defun max (a: i64 b: i64) -> i64 (if (> a b) a b)) (defun main () -> i64 (max 10 42))' 42
 
 echo ""
+echo "Recursive functions:"
+run_test "recursive-countdown" '
+(defun countdown (n: i64) -> i64
+  (if (<= n 0)
+      0
+      (countdown (- n 1))))
+(defun main () -> i64 (countdown 10))' 0
+
+run_test "recursive-sum" '
+(defun sum-to (n: i64) -> i64
+  (if (<= n 0)
+      0
+      (+ n (sum-to (- n 1)))))
+(defun main () -> i64 (sum-to 10))' 55
+
+run_test "recursive-fib" '
+(defun fib (n: i64) -> i64
+  (if (<= n 1)
+      n
+      (+ (fib (- n 1)) (fib (- n 2)))))
+(defun main () -> i64 (fib 10))' 55
+
+run_test "mutual-recursion" '
+(defun is-even (n: i64) -> i64
+  (if (= n 0) 1 (is-odd (- n 1))))
+(defun is-odd (n: i64) -> i64
+  (if (= n 0) 0 (is-even (- n 1))))
+(defun main () -> i64 (is-even 10))' 1
+
+echo ""
 echo "=== Results: $PASSED passed, $FAILED failed ==="
 
 if [ $FAILED -gt 0 ]; then
