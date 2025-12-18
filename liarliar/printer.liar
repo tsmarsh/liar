@@ -165,9 +165,10 @@
 ;; ============================================================
 
 (defun str-nil () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 110) (store-byte (ptr+ b 1) 105)
-        (store-byte (ptr+ b 2) 108) (store-byte (ptr+ b 3) 0) b)))
+  ;; Return "()" for empty lists - lIR expects () not nil
+  (let ((b (heap-array 3)))
+    (do (store-byte b 40) (store-byte (ptr+ b 1) 41)
+        (store-byte (ptr+ b 2) 0) b)))
 
 (defun str-dot () -> ptr
   (let ((b (heap-array 2)))
@@ -205,9 +206,3 @@
         (ctx (print-forms-loop ctx forms)))
     (to-string (pr-sb ctx))))
 
-;; ============================================================
-;; Test
-;; ============================================================
-
-(defun main () -> i64
-  42)

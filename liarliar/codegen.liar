@@ -88,6 +88,7 @@
 (defun sym-block (s: ptr) -> ptr   (make-sym s 98 108 111 99 107 0 0 0 5))   ;; block
 (defun sym-entry (s: ptr) -> ptr   (make-sym s 101 110 116 114 121 0 0 0 5)) ;; entry
 (defun sym-let (s: ptr) -> ptr     (make-sym s 108 101 116 0 0 0 0 0 3))     ;; let
+(defun sym-string (s: ptr) -> ptr  (make-sym s 115 116 114 105 110 103 0 0 6)) ;; string
 
 ;; Liar special forms (for dispatch)
 (defun str-if () -> ptr
@@ -177,9 +178,30 @@
 (defun lir-select (syms: ptr cond-v: ptr then-v: ptr else-v: ptr) -> ptr
   (scons (sym-select syms) (scons cond-v (scons then-v (scons else-v nil)))))
 
+;; Helper: prepend @ to a string and intern it as a symbol
+(extern strlen i64 (ptr))
+
+(defun prepend-at (syms: ptr name: ptr) -> ptr
+  (let ((name-len (strlen name))
+        (new-len (+ name-len 2))  ;; @ + name + null
+        (buf (heap-array new-len)))
+    (do
+      (store-byte buf 64)  ;; '@' = 64
+      (copy-str-loop buf 1 name 0 name-len)
+      (store-byte (ptr+ buf (+ name-len 1)) 0)  ;; null terminator
+      (sym/intern syms buf))))
+
+(defun copy-str-loop (dst: ptr dst-idx: i64 src: ptr src-idx: i64 len: i64) -> i64
+  (if (>= src-idx len)
+      0
+      (do
+        (store-byte (ptr+ dst dst-idx) (load-byte (ptr+ src src-idx)))
+        (copy-str-loop dst (+ dst-idx 1) src (+ src-idx 1) len))))
+
 ;; Build: (call @fn args...)
 (defun lir-call (syms: ptr fn-name: ptr args: ptr) -> ptr
-  (scons (sym-call syms) (scons fn-name args)))
+  (let ((at-name (prepend-at syms (sym/symbol-name fn-name))))
+    (scons (sym-call syms) (scons at-name args))))
 
 ;; Build: (ret val)
 (defun lir-ret (syms: ptr val: ptr) -> ptr
@@ -203,6 +225,9 @@
     ((ast-symbol? form) (codegen-symbol ctx form))
     ((ast-string? form) (codegen-string ctx form))
     ((ast-list? form)   (codegen-list ctx form))
+    ((pcons? form)      (pcons ctx (box-int 0)))
+    ((icons? form)      (pcons ctx (box-int 0)))
+    ((nil? form)        (pcons ctx (box-int 0)))
     (else               (pcons ctx (box-int 0)))))
 
 ;; Integer literal: (i64 N)
@@ -222,9 +247,11 @@
 (defun codegen-symbol (ctx: ptr form: ptr) -> ptr
   (pcons ctx form))
 
-;; String literal - stub
+;; String literal - emit (string "...")
 (defun codegen-string (ctx: ptr form: ptr) -> ptr
-  (pcons ctx (box-int 0)))
+  (let ((syms (cg-syms ctx)))
+    ;; form is a LiarString - wrap it in (string ...)
+    (pcons ctx (scons (sym-string syms) (scons form nil)))))
 
 ;; ============================================================
 ;; List Form Dispatch
@@ -358,25 +385,72 @@
 ;; Function Definition
 ;; ============================================================
 
+;; Get the nth element of a list (0-indexed)
+(defun list-nth (lst: ptr n: i64) -> ptr
+  (if (<= n 0)
+      (car lst)
+      (list-nth (cdr lst) (- n 1))))
+
+;; Check if element at index 3 is the arrow symbol ->
+(defun has-return-type? (form: ptr) -> i64
+  (let ((elem3 (list-nth form 3)))
+    (if (symbol? elem3)
+        (let ((name (symbol-name elem3)))
+          (if (= (load-byte name) 45)           ;; '-'
+              (if (= (load-byte (ptr+ name 1)) 62)   ;; '>'
+                  1
+                  0)
+              0))
+        0)))
+
+;; Extract function body from defun form
+(defun get-defun-body (form: ptr) -> ptr
+  (if (= (has-return-type? form) 1)
+      (list-nth form 5)
+      (cadddr form)))
+
+;; Transform params from (name : type name : type) to ((type name) (type name))
+;; Skip colons, pair up names with types, swap order
+(defun transform-params (lst: ptr acc: ptr) -> ptr
+  (if (nil? lst)
+      (reverse-scons acc)
+      ;; lst is: name : type rest...
+      (let ((name (car lst))
+            (rest (cdr lst)))  ;; should be (: type rest...)
+        (if (nil? rest)
+            (reverse-scons acc)  ;; malformed, just return what we have
+            (let ((colon (car rest))
+                  (rest2 (cdr rest)))  ;; should be (type rest...)
+              (if (nil? rest2)
+                  (reverse-scons acc)  ;; malformed
+                  (let ((typ (car rest2))
+                        (rest3 (cdr rest2))  ;; remaining params
+                        ;; Build (type name) pair
+                        (pair (scons typ (scons name nil))))
+                    (transform-params rest3 (scons pair acc)))))))))
+
 (defun codegen-defun (ctx: ptr form: ptr) -> ptr
+  ;; (defun name (params) body) OR (defun name (params) -> type body)
   (let ((name (cadr form))
-        (params (caddr form))
-        (body (cadddr form))
+        (raw-params (caddr form))
+        (lir-params (transform-params raw-params nil))
+        (body (get-defun-body form))
         ;; Reset temp counter for function body
         (fn-ctx (share (CodegenCtx 0 (cg-syms ctx) (cg-env ctx) nil)))
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
         (syms (cg-syms ctx))
-        ;; Build: (define i64 @name (params) (block entry body (ret body)))
+        ;; Build: (define (name i64) ((type param)...) (block entry (ret body)))
+        ;; Function signature is (name return-type)
+        (fn-sig (scons name (scons (sym-i64 syms) nil)))
         (fn-def (scons (sym-define syms)
-                       (scons (sym-i64 syms)
-                              (scons name
-                                     (scons params
-                                            (scons (scons (sym-block syms)
-                                                          (scons (sym-entry syms)
-                                                                 (scons (lir-ret syms body-v) nil)))
-                                                   nil))))))
+                       (scons fn-sig
+                              (scons lir-params
+                                     (scons (scons (sym-block syms)
+                                                   (scons (sym-entry syms)
+                                                          (scons (lir-ret syms body-v) nil)))
+                                            nil)))))
         ;; Add function to context
         (ctx (cg-add-fn ctx fn-def)))
     (pcons ctx fn-def)))
@@ -398,6 +472,7 @@
 
 (defun codegen-module (forms: ptr syms: ptr) -> ptr
   (let ((ctx (make-codegen-ctx syms))
-        (ctx (codegen-toplevel ctx forms)))
-    (cg-fns ctx)))
+        (ctx (codegen-toplevel ctx forms))
+        (result (cg-fns ctx)))
+    result))
 

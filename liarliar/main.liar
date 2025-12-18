@@ -40,27 +40,29 @@
   (let ((forms (reader/read-all src len syms)))
     (if (nil? forms)
         (do (println "Error: Failed to parse source") nil)
-        (let ((expanded (expand/expand-toplevel syms forms)))
-          (if (nil? expanded)
+        (let ((expand-result (expand/expand-toplevel syms forms)))
+          (if (nil? expand-result)
               (do (println "Error: Failed to expand macros") nil)
-              (codegen/codegen-module expanded syms))))))
+              (let ((expanded (val/pcons-tail expand-result))
+                    (result (codegen/codegen-module expanded syms)))
+                result))))))
 
 (defun print-lir (forms: ptr) -> i64
   (let ((output (printer/forms-to-string forms)))
     (if (nil? output)
         (do (println "Error: Failed to format lIR") 1)
-        (do (print output) 0))))
+        (do (print output) (println "") 0))))
 
 (defun compile-file (path: ptr) -> i64
   (let ((src (io/slurp path)))
     (if (nil? src)
         (do (print "Error: Could not read file: ") (println path) 1)
         (let ((len (strlen src))
-              (syms (sym/make-symbol-table 256)))
-          (let ((lir (compile-source src len syms)))
-            (if (nil? lir)
-                1
-                (print-lir lir)))))))
+              (syms (sym/make-symbol-table 256))
+              (lir (compile-source src len syms)))
+          (if (nil? lir)
+              1
+              (print-lir lir))))))
 
 ;; ============================================================
 ;; Main Entry Point
