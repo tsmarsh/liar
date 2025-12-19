@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install git hooks for lIR development
+# Install git hooks for liar2 development
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -9,6 +9,6 @@ echo "Installing git hooks..."
 
 # Install pre-commit hook
 ln -sf "$SCRIPT_DIR/pre-commit" "$HOOKS_DIR/pre-commit"
-echo "✓ Installed pre-commit hook"
+echo "Installed pre-commit hook"
 
 echo "Done! Git hooks are now active."

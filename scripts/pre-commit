@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pre-commit hook for lIR
+# Pre-commit hook for liar2
 # Runs fmt check, clippy, and tests before allowing commit
 
 set -e
@@ -10,36 +10,54 @@ echo "Running pre-commit checks..."
 echo "Checking formatting..."
 cargo fmt --all -- --check
 if [ $? -ne 0 ]; then
-    echo "❌ Formatting check failed. Run 'cargo fmt' to fix."
+    echo "Formatting check failed. Run 'cargo fmt' to fix."
     exit 1
 fi
-echo "✓ Formatting OK"
+echo "Formatting OK"
 
 # Run clippy
 echo "Running clippy..."
 cargo clippy --all-targets --all-features -- -D warnings
 if [ $? -ne 0 ]; then
-    echo "❌ Clippy found issues."
+    echo "Clippy found issues."
     exit 1
 fi
-echo "✓ Clippy OK"
+echo "Clippy OK"
 
 # Run unit tests
 echo "Running unit tests..."
 cargo test --workspace
 if [ $? -ne 0 ]; then
-    echo "❌ Unit tests failed."
+    echo "Unit tests failed."
     exit 1
 fi
-echo "✓ Unit tests OK"
+echo "Unit tests OK"
 
-# Run cucumber cert tests
-echo "Running certification tests..."
-cargo test -p lir-cli --test cert
+# Run lIR certification tests
+echo "Running lIR certification tests..."
+cargo test -p cert --test cert
 if [ $? -ne 0 ]; then
-    echo "❌ Certification tests failed."
+    echo "lIR certification tests failed."
     exit 1
 fi
-echo "✓ Certification tests OK"
+echo "lIR certification tests OK"
 
-echo "✅ All pre-commit checks passed!"
+# Run liar behavior tests
+echo "Running liar behavior tests..."
+cargo test -p liar-cert --test cert
+if [ $? -ne 0 ]; then
+    echo "liar behavior tests failed."
+    exit 1
+fi
+echo "liar behavior tests OK"
+
+# Run liar specification tests
+echo "Running liar specification tests..."
+cargo test -p liar-spec --test spec
+if [ $? -ne 0 ]; then
+    echo "liar specification tests failed."
+    exit 1
+fi
+echo "liar specification tests OK"
+
+echo "All pre-commit checks passed!"
