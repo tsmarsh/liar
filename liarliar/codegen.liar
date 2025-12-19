@@ -1524,6 +1524,11 @@
             (pcons-tail entry)
             (param-type-lookup (pcons-tail lst) sym)))))
 
+(defun normalize-param-list (params: ptr) -> ptr
+  (if (and (symbol? params) (= 1 (symbol-name-match? params (str-nil))))
+      nil
+      params))
+
 (defun lir-expr-ret-type-with-params (ctx: ptr expr: ptr param-types: ptr) -> ptr
   (let ((syms (cg-syms ctx)))
     (cond
@@ -2128,7 +2133,7 @@
 (defun codegen-defun (ctx: ptr form: ptr) -> ptr
   ;; (defun name (params) body) OR (defun name (params) -> type body)
   (let ((name (cadr form))
-        (raw-params (caddr form))
+        (raw-params (normalize-param-list (caddr form)))
         (body (get-defun-body form))
         (callable (find-callable-params raw-params body))
         (lir-params (transform-params (cg-syms ctx) raw-params nil callable))
@@ -2158,7 +2163,7 @@
 
 ;; Lambda - stub for now
 (defun codegen-fn (ctx: ptr form: ptr) -> ptr
-  (let ((params (cadr form))
+  (let ((params (normalize-param-list (cadr form)))
         (body (caddr form))
         (name-result (cg-next-closure-name ctx))
         (ctx (pcons-head name-result))
