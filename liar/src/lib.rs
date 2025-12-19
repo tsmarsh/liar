@@ -28,6 +28,7 @@ pub mod eval;
 pub mod expand;
 pub mod infer;
 pub mod lexer;
+pub mod lint;
 pub mod loader;
 pub mod ownership;
 pub mod parser;

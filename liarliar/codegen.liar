@@ -654,6 +654,18 @@
     (do (store-byte b 110) (store-byte (ptr+ b 1) 105)
         (store-byte (ptr+ b 2) 108) (store-byte (ptr+ b 3) 0) b)))
 
+(defun str-true () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 116) (store-byte (ptr+ b 1) 114)
+        (store-byte (ptr+ b 2) 117) (store-byte (ptr+ b 3) 101)
+        (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-false () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 97)
+        (store-byte (ptr+ b 2) 108) (store-byte (ptr+ b 3) 115)
+        (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 0) b)))
+
 (defun str-colon () -> ptr
   (let ((b (heap-array 2)))
     (do (store-byte b 58) (store-byte (ptr+ b 1) 0) b)))
@@ -719,6 +731,7 @@
 
 (defun ast-symbol? (form: ptr) (symbol? form))
 (defun ast-int? (form: ptr) (boxed-int? form))
+(defun ast-bool? (form: ptr) (boxed-bool? form))
 (defun ast-float? (form: ptr) (boxed-float? form))
 (defun ast-string? (form: ptr) (liar-string? form))
 (defun ast-list? (form: ptr) (scons? form))
@@ -765,6 +778,10 @@
 ;; Build: (i64 N)
 (defun lir-int (syms: ptr val: i64) -> ptr
   (scons (sym-i64 syms) (scons (box-int val) nil)))
+
+;; Build: (i1 N)
+(defun lir-i1 (syms: ptr val: i64) -> ptr
+  (scons (sym-i1 syms) (scons (box-int val) nil)))
 
 ;; Build: %N (temp reference as symbol)
 (defun lir-temp (syms: ptr n: i64) -> ptr
@@ -909,6 +926,7 @@
 (defun codegen-expr (ctx: ptr form: ptr) -> ptr
   (cond
     ((ast-int? form)    (codegen-int ctx form))
+    ((ast-bool? form)   (codegen-bool ctx form))
     ((ast-float? form)  (codegen-float ctx form))
     ((ast-symbol? form) (codegen-symbol ctx form))
     ((ast-string? form) (codegen-string ctx form))
@@ -923,6 +941,12 @@
   (let ((syms (cg-syms ctx))
         (val (unbox-int form)))
     (pcons ctx (lir-int syms val))))
+
+;; Boolean literal: (i1 0|1)
+(defun codegen-bool (ctx: ptr form: ptr) -> ptr
+  (let ((syms (cg-syms ctx))
+        (val (unbox-bool form)))
+    (pcons ctx (lir-i1 syms val))))
 
 ;; Float literal: (double N.M)
 ;; BoxedFloat stores: int-part, frac-part, scale (10^digits in frac)
@@ -939,7 +963,11 @@
         (syms (cg-syms ctx)))
     (if (streq name (str-nil))
         (pcons ctx (lir-null syms))
-        (pcons ctx form))))
+        (if (streq name (str-true))
+            (pcons ctx (lir-i1 syms 1))
+            (if (streq name (str-false))
+                (pcons ctx (lir-i1 syms 0))
+                (pcons ctx form))))))
 
 ;; String literal - emit (string "...")
 (defun codegen-string (ctx: ptr form: ptr) -> ptr
@@ -1772,6 +1800,7 @@
        (let ((head (car expr)))
          (cond
            ((sym-eq? head (sym-ptr syms)) (sym-ptr syms))
+           ((sym-eq? head (sym-i1 syms)) (sym-i1 syms))
            ((sym-eq? head (sym-i64 syms)) (sym-i64 syms))
            ((sym-eq? head (sym-string syms)) (sym-ptr syms))
            ((sym-eq? head (sym-heap-struct syms)) (sym-ptr syms))

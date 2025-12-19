@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "liarc"
 path = "src/bin/main.rs"
 
+[[bin]]
+name = "liar-lint"
+path = "src/bin/liar-lint.rs"
+
 [features]
 default = []
 jit-macros = ["lir-codegen", "inkwell"]

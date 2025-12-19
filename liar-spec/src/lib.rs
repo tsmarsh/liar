@@ -3,14 +3,19 @@
 //! Verifies that liar source compiles to the expected lIR output.
 //! This binds the language definition to its compilation target.
 
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
 /// Compile liar source to lIR using the Rust liar compiler
 pub fn compile_to_lir(source: &str) -> Result<String, String> {
-    // Write source to temp file
-    let temp_path = "/tmp/liar_spec_test.liar";
-    std::fs::write(temp_path, source).map_err(|e| format!("Failed to write temp file: {}", e))?;
+    // Write source to a temp file
+    let mut temp_file =
+        tempfile::NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {}", e))?;
+    temp_file
+        .write_all(source.as_bytes())
+        .map_err(|e| format!("Failed to write temp file: {}", e))?;
+    let temp_path = temp_file.path();
 
     // Find liarc - try multiple locations
     let liarc_paths = [
@@ -23,7 +28,9 @@ pub fn compile_to_lir(source: &str) -> Result<String, String> {
     let liarc = liarc_paths
         .iter()
         .find(|p| Path::new(p).exists())
-        .ok_or_else(|| "Could not find liarc binary. Run `cargo build --release -p liar` first.".to_string())?;
+        .ok_or_else(|| {
+            "Could not find liarc binary. Run `cargo build --release -p liar` first.".to_string()
+        })?;
 
     // Run liarc
     let output = Command::new(liarc)
@@ -41,14 +48,30 @@ pub fn compile_to_lir(source: &str) -> Result<String, String> {
 
 /// Compile liar source to lIR using liarliar (self-hosted compiler)
 pub fn compile_to_lir_liarliar(source: &str) -> Result<String, String> {
-    let liarliar_path = "/tmp/liarliar";
-
-    if !Path::new(liarliar_path).exists() {
-        return Err("liarliar binary not found at /tmp/liarliar".to_string());
+    let mut candidates: Vec<String> = Vec::new();
+    if let Ok(path) = std::env::var("LIARLIAR") {
+        candidates.push(path);
     }
+    candidates.extend(
+        [
+            "target/release/liarliar",
+            "./target/release/liarliar",
+            "../target/release/liarliar",
+            "../../target/release/liarliar",
+            "/tmp/liarliar",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
+
+    let liarliar_path = candidates
+        .iter()
+        .find(|p| Path::new(p).exists())
+        .ok_or_else(|| {
+            "Could not find liarliar binary. Run `make target/release/liarliar` first.".to_string()
+        })?;
 
     // Pipe source to liarliar via stdin
-    use std::io::Write;
     use std::process::Stdio;
 
     let mut child = Command::new(liarliar_path)

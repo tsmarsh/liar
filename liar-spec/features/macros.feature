@@ -11,8 +11,8 @@ Feature: Macro Compilation
     When I compile to lIR
     Then compilation succeeds
     And the output contains (add
-    And the output does not contain defmacro
-    And the output does not contain double
+    And the output does not contain (defmacro
+    And the output does not contain @double
 
   Scenario: Unless macro with false
     Given the liar code:
@@ -23,8 +23,8 @@ Feature: Macro Compilation
     When I compile to lIR
     Then compilation succeeds
     And the output contains (i1 0)
-    And the output does not contain defmacro
-    And the output does not contain unless
+    And the output does not contain (defmacro
+    And the output does not contain @unless
 
   Scenario: Unless macro with true
     Given the liar code:
@@ -45,5 +45,4 @@ Feature: Macro Compilation
     When I compile to lIR
     Then compilation succeeds
     And the output contains (add
-    And the output does not contain add3
-
+    And the output does not contain @add3
