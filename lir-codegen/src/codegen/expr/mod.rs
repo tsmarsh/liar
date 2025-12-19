@@ -134,7 +134,9 @@ impl<'ctx> super::CodeGen<'ctx> {
             | Expr::FPToUI { .. }
             | Expr::FPToSI { .. }
             | Expr::UIToFP { .. }
-            | Expr::SIToFP { .. } => self.compile_conversion(expr, locals),
+            | Expr::SIToFP { .. }
+            | Expr::IntToPtr { .. }
+            | Expr::PtrToInt { .. } => self.compile_conversion(expr, locals),
 
             // Memory operations
             Expr::Alloca { .. }

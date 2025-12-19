@@ -392,6 +392,15 @@ pub enum Expr {
         value: Box<Expr>,
     },
 
+    // Pointer conversions
+    IntToPtr {
+        value: Box<Expr>,
+    },
+    PtrToInt {
+        ty: ScalarType,
+        value: Box<Expr>,
+    },
+
     // Control flow
     Select {
         cond: Box<Expr>,

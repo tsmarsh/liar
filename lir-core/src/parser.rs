@@ -253,6 +253,27 @@ impl<'a> Parser<'a> {
                 ty,
                 value: Box::new(v),
             }),
+            "inttoptr" => {
+                // Expect "ptr" then value
+                match self.lexer.next_token_peeked()? {
+                    Some(Token::Ident(ref s)) if s == "ptr" => {}
+                    Some(tok) => {
+                        return Err(ParseError::Expected {
+                            expected: "ptr".to_string(),
+                            found: format!("{}", tok),
+                        })
+                    }
+                    None => return Err(ParseError::UnexpectedEof),
+                }
+                let value = self.parse_expr()?;
+                Ok(Expr::IntToPtr {
+                    value: Box::new(value),
+                })
+            }
+            "ptrtoint" => self.parse_conversion(|ty, v| Expr::PtrToInt {
+                ty,
+                value: Box::new(v),
+            }),
 
             // Select
             "select" => self.parse_select(),

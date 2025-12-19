@@ -275,6 +275,25 @@ impl TypeChecker {
                 Ok(Type::Scalar(ty.clone()))
             }
 
+            Expr::IntToPtr { value } => {
+                let src_ty = self.check(value)?;
+                if !src_ty.is_integer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                Ok(Type::Ptr)
+            }
+
+            Expr::PtrToInt { ty, value } => {
+                let src_ty = self.check(value)?;
+                if src_ty != Type::Ptr {
+                    return Err(TypeError::TypeMismatch);
+                }
+                if !ty.is_integer() {
+                    return Err(TypeError::TypeMismatch);
+                }
+                Ok(Type::Scalar(ty.clone()))
+            }
+
             // Select
             Expr::Select {
                 cond,

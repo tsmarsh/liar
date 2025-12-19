@@ -128,6 +128,32 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
                     .into())
             }
 
+            Expr::IntToPtr { value } => {
+                let val = self.compile_expr_recursive(value, locals)?.into_int_value();
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                Ok(self
+                    .builder
+                    .build_int_to_ptr(val, ptr_type, "inttoptr")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                    .into())
+            }
+
+            Expr::PtrToInt { ty, value } => {
+                let val = self.compile_expr_recursive(value, locals)?.into_pointer_value();
+                let int_type = match ty {
+                    ScalarType::I8 => self.context.i8_type(),
+                    ScalarType::I16 => self.context.i16_type(),
+                    ScalarType::I32 => self.context.i32_type(),
+                    ScalarType::I64 => self.context.i64_type(),
+                    _ => return Err(CodeGenError::CodeGen("invalid ptrtoint target".to_string())),
+                };
+                Ok(self
+                    .builder
+                    .build_ptr_to_int(val, int_type, "ptrtoint")
+                    .map_err(|e| CodeGenError::CodeGen(e.to_string()))?
+                    .into())
+            }
+
             _ => Err(CodeGenError::CodeGen(format!(
                 "not a conversion expression: {:?}",
                 expr

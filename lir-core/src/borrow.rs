@@ -250,7 +250,9 @@ impl BorrowChecker {
             | Expr::FPToUI { value, .. }
             | Expr::FPToSI { value, .. }
             | Expr::UIToFP { value, .. }
-            | Expr::SIToFP { value, .. } => {
+            | Expr::SIToFP { value, .. }
+            | Expr::IntToPtr { value, .. }
+            | Expr::PtrToInt { value, .. } => {
                 self.check_expr(value);
             }
 

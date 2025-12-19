@@ -146,13 +146,11 @@
 ;;; Protocol Implementations
 ;;; ============================================================
 
-;; Lookup - key-value access
-(extend-protocol Lookup HashMap
-  (get [self key] (hm-get self key))
-  (get-default [self key default]
-    (if (= 0 (hm-contains? self key))
-        default
-        (hm-get self key))))
+;; NOTE: HashMap does NOT implement Lookup protocol because:
+;; - HashMap.get returns i64 (0 for not found)
+;; - MutVector.get returns ptr (nil for not found)
+;; These are incompatible return types.
+;; Use hm-get and hm-contains? directly instead.
 
 ;; Associative - map operations
 (extend-protocol Associative HashMap

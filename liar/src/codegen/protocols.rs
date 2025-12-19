@@ -484,19 +484,24 @@ fn generate_runtime_dispatch(
         ptr: Box::new(type_id_ptr),
     };
 
-    // Determine return type from first impl to use appropriate default
-    let returns_ptr = if let Some((_, _, impl_fn_name)) = impls.first() {
-        matches!(
-            ctx.lookup_func_return_type(impl_fn_name),
-            Some(lir::ReturnType::Ptr)
-        )
-    } else {
-        false
-    };
+    // Collect return types from ALL implementations to determine common type
+    // If any returns ptr, we must use ptr for all (coercing i64 via inttoptr)
+    let mut has_ptr_return = false;
+    let mut has_i64_return = false;
+    for (_, _, impl_fn_name) in &impls {
+        match ctx.lookup_func_return_type(impl_fn_name) {
+            Some(lir::ReturnType::Ptr) => has_ptr_return = true,
+            Some(lir::ReturnType::Scalar(lir::ScalarType::I64)) => has_i64_return = true,
+            _ => has_i64_return = true, // Default to i64 for unknown
+        }
+    }
+
+    // If mixed types, we must coerce to ptr (the wider type)
+    let use_ptr_type = has_ptr_return;
 
     // Build dispatch chain: nested selects for each implementation
     // Default depends on return type to satisfy LLVM type requirements
-    let default_val: lir::Expr = if returns_ptr {
+    let default_val: lir::Expr = if use_ptr_type {
         lir::Expr::NullPtr
     } else {
         lir::Expr::IntLit {
@@ -526,13 +531,27 @@ fn generate_runtime_dispatch(
             args: bound_args,
         };
 
+        // If we're using ptr type but this impl returns i64, coerce via inttoptr
+        let impl_returns_i64 = matches!(
+            ctx.lookup_func_return_type(impl_fn_name),
+            Some(lir::ReturnType::Scalar(lir::ScalarType::I64)) | None
+        );
+        let coerced_call = if use_ptr_type && impl_returns_i64 {
+            lir::Expr::IntToPtr {
+                value: Box::new(impl_call),
+            }
+        } else {
+            impl_call
+        };
+
         dispatch_expr = lir::Expr::Select {
             cond: Box::new(cond),
-            true_val: Box::new(impl_call),
+            true_val: Box::new(coerced_call),
             false_val: Box::new(dispatch_expr),
         };
 
         let _ = type_name;
+        let _ = has_i64_return; // Suppress unused warning
     }
 
     // Null check: if receiver is null, return default without loading type_id

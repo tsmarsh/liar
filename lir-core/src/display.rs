@@ -101,6 +101,8 @@ impl Display for Expr {
             Expr::FPToSI { ty, value } => write!(f, "(fptosi {} {})", ty, value),
             Expr::UIToFP { ty, value } => write!(f, "(uitofp {} {})", ty, value),
             Expr::SIToFP { ty, value } => write!(f, "(sitofp {} {})", ty, value),
+            Expr::IntToPtr { value } => write!(f, "(inttoptr ptr {})", value),
+            Expr::PtrToInt { ty, value } => write!(f, "(ptrtoint {} {})", ty, value),
 
             // Control flow
             Expr::Select {
