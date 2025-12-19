@@ -665,6 +665,7 @@ dependencies = [
  "liar-runtime",
  "lir-codegen",
  "lir-core",
+ "tempfile",
  "tokio",
 ]
 

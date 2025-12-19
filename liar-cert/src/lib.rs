@@ -270,20 +270,20 @@ fn strip_namespace(source: &str) -> String {
 /// Compile liar source via liarliar (self-hosted compiler) and call a function
 /// This shells out to the liarliar binary and lair assembler
 pub fn compile_and_call_liarliar(source: &str, func_name: &str) -> Result<Value, String> {
+    use std::io::Write;
     use std::process::Command;
 
-    // Create temp files
-    let tmp_dir = std::env::temp_dir();
-    let source_file = tmp_dir.join("liarliar_test.liar");
-    let lir_file = tmp_dir.join("liarliar_test.lir");
-    let bin_file = tmp_dir.join("liarliar_test");
+    // Create temp file for source
+    let mut source_file =
+        tempfile::NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {}", e))?;
 
     // The source needs a main function that calls the test function
     // and returns i64 (for exit code based result checking)
     let full_source = format!("{}\n(defun main () -> i64 ({}))", source, func_name);
 
     // Write source to file
-    std::fs::write(&source_file, &full_source)
+    source_file
+        .write_all(full_source.as_bytes())
         .map_err(|e| format!("Failed to write source file: {}", e))?;
 
     // Get liarliar path from environment or default
@@ -301,7 +301,7 @@ pub fn compile_and_call_liarliar(source: &str, func_name: &str) -> Result<Value,
 
     // Run liarliar to compile to lIR
     let liarliar_output = Command::new(&liarliar)
-        .arg(&source_file)
+        .arg(source_file.path())
         .output()
         .map_err(|e| format!("Failed to run liarliar: {}", e))?;
 
@@ -314,42 +314,104 @@ pub fn compile_and_call_liarliar(source: &str, func_name: &str) -> Result<Value,
         ));
     }
 
-    // Write lIR output to file
-    std::fs::write(&lir_file, &liarliar_output.stdout)
-        .map_err(|e| format!("Failed to write lIR file: {}", e))?;
-
-    // Get lair path
-    let lair = std::env::var("LAIR").unwrap_or_else(|_| {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../target/release/lair").to_string()
-    });
-
-    // Run lair to compile to native
-    let lair_output = Command::new(&lair)
-        .arg(&lir_file)
-        .arg("-o")
-        .arg(&bin_file)
-        .output()
-        .map_err(|e| format!("Failed to run lair: {}", e))?;
-
-    if !lair_output.status.success() {
-        let stderr = String::from_utf8_lossy(&lair_output.stderr);
-        return Err(format!("lair compilation failed: {}", stderr));
+    let lir_str = String::from_utf8(liarliar_output.stdout)
+        .map_err(|e| format!("Invalid UTF-8 lIR output: {}", e))?;
+    if let Ok(dir) = std::env::var("LIARLIAR_DUMP") {
+        let mut safe_name = String::new();
+        for ch in func_name.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                safe_name.push(ch);
+            } else {
+                safe_name.push('_');
+            }
+        }
+        let pid = std::process::id();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let lir_path = format!("{}/liarliar_{}_{}_{}.lir", dir, safe_name, pid, ts);
+        if let Err(err) = std::fs::write(&lir_path, &lir_str) {
+            eprintln!("liarliar dump failed: {}: {}", lir_path, err);
+        }
+        let src_path = format!("{}/liarliar_{}_{}_{}.liar", dir, safe_name, pid, ts);
+        if let Err(err) = std::fs::write(&src_path, &full_source) {
+            eprintln!("liarliar dump failed: {}: {}", src_path, err);
+        }
     }
 
-    // Run the compiled binary
-    let run_output = Command::new(&bin_file)
-        .output()
-        .map_err(|e| format!("Failed to run compiled binary: {}", e))?;
+    // Parse lIR string → AST items
+    let mut parser = Parser::new(&lir_str);
+    let items = parser
+        .parse_items()
+        .map_err(|e| format!("lIR parse error: {:?}", e))?;
 
-    // Get exit code as result
-    let exit_code = run_output.status.code().unwrap_or(-1);
+    // Collect all functions, structs, and extern declarations
+    let mut functions: HashMap<String, FunctionDef> = HashMap::new();
+    let mut structs: Vec<StructDef> = Vec::new();
+    let mut externs: Vec<ExternDecl> = Vec::new();
+    for item in items {
+        match item {
+            ParseResult::Function(func) => {
+                functions.insert(func.name.clone(), func);
+            }
+            ParseResult::Struct(s) => {
+                structs.push(s);
+            }
+            ParseResult::ExternDecl(e) => {
+                externs.push(e);
+            }
+            _ => {}
+        }
+    }
 
-    // Clean up temp files (ignore errors)
-    let _ = std::fs::remove_file(&source_file);
-    let _ = std::fs::remove_file(&lir_file);
-    let _ = std::fs::remove_file(&bin_file);
+    // Find the target function
+    let func = functions
+        .get(func_name)
+        .ok_or_else(|| format!("function '{}' not found", func_name))?
+        .clone();
 
-    Ok(Value::I64(exit_code as i64))
+    // Create JIT context and compile all functions
+    let context = Context::create();
+    let mut codegen = CodeGen::new(&context, "liarliar_test");
+
+    // Register struct types first (before compiling functions that use them)
+    for s in &structs {
+        codegen.register_struct_type(&s.name, &s.fields);
+    }
+
+    // Compile extern declarations (for malloc, etc.)
+    for e in &externs {
+        codegen
+            .compile_extern_decl(e)
+            .map_err(|e| format!("extern compile error: {:?}", e))?;
+    }
+
+    // First pass: declare all functions (for mutual recursion support)
+    for f in functions.values() {
+        codegen.declare_function(f);
+    }
+
+    // Second pass: compile all function bodies
+    for f in functions.values() {
+        codegen
+            .compile_function(f)
+            .map_err(|e| format!("codegen error: {:?}", e))?;
+    }
+
+    // Create execution engine
+    let execution_engine = codegen
+        .module
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .map_err(|e| format!("JIT error: {}", e))?;
+
+    // Call the function
+    let jit = JitEngine::new(&context);
+    let result = jit
+        .call_compiled_function(&execution_engine, &func.name, &func.return_type, &[])
+        .map_err(|e| format!("call error: {:?}", e))?;
+
+    Ok(result)
 }
 
 /// Check if we should use liarliar backend

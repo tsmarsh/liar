@@ -2,6 +2,7 @@
 //!
 //! Uses cucumber features to verify liar semantics.
 
+use cucumber::runner::Basic;
 use cucumber::{given, then, when, World};
 use liar_cert::{
     compile_and_call, compile_and_call_liarliar, compile_and_call_with_stdlib, format_value,
@@ -150,5 +151,13 @@ async fn then_float_result_is(world: &mut LiarWorld, expected: String) {
 
 #[tokio::main]
 async fn main() {
-    LiarWorld::run("features").await;
+    if use_liarliar() {
+        LiarWorld::cucumber()
+            .with_runner(Basic::default().max_concurrent_scenarios(1))
+            .steps(LiarWorld::collection())
+            .run_and_exit("features")
+            .await;
+    } else {
+        LiarWorld::run("features").await;
+    }
 }

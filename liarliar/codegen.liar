@@ -1570,7 +1570,7 @@
       ((scons? expr)
        (let ((head (car expr)))
          (if (= 1 (sym-eq? head (sym-let syms)))
-             (lir-expr-ret-type-with-params ctx (caddr expr) param-types)
+             (lir-expr-ret-type-with-params ctx (lir-let-body expr) param-types)
              (lir-expr-ret-type ctx expr))))
       (else (lir-expr-ret-type ctx expr)))))
 
@@ -1595,9 +1595,9 @@
         (fn-body (build-fn-body syms blocks merge-lbl body-v))
         (fn-def (scons (sym-define syms)
                        (scons fn-sig
-                              (scons lir-params fn-body))))
-        (ctx (cg-add-fn-def ctx fn-name fn-def)))
-    (pcons ctx (pcons fn-def inferred))))
+                              (scons lir-params fn-body)))))
+    (let ((ctx (cg-add-fn-def ctx fn-name fn-def)))
+      (pcons ctx (pcons fn-def inferred)))))
 
 (defun codegen-extend-protocol-loop (ctx: ptr protocol: ptr protocol-name: ptr type-name: ptr methods: ptr) -> ptr
   (if (nil? methods)
@@ -1790,6 +1790,16 @@
 ;; ============================================================
 
 ;; Infer a simple lIR return type (ptr or i64) from an expression
+(defun last-expr (forms: ptr) -> ptr
+  (if (nil? forms)
+      nil
+      (if (nil? (cdr forms))
+          (car forms)
+          (last-expr (cdr forms)))))
+
+(defun lir-let-body (expr: ptr) -> ptr
+  (last-expr (cddr expr)))
+
 (defun lir-expr-ret-type (ctx: ptr expr: ptr) -> ptr
   (let ((syms (cg-syms ctx)))
     (cond
@@ -1808,7 +1818,16 @@
            ((sym-eq? head (sym-getelementptr syms)) (sym-ptr syms))
            ((sym-eq? head (sym-load syms)) (cadr expr))
            ((sym-eq? head (sym-indirect-call syms)) (caddr expr))
-           ((sym-eq? head (sym-let syms)) (lir-expr-ret-type ctx (caddr expr)))
+           ((sym-eq? head (sym-let syms))
+            (let ((binding (car (cadr expr)))
+                  (name (car binding))
+                  (val (cadr binding))
+                  (body (lir-let-body expr)))
+              (if (symbol? body)
+                  (if (= 1 (sym-eq? body name))
+                      (lir-expr-ret-type ctx val)
+                      (lir-expr-ret-type ctx body))
+                  (lir-expr-ret-type ctx body))))
            (else (sym-i64 syms)))))
       (else (sym-i64 syms)))))
 
@@ -1821,6 +1840,11 @@
         (if (= 1 (sym-eq? tb (sym-ptr syms)))
             (sym-ptr syms)
             (sym-i64 syms)))))
+
+(defun infer-defun-ret-type (has-ret: i64 ret-ty0: ptr fn-ctx: ptr body-v: ptr) -> ptr
+  (if (= has-ret 1)
+      ret-ty0
+      (lir-expr-ret-type fn-ctx body-v)))
 
 ;; Emit if with explicit result type
 (defun codegen-if-typed (ctx: ptr cond-v: ptr then-v: ptr else-v: ptr result-ty: ptr) -> ptr
@@ -2166,11 +2190,12 @@
 (defun codegen-defun (ctx: ptr form: ptr) -> ptr
   ;; (defun name (params) body) OR (defun name (params) -> type body)
   (let ((name (cadr form))
+        (has-ret (has-return-type? form))
         (raw-params (normalize-param-list (caddr form)))
         (body (get-defun-body form))
         (callable (find-callable-params raw-params body))
         (lir-params (transform-params (cg-syms ctx) raw-params nil callable))
-        (ret-ty (get-defun-return-type (cg-syms ctx) form))
+        (ret-ty0 (get-defun-return-type (cg-syms ctx) form))
         (syms (cg-syms ctx))
         ;; Reset temp and block counters for function body
         (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) nil 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
@@ -2179,7 +2204,7 @@
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
-        ;; Check if body generated any blocks (from if expressions)
+        (ret-ty (infer-defun-ret-type has-ret ret-ty0 fn-ctx body-v))
         (blocks (cg-blocks fn-ctx))
         (merge-lbl (cg-merge-label fn-ctx))
         ;; Build function signature: (name return-type)
@@ -2189,10 +2214,10 @@
         ;; Build complete function definition
         (fn-def (scons (sym-define syms)
                        (scons fn-sig
-                              (scons lir-params fn-body))))
-        ;; Add function to context
-        (ctx (cg-add-fn-def ctx name fn-def)))
-    (pcons ctx fn-def)))
+                              (scons lir-params fn-body)))))
+    ;; Add function to context after fn-def is constructed.
+    (let ((ctx (cg-add-fn-def ctx name fn-def)))
+      (pcons ctx fn-def))))
 
 ;; Lambda - stub for now
 (defun codegen-fn (ctx: ptr form: ptr) -> ptr
@@ -2216,9 +2241,9 @@
         (fn-def (scons (sym-define syms)
                        (scons fn-sig
                               (scons lir-params fn-body))))
-        (ctx (cg-add-fn-def ctx fn-name fn-def))
         (fn-ptr (prepend-at syms (symbol-name fn-name))))
-    (pcons ctx fn-ptr)))
+    (let ((ctx (cg-add-fn-def ctx fn-name fn-def)))
+      (pcons ctx fn-ptr))))
 
 ;; ============================================================
 ;; Top-Level

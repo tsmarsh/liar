@@ -20,3 +20,4 @@ lir-codegen = { path = "../lir-codegen" }
 inkwell = { version = "0.7.0", features = ["llvm21-1"] }
 cucumber = "0.21"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tempfile = "3"
