@@ -66,6 +66,16 @@ pub fn generate_builtin(
         Ok(())
     }
 
+    fn check_zero(expr: &Spanned<Expr>, op_name: &str, args: &[Spanned<Expr>]) -> Result<()> {
+        if !args.is_empty() {
+            return Err(CompileError::codegen(
+                expr.span,
+                format!("{} requires no arguments", op_name),
+            ));
+        }
+        Ok(())
+    }
+
     // Arguments to builtins are NOT in tail position - their result is used by the builtin
     let was_tail = ctx.set_tail_position(false);
 
@@ -354,9 +364,12 @@ pub fn generate_builtin(
         }
 
         // Ownership operations
-        "alloc" => Some(lir::Expr::AllocOwn {
-            elem_type: lir::ScalarType::I64,
-        }),
+        "alloc" => {
+            check_zero(expr, "alloc", args)?;
+            Some(lir::Expr::AllocOwn {
+                elem_type: lir::ScalarType::I64,
+            })
+        }
         "drop" => {
             check_unary(expr, "drop", args)?;
             let a = generate_expr(ctx, &args[0])?;
@@ -494,7 +507,11 @@ pub fn generate_builtin(
                 value: Box::new(val),
             })
         }
-        "array-len" | "alen" => Some(lir::Expr::ArrayLen { size: 0 }),
+        "array-len" | "alen" => {
+            check_unary(expr, "array-len", args)?;
+            let _ = generate_expr(ctx, &args[0])?;
+            Some(lir::Expr::ArrayLen { size: 0 })
+        }
 
         // Heap array allocation
         "heap-array" => {

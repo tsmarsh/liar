@@ -90,6 +90,31 @@ async fn then_compilation_succeeds(world: &mut SpecWorld) {
     );
 }
 
+#[then("compilation fails")]
+async fn then_compilation_fails(world: &mut SpecWorld) {
+    if world.error.is_none() {
+        let lir = world
+            .lir_output
+            .as_deref()
+            .unwrap_or("<no lIR output>");
+        panic!("Expected compilation to fail, but it succeeded:\n{}", lir);
+    }
+}
+
+#[then(regex = "^the error contains (.+)$")]
+async fn then_error_contains(world: &mut SpecWorld, pattern: String) {
+    let err = world
+        .error
+        .as_ref()
+        .expect("Expected compilation error but got none");
+    assert!(
+        err.contains(&pattern),
+        "Expected error to contain '{}', but got:\n{}",
+        pattern,
+        err
+    );
+}
+
 #[then(regex = "^the output does not contain (.+)$")]
 async fn then_output_does_not_contain(world: &mut SpecWorld, pattern: String) {
     if let Some(ref err) = world.error {
