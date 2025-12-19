@@ -1,0 +1,163 @@
+(ns liar.stringmap
+  (:require [liar.core :refer :all]
+            [liar.seq :refer :all]))
+
+;; StringMap - Hash table with string keys
+;;
+;; A hash table using open chaining (linked lists for collisions).
+;; Keys are C strings (null-terminated), values are pointers.
+;;
+;; Implementation:
+;; - Fixed 32 buckets (can add resizing later)
+;; - djb2 hash function for strings
+;; - Chained entries for collision handling
+;; - Returns nil for not found (compatible with Lookup protocol)
+
+(defstruct StringEntry (key: ptr hash: i64 value: ptr next: ptr))
+(defstruct StringMap (cnt: i64 buckets: ptr nbuckets: i64))
+
+;; Number of buckets (power of 2 for fast modulo via bitwise AND)
+(def NUM_BUCKETS 32)
+(def BUCKET_MASK 31)
+
+;;; ============================================================
+;;; String Helpers
+;;; ============================================================
+
+;; djb2 hash - simple and effective for strings
+(defun hash-string-loop (s: ptr i hash) -> i64
+  (let ((c (load-byte (ptr+ s i))))
+    (if (= c 0)
+        hash
+        (hash-string-loop s (+ i 1) (+ (* hash 33) c)))))
+
+(defun hash-string (s: ptr) -> i64
+  (hash-string-loop s 0 5381))
+
+;; String equality - compare byte by byte
+(defun streq-loop (a: ptr b: ptr i) -> i64
+  (let ((ca (load-byte (ptr+ a i)))
+        (cb (load-byte (ptr+ b i))))
+    (if (= ca cb)
+        (if (= ca 0) 1 (streq-loop a b (+ i 1)))
+        0)))
+
+(defun streq (a: ptr b: ptr) -> i64
+  (streq-loop a b 0))
+
+;;; ============================================================
+;;; Internal Operations
+;;; ============================================================
+
+;; Get bucket index for a hash
+(defun bucket-index (hash)
+  (bit-and hash BUCKET_MASK))
+
+;; Find entry in chain matching key
+(defun chain-find (entry: ptr key hash) -> ptr
+  (if (nil? entry)
+      nil
+      (if (= (. entry hash) hash)
+          (if (= 1 (streq (. entry key) key))
+              entry
+              (chain-find (. entry next) key hash))
+          (chain-find (. entry next) key hash))))
+
+;; Clone a chain, updating or inserting key
+(defun chain-assoc (entry: ptr key hash val found: ptr) -> ptr
+  (if (nil? entry)
+      ;; End of chain - add new entry
+      (let ((s (aset found 0 0)))  ;; mark as not found (new entry)
+        (share (StringEntry key hash val nil)))
+      (if (= (. entry hash) hash)
+          (if (= 1 (streq (. entry key) key))
+              ;; Found - replace value, copy rest of chain
+              (let ((s (aset found 0 1)))  ;; mark as found (update)
+                (share (StringEntry key hash val (. entry next))))
+              ;; Hash collision but different key - copy and continue
+              (share (StringEntry (. entry key) (. entry hash) (. entry value)
+                                   (chain-assoc (. entry next) key hash val found))))
+          ;; Different hash - copy and continue
+          (share (StringEntry (. entry key) (. entry hash) (. entry value)
+                               (chain-assoc (. entry next) key hash val found))))))
+
+;;; ============================================================
+;;; Public API
+;;; ============================================================
+
+;; Create an empty string map
+(defun string-map () -> ptr
+  (let ((buckets (heap-array-ptr NUM_BUCKETS)))
+    (share (StringMap 0 buckets NUM_BUCKETS))))
+
+;; Get value for key, returns nil if not found
+(defun sm-get (m: ptr key) -> ptr
+  (let ((hash (hash-string key))
+        (idx (bucket-index hash))
+        (chain (aget-ptr (. m buckets) idx)))
+    (if (nil? chain)
+        nil
+        (let ((entry (chain-find chain key hash)))
+          (if (nil? entry)
+              nil
+              (. entry value))))))
+
+;; Associate key with value, returns new map
+(defun sm-assoc (m: ptr key val) -> ptr
+  (let ((hash (hash-string key))
+        (idx (bucket-index hash))
+        (old-chain (aget-ptr (. m buckets) idx))
+        (found (heap-array 1))  ;; flag: 0 = new entry, 1 = update
+        (new-chain (chain-assoc old-chain key hash val found))
+        (was-found (aget found 0))
+        ;; Clone buckets array and update the modified bucket
+        (new-buckets (heap-array-ptr NUM_BUCKETS))
+        (copy (array-copy NUM_BUCKETS new-buckets (. m buckets)))
+        (update (aset-ptr new-buckets idx new-chain)))
+    ;; Compute new-cnt outside the let to avoid scope issues with if
+    (if (= was-found 1)
+        (share (StringMap (. m cnt) new-buckets NUM_BUCKETS))
+        (share (StringMap (+ (. m cnt) 1) new-buckets NUM_BUCKETS)))))
+
+;; Check if key exists
+(defun sm-contains? (m: ptr key) -> i64
+  (let ((hash (hash-string key))
+        (idx (bucket-index hash))
+        (chain (aget-ptr (. m buckets) idx)))
+    (if (nil? chain)
+        0
+        (let ((entry (chain-find chain key hash)))
+          (if (nil? entry) 0 1)))))
+
+;; Get count of entries
+(defun sm-count (m: ptr) -> i64
+  (. m cnt))
+
+;; Check if map is empty
+(defun sm-empty? (m: ptr) -> i64
+  (if (= 0 (. m cnt)) 1 0))
+
+;;; ============================================================
+;;; Protocol Implementations
+;;; ============================================================
+
+;; Lookup - key-value access (returns ptr, nil for not found)
+(extend-protocol Lookup StringMap
+  (get [self key] (sm-get self key))
+  (get-default [self key default]
+    (let ((v (sm-get self key)))
+      (if (nil? v) default v))))
+
+;; Associative - map operations
+(extend-protocol Associative StringMap
+  (assoc [self key val] (sm-assoc self key val))
+  (dissoc [self key] self)  ;; TODO: implement sm-dissoc
+  (contains-key? [self key] (= 1 (sm-contains? self key))))
+
+;; Countable
+(extend-protocol Countable StringMap
+  (count [self] (sm-count self)))
+
+;; Emptyable
+(extend-protocol Emptyable StringMap
+  (empty [self] (string-map)))

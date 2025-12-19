@@ -163,6 +163,9 @@ impl Inferencer {
             // Never type unifies with anything (diverges)
             (Ty::Never, _) | (_, Ty::Never) => Ok(()),
 
+            // String and Ptr unify - they're both pointers at runtime
+            (Ty::String, Ty::Ptr) | (Ty::Ptr, Ty::String) => Ok(()),
+
             // Type mismatch
             _ => {
                 self.errors.push(CompileError::type_error(
