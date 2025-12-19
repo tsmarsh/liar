@@ -157,7 +157,7 @@
 (defun print-sexp (ctx: ptr form: ptr) -> ptr
   (cond
     ((nil? form)
-     (pr-with-sb ctx (append (pr-sb ctx) (str-nil))))
+     (pr-with-sb ctx (append (pr-sb ctx) (str-empty-list))))
 
     ((symbol? form)
      (print-symbol ctx form))
@@ -207,7 +207,7 @@
 ;; String Constants
 ;; ============================================================
 
-(defun str-nil () -> ptr
+(defun str-empty-list () -> ptr
   ;; Return "()" for empty lists - lIR expects () not nil
   (let ((b (heap-array 3)))
     (do (store-byte b 40) (store-byte (ptr+ b 1) 41)
@@ -248,4 +248,3 @@
   (let ((ctx (make-printer))
         (ctx (print-forms-loop ctx forms)))
     (to-string (pr-sb ctx))))
-

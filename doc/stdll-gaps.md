@@ -4,24 +4,31 @@
 Quick check: can liarliar compile stdlib modules and can lair consume the emitted lIR.
 
 ## Commands run
-- `/tmp/liarliar lib/liar.core.liar > /tmp/liar_core.lir`
-- `/tmp/liarliar lib/liar.seq.liar > /tmp/liar_seq.lir`
-- `/tmp/liarliar lib/liar.hashmap.liar > /tmp/liar_hashmap.lir`
-- `./target/release/lair /tmp/liar_core.lir -o /tmp/liar_core`
-- `./target/release/lair /tmp/liar_seq.lir -o /tmp/liar_seq`
-- `./target/release/lair /tmp/liar_hashmap.lir -o /tmp/liar_hashmap`
+- Build liarliar: `cargo run --release -p liar -- liarliar/main.liar > /tmp/liarliar.lir` and `./target/release/lair /tmp/liarliar.lir -o /tmp/liarliar`
+- Smoke loop: `for f in lib/*.liar; do /tmp/liarliar "$f" > "/tmp/$(basename "$f" .liar).lir"; ./target/release/lair --compile-only "/tmp/$(basename "$f" .liar).lir" -o "/tmp/$(basename "$f" .liar).o"; done`
 
 ## Gaps found
-1. **Zero-arg defun emits `nil` instead of `()` for params**
-   - Lair parse error: `Expected ( found: nil`.
-   - Seen in stdlib outputs (e.g., `/tmp/liar_seq.lir`, `/tmp/liar_hashmap.lir`).
-   - Likely in `liarliar/codegen.liar` output for empty param lists.
+1. **Undefined variables during lIR codegen**
+   - `heap-array` in `array-clone` (`lib/liar.array.liar`).
+   - `hash` in `hm-assoc`/`hs-add` (`lib/liar.hashmap.liar`, `lib/liar.hashset.liar`).
+   - `len` in `mv-set!` (`lib/liar.mut-vector.liar`).
+   - `write` in `write-blocking` (`lib/liar.runtime2.liar`).
+   - `not` in `assert-not-nil` (`lib/liar.test.liar`).
+   - `cons` in `vec-to-list` (`lib/liar.vector.liar`).
 
-2. **`/` operator becomes `indirect-call /` in emitted lIR**
-   - Lair parse error: `UnexpectedToken("/")` when compiling `/tmp/liar_core.lir`.
-   - The lIR contains `(indirect-call / ...)` instead of `sdiv`.
-   - Suspected cause: `symbol-base-name` treats a bare `/` as namespaced, so it no longer matches the `str-slash` binop path.
+2. **Missing globals in lIR**
+   - `undefined global or function: __lambda_0` when compiling `/tmp/liar.core.lir` and `/tmp/liar.seq.lir`.
+   - Indicates a closure/function reference emitted without a matching definition.
+
+3. **Unexpected tokens in lIR output**
+   - `UnexpectedToken("+")` when compiling `/tmp/liar.runtime.core.lir`, `/tmp/liar.runtime.linux.lir`, `/tmp/liar.runtime.macos.lir`.
+   - Suggests operator tokens leaking into places the lIR parser expects a list or symbol.
+
+4. **Liarliar crashes or exits without diagnostics**
+   - SIGSEGV when compiling `lib/liar.async.liar` and `lib/liar.io.liar`.
+   - `lib/liar.runtime.liar` exits 1 with no stderr output.
 
 ## Notes
-- Liarliar can emit lIR for stdlib files, but lair cannot parse the output yet.
-- Fixing the two gaps above should allow the stdlib smoke test to proceed to linking/execution.
+- Liarliar now prints empty param lists as `()` in lIR.
+- Liarliar emits lIR for many stdlib files, but lair still fails to parse/assemble several outputs.
+- The gaps above block progressing to linking/execution for the stdlib smoke test.
