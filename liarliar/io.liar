@@ -22,15 +22,15 @@
 (extern read i64 (i32 ptr i64))
 
 (defun read-blocking (fd buf: ptr len) -> i64
-  (read fd buf len))
+  (read (trunc i32 fd) buf len))
 
 (defun file-open-read (path: ptr) -> i64
-  (open path (O_RDONLY) 0))
+  (sext i64 (open path (trunc i32 (O_RDONLY)) 0)))
 
 (defun file-size (fd) -> i64
-  (let ((current (lseek fd 0 (SEEK_SET)))
-        (end (lseek fd 0 (SEEK_END)))
-        (reset (lseek fd 0 (SEEK_SET))))
+  (let ((current (lseek (trunc i32 fd) 0 (trunc i32 (SEEK_SET))))
+        (end (lseek (trunc i32 fd) 0 (trunc i32 (SEEK_END))))
+        (reset (lseek (trunc i32 fd) 0 (trunc i32 (SEEK_SET)))))
     end))
 
 (defun read-loop (fd buf: ptr pos len) -> i64
@@ -49,9 +49,9 @@
         (let ((size (file-size fd)))
           (let ((buf (malloc (+ size 1))))
             (if (nil? buf)
-                (do (close fd) nil)
+                (do (close (trunc i32 fd)) nil)
                 (let ((bytes-read (read-loop fd buf 0 size)))
                   (do
                     (store-byte (ptr+ buf bytes-read) 0)
-                    (close fd)
+                    (close (trunc i32 fd))
                     buf))))))))

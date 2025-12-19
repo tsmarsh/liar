@@ -724,6 +724,39 @@
 (defun ast-list? (form: ptr) (scons? form))
 
 ;; ============================================================
+;; Symbol Helpers
+;; ============================================================
+
+;; Find last occurrence of a byte in a string, or -1 if not found
+(defun find-last-char (s: ptr idx: i64 last: i64 target: i64) -> i64
+  (let ((c (load-byte (ptr+ s idx))))
+    (if (= c 0)
+        last
+        (if (= c target)
+            (find-last-char s (+ idx 1) idx target)
+            (find-last-char s (+ idx 1) last target)))))
+
+;; Return the base name after the last '/' (for namespaced symbols)
+(defun symbol-base-name (syms: ptr sym: ptr) -> ptr
+  (let ((name (symbol-name sym))
+        (len (strlen name))
+        (slash (find-last-char name 0 -1 47)))
+    (if (< slash 0)
+        name
+        (let ((base-len (- len (+ slash 1)))
+              (buf (heap-array (+ base-len 1))))
+          (do
+            (copy-str-loop buf 0 (ptr+ name (+ slash 1)) 0 base-len)
+            (store-byte (ptr+ buf base-len) 0)
+            buf)))))
+
+;; Check if symbol name matches a string, returning i64 1/0
+(defun symbol-name-match? (sym: ptr name: ptr) -> i64
+  (if (symbol? sym)
+      (if (streq (symbol-name sym) name) 1 0)
+      0))
+
+;; ============================================================
 ;; lIR Construction Helpers
 ;; ============================================================
 
@@ -919,54 +952,55 @@
 (defun codegen-list (ctx: ptr form: ptr) -> ptr
   (let ((head (car form)))
     (if (symbol? head)
-        (let ((name (symbol-name head)))
+        (let ((name (symbol-name head))
+              (base-name (symbol-base-name (cg-syms ctx) head)))
           (cond
-            ((streq name (str-if))     (codegen-if ctx form))
-            ((streq name (str-let))    (codegen-let ctx form))
-            ((streq name (str-defun))  (codegen-defun ctx form))
-            ((streq name (str-do))     (codegen-do ctx form))
-            ((streq name (str-fn))     (codegen-fn ctx form))
-            ((streq name (str-plus))   (codegen-binop ctx form (sym-add (cg-syms ctx))))
-            ((streq name (str-minus))  (codegen-binop ctx form (sym-sub (cg-syms ctx))))
-            ((streq name (str-star))   (codegen-binop ctx form (sym-mul (cg-syms ctx))))
-            ((streq name (str-slash))  (codegen-binop ctx form (sym-sdiv (cg-syms ctx))))
-            ((streq name (str-rem))    (codegen-binop ctx form (sym-srem (cg-syms ctx))))
-            ((streq name (str-eq))     (codegen-cmp ctx form (sym-eq (cg-syms ctx))))
-            ((streq name (str-lt))     (codegen-cmp ctx form (sym-slt (cg-syms ctx))))
-            ((streq name (str-gt))     (codegen-cmp ctx form (sym-sgt (cg-syms ctx))))
-            ((streq name (str-lte))    (codegen-cmp ctx form (sym-sle (cg-syms ctx))))
-            ((streq name (str-gte))    (codegen-cmp ctx form (sym-sge (cg-syms ctx))))
+            ((streq base-name (str-if))     (codegen-if ctx form))
+            ((streq base-name (str-let))    (codegen-let ctx form))
+            ((streq base-name (str-defun))  (codegen-defun ctx form))
+            ((streq base-name (str-do))     (codegen-do ctx form))
+            ((streq base-name (str-fn))     (codegen-fn ctx form))
+            ((streq base-name (str-plus))   (codegen-binop ctx form (sym-add (cg-syms ctx))))
+            ((streq base-name (str-minus))  (codegen-binop ctx form (sym-sub (cg-syms ctx))))
+            ((streq base-name (str-star))   (codegen-binop ctx form (sym-mul (cg-syms ctx))))
+            ((streq base-name (str-slash))  (codegen-binop ctx form (sym-sdiv (cg-syms ctx))))
+            ((streq base-name (str-rem))    (codegen-binop ctx form (sym-srem (cg-syms ctx))))
+            ((streq base-name (str-eq))     (codegen-cmp ctx form (sym-eq (cg-syms ctx))))
+            ((streq base-name (str-lt))     (codegen-cmp ctx form (sym-slt (cg-syms ctx))))
+            ((streq base-name (str-gt))     (codegen-cmp ctx form (sym-sgt (cg-syms ctx))))
+            ((streq base-name (str-lte))    (codegen-cmp ctx form (sym-sle (cg-syms ctx))))
+            ((streq base-name (str-gte))    (codegen-cmp ctx form (sym-sge (cg-syms ctx))))
             ;; Float arithmetic operators
-            ((streq name (str-plus-dot))    (codegen-float-binop ctx form (sym-fadd (cg-syms ctx))))
-            ((streq name (str-minus-dot))   (codegen-float-binop ctx form (sym-fsub (cg-syms ctx))))
-            ((streq name (str-star-dot))    (codegen-float-binop ctx form (sym-fmul (cg-syms ctx))))
-            ((streq name (str-slash-dot))   (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx))))
-            ((streq name (str-percent-dot)) (codegen-float-binop ctx form (sym-frem (cg-syms ctx))))
-            ((streq name (str-fadd))        (codegen-float-binop ctx form (sym-fadd (cg-syms ctx))))
-            ((streq name (str-fsub))        (codegen-float-binop ctx form (sym-fsub (cg-syms ctx))))
-            ((streq name (str-fmul))        (codegen-float-binop ctx form (sym-fmul (cg-syms ctx))))
-            ((streq name (str-fdiv))        (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx))))
-            ((streq name (str-frem))        (codegen-float-binop ctx form (sym-frem (cg-syms ctx))))
+            ((streq base-name (str-plus-dot))    (codegen-float-binop ctx form (sym-fadd (cg-syms ctx))))
+            ((streq base-name (str-minus-dot))   (codegen-float-binop ctx form (sym-fsub (cg-syms ctx))))
+            ((streq base-name (str-star-dot))    (codegen-float-binop ctx form (sym-fmul (cg-syms ctx))))
+            ((streq base-name (str-slash-dot))   (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx))))
+            ((streq base-name (str-percent-dot)) (codegen-float-binop ctx form (sym-frem (cg-syms ctx))))
+            ((streq base-name (str-fadd))        (codegen-float-binop ctx form (sym-fadd (cg-syms ctx))))
+            ((streq base-name (str-fsub))        (codegen-float-binop ctx form (sym-fsub (cg-syms ctx))))
+            ((streq base-name (str-fmul))        (codegen-float-binop ctx form (sym-fmul (cg-syms ctx))))
+            ((streq base-name (str-fdiv))        (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx))))
+            ((streq base-name (str-frem))        (codegen-float-binop ctx form (sym-frem (cg-syms ctx))))
             ;; Type conversion operators
-            ((streq name (str-trunc))       (codegen-conv ctx form (sym-trunc (cg-syms ctx))))
-            ((streq name (str-zext))        (codegen-conv ctx form (sym-zext (cg-syms ctx))))
-            ((streq name (str-sext))        (codegen-conv ctx form (sym-sext (cg-syms ctx))))
-            ((streq name (str-fptosi))      (codegen-conv ctx form (sym-fptosi (cg-syms ctx))))
-            ((streq name (str-fptoui))      (codegen-conv ctx form (sym-fptoui (cg-syms ctx))))
-            ((streq name (str-sitofp))      (codegen-conv ctx form (sym-sitofp (cg-syms ctx))))
-            ((streq name (str-uitofp))      (codegen-conv ctx form (sym-uitofp (cg-syms ctx))))
-            ((streq name (str-fpext))       (codegen-conv ctx form (sym-fpext (cg-syms ctx))))
-            ((streq name (str-fptrunc))     (codegen-conv ctx form (sym-fptrunc (cg-syms ctx))))
+            ((streq base-name (str-trunc))       (codegen-conv ctx form (sym-trunc (cg-syms ctx))))
+            ((streq base-name (str-zext))        (codegen-conv ctx form (sym-zext (cg-syms ctx))))
+            ((streq base-name (str-sext))        (codegen-conv ctx form (sym-sext (cg-syms ctx))))
+            ((streq base-name (str-fptosi))      (codegen-conv ctx form (sym-fptosi (cg-syms ctx))))
+            ((streq base-name (str-fptoui))      (codegen-conv ctx form (sym-fptoui (cg-syms ctx))))
+            ((streq base-name (str-sitofp))      (codegen-conv ctx form (sym-sitofp (cg-syms ctx))))
+            ((streq base-name (str-uitofp))      (codegen-conv ctx form (sym-uitofp (cg-syms ctx))))
+            ((streq base-name (str-fpext))       (codegen-conv ctx form (sym-fpext (cg-syms ctx))))
+            ((streq base-name (str-fptrunc))     (codegen-conv ctx form (sym-fptrunc (cg-syms ctx))))
             ;; Builtin predicates
-            ((streq name (str-nil?))        (codegen-nil? ctx form))
+            ((streq base-name (str-nil?))        (codegen-nil? ctx form))
             ;; Struct operations
-            ((streq name (str-defstruct))   (codegen-defstruct ctx form))
-            ((streq name (str-defprotocol)) (codegen-defprotocol ctx form))
-            ((streq name (str-extend-protocol)) (codegen-extend-protocol ctx form))
-            ((streq name (str-extend-protocol-default)) (codegen-extend-protocol-default ctx form))
-            ((streq name (str-share))       (codegen-share ctx form))
-            ((streq name (str-instance?))   (codegen-instance? ctx form))
-            ((streq name (str-dot))         (codegen-field-access ctx form))
+            ((streq base-name (str-defstruct))   (codegen-defstruct ctx form))
+            ((streq base-name (str-defprotocol)) (codegen-defprotocol ctx form))
+            ((streq base-name (str-extend-protocol)) (codegen-extend-protocol ctx form))
+            ((streq base-name (str-extend-protocol-default)) (codegen-extend-protocol-default ctx form))
+            ((streq base-name (str-share))       (codegen-share ctx form))
+            ((streq base-name (str-instance?))   (codegen-instance? ctx form))
+            ((streq base-name (str-dot))         (codegen-field-access ctx form))
             (else                      (codegen-call-or-struct ctx form))))
         (codegen-call ctx form))))
 
@@ -1224,19 +1258,19 @@
         (struct-name (car struct-info))
         (fields (struct-entry-fields struct-info))
         (field-idx (find-field-index fields field-name 0))
-        (field-entry (find-field-entry fields field-name))
-        (field-ty (if (nil? field-entry) (sym-i64 syms) (pcons-tail field-entry)))
-        (struct-ty (make-struct-type-sym syms struct-name)))
-    ;; Emit: (load i64 (getelementptr inbounds %struct.X obj (i64 0) (i64 idx)))
-    (pcons ctx (scons (sym-load syms)
-                     (scons field-ty
-                            (scons (scons (sym-getelementptr syms)
-                                         (scons (sym-inbounds syms)
-                                                (scons struct-ty
-                                                       (scons obj-v
-                                                              (scons (lir-int syms 0)
-                                                                     (scons (lir-int syms field-idx) nil))))))
-                                   nil))))))
+        (field-entry (find-field-entry fields field-name)))
+    (let ((field-ty (pcons-tail field-entry))
+          (struct-ty (make-struct-type-sym syms struct-name)))
+      ;; Emit: (load i64 (getelementptr inbounds %struct.X obj (i64 0) (i64 idx)))
+      (pcons ctx (scons (sym-load syms)
+                       (scons field-ty
+                              (scons (scons (sym-getelementptr syms)
+                                           (scons (sym-inbounds syms)
+                                                  (scons struct-ty
+                                                         (scons obj-v
+                                                                (scons (lir-int syms 0)
+                                                                       (scons (lir-int syms field-idx) nil))))))
+                                     nil)))))))
 
 ;; Codegen for struct constructor: (Point 10 20)
 (defun codegen-struct-constructor (ctx: ptr form: ptr struct-info: ptr) -> ptr
@@ -1323,13 +1357,64 @@
 (defun protocol-base (syms: ptr protocol: ptr) -> ptr
   (let ((name (symbol-name protocol))
         (len (strlen name))
-        (idx (find-char (symbol-name protocol) 0 60))  ;; '<'
-        (base-len (if (< idx 0) len idx))
-        (buf (heap-array (+ base-len 1))))
-    (do
-      (copy-str-loop buf 0 name 0 base-len)
-      (store-byte (ptr+ buf base-len) 0)
-      (intern syms buf))))
+        (idx (find-char (symbol-name protocol) 0 60)))  ;; '<'
+    (if (< idx 0)
+        (let ((buf (heap-array (+ len 1))))
+          (do
+            (copy-str-loop buf 0 name 0 len)
+            (store-byte (ptr+ buf len) 0)
+            (intern syms buf)))
+        (let ((buf (heap-array (+ idx 1))))
+          (do
+            (copy-str-loop buf 0 name 0 idx)
+            (store-byte (ptr+ buf idx) 0)
+            (intern syms buf))))))
+
+;; Check for ASCII alnum or underscore
+(defun is-alnum-or-underscore? (b: i64) -> i64
+  (if (and (>= b 48) (<= b 57))
+      1
+      (if (and (>= b 65) (<= b 90))
+          1
+          (if (and (>= b 97) (<= b 122))
+              1
+              (if (= b 95) 1 0)))))
+
+;; Sanitize type-arg substring into an identifier-safe suffix
+(defun sanitize-args-loop (src: ptr idx: i64 len: i64 dst: ptr out-idx: i64 last-us: i64) -> ptr
+  (if (>= idx len)
+      (pcons (box-int out-idx) (box-int last-us))
+      (let ((b (load-byte (ptr+ src idx)))
+            (use (if (= 1 (is-alnum-or-underscore? b)) b 95))
+            (is-us (if (= use 95) 1 0))
+            (skip (if (and (= is-us 1) (= last-us 1)) 1 0)))
+        (if (= skip 1)
+            (sanitize-args-loop src (+ idx 1) len dst out-idx last-us)
+            (do
+              (store-byte (ptr+ dst out-idx) use)
+              (sanitize-args-loop src (+ idx 1) len dst (+ out-idx 1) is-us))))))
+
+;; Mangle protocol name with generic args for stable symbol names
+(defun protocol-mangled (syms: ptr protocol: ptr) -> ptr
+  (let ((name (symbol-name protocol))
+        (lt-check (find-char name 0 60)))  ;; '<'
+    (if (< lt-check 0)
+        (protocol-base syms protocol)
+        (let ((base-len (find-char name 0 60))
+              (args-start (+ (find-char name 0 60) 1))
+              (gt (find-char name (+ (find-char name 0 60) 1) 62)))  ;; '>'
+          (if (< gt 0)
+              (protocol-base syms protocol)
+              (let ((args-len (- gt args-start))
+                    (buf (heap-array (+ (+ base-len 1) (+ args-len 1)))))
+                (do
+                  (copy-str-loop buf 0 name 0 base-len)
+                  (store-byte (ptr+ buf base-len) 95) ;; _
+                  (let ((result (sanitize-args-loop (ptr+ name args-start) 0 args-len buf (+ base-len 1) 1))
+                        (out-idx (unbox-int (pcons-head result))))
+                    (do
+                      (store-byte (ptr+ buf out-idx) 0)
+                      (intern syms buf))))))))))
 
 (defun method-return-sym (lst: ptr) -> ptr
   (if (nil? lst)
@@ -1343,7 +1428,7 @@
   (let ((ret-sym (method-return-sym (cdr method-form))))
     (if (nil? ret-sym)
         nil
-        (type-sym->lir syms ret-sym))))
+        (type-sym-to-lir syms ret-sym))))
 
 (defun codegen-defprotocol-loop (ctx: ptr protocol: ptr methods: ptr) -> ptr
   (if (nil? methods)
@@ -1415,7 +1500,7 @@
       (reverse-scons acc)
       (let ((param (car params))
             (name (if (symbol? param) param param))
-            (ty (if (and (symbol? param) (streq (symbol-name param) (str-self)))
+            (ty (if (= 1 (symbol-name-match? param (str-self)))
                     (sym-ptr syms)
                     (sym-i64 syms)))
             (pair (scons ty (scons name nil))))
@@ -1426,7 +1511,7 @@
       (reverse-pcons acc)
       (let ((param (car params))
             (name (if (symbol? param) param param))
-            (ty (if (and (symbol? param) (streq (symbol-name param) (str-self)))
+            (ty (if (= 1 (symbol-name-match? param (str-self)))
                     (sym-ptr syms)
                     (sym-i64 syms))))
         (build-param-type-list syms (cdr params) (pcons (pcons name ty) acc)))))
@@ -1452,6 +1537,9 @@
              (lir-expr-ret-type ctx expr))))
       (else (lir-expr-ret-type ctx expr)))))
 
+(defun protocol-method-ret-type (ret-ty: ptr inferred: ptr) -> ptr
+  (if (nil? ret-ty) inferred ret-ty))
+
 (defun codegen-protocol-method (ctx: ptr fn-name: ptr params: ptr body: ptr ret-ty: ptr) -> ptr
   (let ((syms (cg-syms ctx))
         (lir-params (build-proto-params syms params nil))
@@ -1465,66 +1553,70 @@
         (blocks (cg-blocks fn-ctx))
         (merge-lbl (cg-merge-label fn-ctx))
         (inferred (lir-expr-ret-type-with-params ctx body-v param-types))
-        (method-ret (if (nil? ret-ty) inferred ret-ty))
+        (method-ret (protocol-method-ret-type ret-ty inferred))
         (fn-sig (scons fn-name (scons method-ret nil)))
         (fn-body (build-fn-body syms blocks merge-lbl body-v))
         (fn-def (scons (sym-define syms)
                        (scons fn-sig
                               (scons lir-params fn-body))))
         (ctx (cg-add-fn-def ctx fn-name fn-def)))
-    (pcons ctx inferred)))
+    (pcons ctx (pcons fn-def inferred))))
 
-(defun codegen-extend-protocol-loop (ctx: ptr protocol: ptr type-name: ptr methods: ptr) -> ptr
+(defun codegen-extend-protocol-loop (ctx: ptr protocol: ptr protocol-name: ptr type-name: ptr methods: ptr) -> ptr
   (if (nil? methods)
       ctx
       (let ((method-form (car methods))
             (method-name (car method-form))
             (params (cadr method-form))
             (body (caddr method-form))
-            (fn-name (make-method-fn-name (cg-syms ctx) protocol type-name method-name))
+            (fn-name (make-method-fn-name (cg-syms ctx) protocol-name type-name method-name))
             (entry (proto-methods-find (cg-proto-methods ctx) method-name protocol))
             (ret-ty (if (nil? entry) nil (proto-method-ret entry)))
             (result (codegen-protocol-method ctx fn-name params body ret-ty))
             (ctx (pcons-head result))
-            (inferred (pcons-tail result))
+            (info (pcons-tail result))
+            (inferred (pcons-tail info))
             (ctx (if (and (nil? ret-ty) (not (nil? inferred)))
                      (cg-update-proto-method-ret ctx method-name protocol inferred)
                      ctx))
             (ctx (cg-register-proto-impl ctx protocol type-name method-name fn-name)))
-        (codegen-extend-protocol-loop ctx protocol type-name (cdr methods)))))
+        (codegen-extend-protocol-loop ctx protocol protocol-name type-name (cdr methods)))))
 
 (defun codegen-extend-protocol (ctx: ptr form: ptr) -> ptr
   (let ((protocol (protocol-base (cg-syms ctx) (cadr form)))
+        (protocol-name (protocol-mangled (cg-syms ctx) (cadr form)))
         (type-name (caddr form))
         (methods (cdddr form))
-        (ctx (cg-add-type-protocol ctx type-name protocol))
-        (ctx (codegen-extend-protocol-loop ctx protocol type-name methods)))
+        (ctx (cg-add-type-protocol ctx type-name protocol-name))
+        (ctx (codegen-extend-protocol-loop ctx protocol protocol-name type-name methods)))
     (pcons ctx nil)))
 
-(defun codegen-extend-protocol-default-loop (ctx: ptr target: ptr source: ptr methods: ptr) -> ptr
+(defun codegen-extend-protocol-default-loop (ctx: ptr target: ptr target-name: ptr source-name: ptr methods: ptr) -> ptr
   (if (nil? methods)
       ctx
       (let ((method-form (car methods))
             (method-name (car method-form))
             (params (cadr method-form))
             (body (caddr method-form))
-            (fn-name (make-default-fn-name (cg-syms ctx) target source method-name))
+            (fn-name (make-default-fn-name (cg-syms ctx) target-name source-name method-name))
             (entry (proto-methods-find (cg-proto-methods ctx) method-name target))
             (ret-ty (if (nil? entry) nil (proto-method-ret entry)))
             (result (codegen-protocol-method ctx fn-name params body ret-ty))
             (ctx (pcons-head result))
-            (inferred (pcons-tail result))
+            (info (pcons-tail result))
+            (inferred (pcons-tail info))
             (ctx (if (and (nil? ret-ty) (not (nil? inferred)))
                      (cg-update-proto-method-ret ctx method-name target inferred)
                      ctx))
-            (ctx (cg-register-proto-default ctx target source method-name fn-name)))
-        (codegen-extend-protocol-default-loop ctx target source (cdr methods)))))
+            (ctx (cg-register-proto-default ctx target source-name method-name fn-name)))
+        (codegen-extend-protocol-default-loop ctx target target-name source-name (cdr methods)))))
 
 (defun codegen-extend-protocol-default (ctx: ptr form: ptr) -> ptr
   (let ((target (protocol-base (cg-syms ctx) (cadr form)))
-        (source (protocol-base (cg-syms ctx) (caddr form)))
+        (target-name (protocol-mangled (cg-syms ctx) (cadr form)))
+        (source-name (protocol-mangled (cg-syms ctx) (caddr form)))
         (methods (cdddr form))
-        (ctx (codegen-extend-protocol-default-loop ctx target source methods)))
+        (ctx (codegen-extend-protocol-default-loop ctx target target-name source-name methods)))
     (pcons ctx nil)))
 
 ;; Protocol dispatch helpers
@@ -1614,7 +1706,7 @@
             (else-result (build-protocol-dispatch ctx rest type-id-v args ret-ty default-expr))
             (ctx (pcons-head else-result))
             (else-v (pcons-tail else-result)))
-        (codegen-if-typed ctx cond-v then-v else-v ret-ty))))
+        (pcons ctx (lir-select syms cond-v then-v else-v)))))
 
 (defun codegen-protocol-call (ctx: ptr method: ptr args: ptr protocol: ptr) -> ptr
   (let ((syms (cg-syms ctx))
@@ -1635,11 +1727,10 @@
         (ret-ty (if (nil? entry)
                     (sym-i64 syms)
                     (let ((ret (proto-method-ret entry)))
-                      (if (nil? ret) (sym-i64 syms) ret))))
-        (default-expr (if (= 1 (sym-eq? ret-ty (sym-ptr syms)))
-                          (lir-null syms)
-                          (lir-int syms 0))))
-    (build-protocol-dispatch ctx entries type-id-v args-v ret-ty default-expr)))
+                      (if (nil? ret) (sym-i64 syms) ret)))))
+    (if (= 1 (sym-eq? ret-ty (sym-ptr syms)))
+        (build-protocol-dispatch ctx entries type-id-v args-v ret-ty (lir-null syms))
+        (build-protocol-dispatch ctx entries type-id-v args-v ret-ty (lir-int syms 0)))))
 
 ;; Indirect calls for closure values (assume ptr return for now)
 (defun codegen-indirect-call (ctx: ptr fn-sym: ptr args: ptr) -> ptr
@@ -1855,7 +1946,7 @@
     (is-arrow-sym? elem3)))
 
 ;; Map a type symbol to an lIR type symbol
-(defun type-sym->lir (syms: ptr type-sym: ptr) -> ptr
+(defun type-sym-to-lir (syms: ptr type-sym: ptr) -> ptr
   (if (nil? type-sym)
       (sym-i64 syms)
       (if (symbol? type-sym)
@@ -1877,7 +1968,7 @@
 ;; Extract return type symbol (defaults to i64)
 (defun get-defun-return-type (syms: ptr form: ptr) -> ptr
   (if (= (has-return-type? form) 1)
-      (type-sym->lir syms (list-nth form 4))
+      (type-sym-to-lir syms (list-nth form 4))
       (sym-i64 syms)))
 
 ;; Collect parameter names (handles typed and untyped params)
@@ -1891,8 +1982,7 @@
             (let ((maybe-colon (car rest)))
               (if (= 1 (is-arrow-sym? maybe-colon))
                   (reverse-pcons (pcons name acc))
-                  (if (and (symbol? maybe-colon)
-                           (streq (symbol-name maybe-colon) (str-colon)))
+                  (if (= 1 (symbol-name-match? maybe-colon (str-colon)))
                       (collect-param-names (cdr (cdr rest)) (pcons name acc))
                       (collect-param-names rest (pcons name acc)))))))))
 
@@ -1919,13 +2009,17 @@
   (if (nil? expr)
       acc
       (if (scons? expr)
-          (let ((head (car expr))
-                (tail (cdr expr))
-                (acc (if (and (symbol? head) (= 1 (callable-has? params head)))
-                         (add-callable acc head)
-                         acc))
-                (acc (find-callables-in-expr head params acc)))
-            (find-callables-in-list tail params acc))
+          (let ((head (car expr)))
+            (let ((tail (cdr expr)))
+              (if (symbol? head)
+                  (if (= 1 (callable-has? params head))
+                      (let ((acc2 (add-callable acc head)))
+                        (let ((acc3 (find-callables-in-expr head params acc2)))
+                          (find-callables-in-list tail params acc3)))
+                      (let ((acc2 (find-callables-in-expr head params acc)))
+                        (find-callables-in-list tail params acc2)))
+                  (let ((acc2 (find-callables-in-expr head params acc)))
+                    (find-callables-in-list tail params acc2)))))
           acc)))
 
 (defun find-callable-params (params: ptr body: ptr) -> ptr
@@ -1946,7 +2040,7 @@
               (reverse-scons (scons pair acc)))
             (let ((colon (car rest))
                   (rest2 (cdr rest)))  ;; should be (type rest...)
-              (if (and (symbol? colon) (streq (symbol-name colon) (str-colon)))
+              (if (= 1 (symbol-name-match? colon (str-colon)))
                   (if (nil? rest2)
                       (reverse-scons acc)  ;; malformed
                       (let ((typ (car rest2))
