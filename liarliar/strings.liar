@@ -4,26 +4,19 @@
 ;;   data[0] = length (bytes written)
 ;;   data[1] = capacity
 ;;   data[2..] = byte data (as i64 slots, using store-byte/load-byte)
-;;
-;; Implements Countable, Indexable, Collection protocols.
 
 (ns liarliar.strings)
 
-;; Protocols needed by StringBuilder (local definitions to avoid liar.seq)
+;; Protocol for Collection (only conj needed)
 (defprotocol Countable
   (count [self]))
 
-(defprotocol Indexable
-  (nth [self idx]))
-
 (defprotocol Collection
-  (conj [self x])
-  (pop [self]))
+  (conj [self x]))
 
 ;; --- External declarations ---
 
 (extern malloc ptr (i64))
-(extern free void (ptr))
 (extern memcpy ptr (ptr ptr i64))
 
 ;; --- StringBuilder struct ---
@@ -32,7 +25,6 @@
 
 ;; --- Internal helpers ---
 
-(defun sb-default-cap () 256)
 (defun sb-growth-factor () 2)
 
 (defun sb-get-len (data: ptr) -> i64 (aget data 0))
@@ -40,18 +32,10 @@
 (defun sb-set-len! (data: ptr len) (aset data 0 len))
 
 ;; Byte offset in the data array (after len and cap slots)
-;; Each i64 slot holds 8 bytes, but we use byte-level access
 (defun sb-byte-ptr (data: ptr) -> ptr
   (ptr+ data 16))  ;; Skip 2 i64 slots (16 bytes)
 
 ;; --- Constructor ---
-
-(defun string-builder () -> ptr
-  (let ((cap (sb-default-cap))
-        (data (heap-array (+ 2 (/ cap 8))))  ;; 2 metadata + cap/8 data slots
-        (s0 (aset data 0 0))    ;; len = 0
-        (s1 (aset data 1 cap))) ;; cap
-    (share (StringBuilder data))))
 
 (defun string-builder-cap (cap) -> ptr
   (let ((data (heap-array (+ 2 (/ cap 8))))
@@ -93,15 +77,6 @@
   (count [self]
     (sb-get-len (. self sb-data))))
 
-(extend-protocol Indexable StringBuilder
-  (nth [self idx]
-    (let ((data (. self sb-data))
-          (len (sb-get-len data)))
-      (if (>= idx len)
-          0
-          (load-byte (ptr+ (sb-byte-ptr data) idx))))))
-
-;; conj appends a byte (i64 treated as byte)
 (extend-protocol Collection StringBuilder
   (conj [self x]
     (let ((sb (sb-ensure-cap self 1))
@@ -109,19 +84,10 @@
           (len (sb-get-len data))
           (s1 (store-byte (ptr+ (sb-byte-ptr data) len) x))
           (s2 (sb-set-len! data (+ len 1))))
-      sb))
-  (pop [self]
-    (let ((data (. self sb-data))
-          (len (sb-get-len data)))
-      (if (= len 0)
-          0
-          (let ((last-byte (load-byte (ptr+ (sb-byte-ptr data) (- len 1))))
-                (s (sb-set-len! data (- len 1))))
-            last-byte)))))
+      sb)))
 
 ;; --- String operations ---
 
-;; strlen for ptr
 (defun strlen-loop (s: ptr idx) -> i64
   (if (= (load-byte (ptr+ s idx)) 0)
       idx
@@ -130,7 +96,6 @@
 (defun strlen-ptr (s: ptr) -> i64
   (strlen-loop s 0))
 
-;; Append a null-terminated string
 (defun sb-append-loop (sb: ptr s: ptr i len) -> ptr
   (if (>= i len)
       sb
@@ -164,18 +129,15 @@
   (let ((len (count sb)))
     (reverse-last-n-loop sb (- len n) (- len 1))))
 
-;; Append integer as decimal string
 (defun append-int (sb: ptr n) -> ptr
   (if (= n 0)
       (conj sb 48)  ;; '0'
       (if (< n 0)
-          ;; Negative: write '-' then digits reversed
           (let ((sb (conj sb 45))  ;; '-'
                 (start-len (count sb))
                 (sb (write-digits-loop sb (- 0 n)))
                 (digits (- (count sb) start-len)))
             (reverse-last-n sb digits))
-          ;; Positive: write digits reversed then reverse
           (let ((start-len (count sb))
                 (sb (write-digits-loop sb n))
                 (digits (- (count sb) start-len)))
@@ -183,43 +145,9 @@
 
 ;; --- Finalize ---
 
-;; Get as null-terminated string (returns ptr to internal buffer)
 (defun to-string (sb: ptr) -> ptr
   (let ((data (. sb sb-data))
         (len (sb-get-len data))
         (buf (sb-byte-ptr data))
         (s (store-byte (ptr+ buf len) 0)))
     buf))
-
-;; Copy to new null-terminated string
-(defun to-string-copy (sb: ptr) -> ptr
-  (let ((data (. sb sb-data))
-        (len (sb-get-len data))
-        (buf (sb-byte-ptr data))
-        (result (malloc (+ len 1)))
-        (c (sb-copy-bytes-loop buf result 0 len))
-        (s (store-byte (ptr+ result len) 0)))
-    result))
-
-;; --- Convenience ---
-
-(defun append-char (sb: ptr ch) -> ptr
-  (conj sb ch))
-
-(defun append-newline (sb: ptr) -> ptr
-  (conj sb 10))
-
-(defun append-space (sb: ptr) -> ptr
-  (conj sb 32))
-
-(defun append-paren-open (sb: ptr) -> ptr
-  (conj sb 40))
-
-(defun append-paren-close (sb: ptr) -> ptr
-  (conj sb 41))
-
-(defun appendln (sb: ptr s: ptr) -> ptr
-  (append-newline (append sb s)))
-
-(defun append-intln (sb: ptr n) -> ptr
-  (append-newline (append-int sb n)))
