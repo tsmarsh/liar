@@ -335,6 +335,12 @@
                      (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
                      (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
 
+;; Merge function definitions from a nested codegen context.
+(defun cg-merge-fn-defs (ctx: ptr fns: ptr) -> ptr
+  (if (nil? fns)
+      ctx
+      (cg-merge-fn-defs (cg-add-fn ctx (car fns)) (cdr fns))))
+
 ;; ============================================================
 ;; Block Management Helpers
 ;; ============================================================
@@ -754,16 +760,14 @@
   (let ((name (symbol-name sym))
         (len (strlen name))
         (slash (find-last-char name 0 -1 47)))
-    (if (and (= len 1) (= slash 0))
-        name
-        (if (< slash 0)
+    (if (<= slash 0)
         name
         (let ((base-len (- len (+ slash 1)))
               (buf (heap-array (+ base-len 1))))
           (do
             (copy-str-loop buf 0 (ptr+ name (+ slash 1)) 0 base-len)
             (store-byte (ptr+ buf base-len) 0)
-            buf))))))
+            buf)))))
 
 ;; Check if symbol name matches a string, returning i64 1/0
 (defun symbol-name-match? (sym: ptr name: ptr) -> i64
@@ -1364,11 +1368,9 @@
               (obj-v (pcons-tail obj-result))
               (type-id (struct-entry-type-id struct-info))
               (syms (cg-syms ctx)))
-          ;; Emit: (icmp eq (load i64 (gep obj 0 0)) type-id)
+          ;; Emit: (icmp eq (load i64 obj) type-id) using the common type-id header.
           (pcons ctx (lir-icmp syms (sym-eq syms)
-                              (scons (sym-load syms)
-                                    (scons (sym-i64 syms)
-                                           (scons (make-gep-idx0 syms (make-struct-type-sym syms type-name) obj-v 0) nil)))
+                              (lir-load syms (sym-i64 syms) obj-v)
                               (lir-int syms type-id)))))))
 
 ;; ============================================================
@@ -1581,7 +1583,8 @@
   (let ((syms (cg-syms ctx))
         (lir-params (build-proto-params syms params nil))
         (param-types (build-param-type-list syms params nil))
-        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) nil 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
+        (outer-fns (cg-fns ctx))
+        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
                                    (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
         (body-result (codegen-expr fn-ctx body))
@@ -1595,9 +1598,11 @@
         (fn-body (build-fn-body syms blocks merge-lbl body-v))
         (fn-def (scons (sym-define syms)
                        (scons fn-sig
-                              (scons lir-params fn-body)))))
-    (let ((ctx (cg-add-fn-def ctx fn-name fn-def)))
-      (pcons ctx (pcons fn-def inferred)))))
+                              (scons lir-params fn-body))))
+        (inner-fns (fn-defs-since (cg-fns fn-ctx) outer-fns)))
+    (let ((ctx (cg-merge-fn-defs ctx inner-fns)))
+      (let ((ctx (cg-add-fn-def ctx fn-name fn-def)))
+        (pcons ctx (pcons fn-def inferred))))))
 
 (defun codegen-extend-protocol-loop (ctx: ptr protocol: ptr protocol-name: ptr type-name: ptr methods: ptr) -> ptr
   (if (nil? methods)
@@ -1812,12 +1817,28 @@
            ((sym-eq? head (sym-ptr syms)) (sym-ptr syms))
            ((sym-eq? head (sym-i1 syms)) (sym-i1 syms))
            ((sym-eq? head (sym-i64 syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-double syms)) (sym-double syms))
            ((sym-eq? head (sym-string syms)) (sym-ptr syms))
            ((sym-eq? head (sym-heap-struct syms)) (sym-ptr syms))
            ((sym-eq? head (sym-alloca syms)) (sym-ptr syms))
            ((sym-eq? head (sym-getelementptr syms)) (sym-ptr syms))
            ((sym-eq? head (sym-load syms)) (cadr expr))
            ((sym-eq? head (sym-indirect-call syms)) (caddr expr))
+           ((sym-eq? head (sym-call syms)) (call-ret-type ctx (cadr expr)))
+           ((sym-eq? head (sym-fadd syms)) (sym-double syms))
+           ((sym-eq? head (sym-fsub syms)) (sym-double syms))
+           ((sym-eq? head (sym-fmul syms)) (sym-double syms))
+           ((sym-eq? head (sym-fdiv syms)) (sym-double syms))
+           ((sym-eq? head (sym-frem syms)) (sym-double syms))
+           ((sym-eq? head (sym-trunc syms)) (cadr expr))
+           ((sym-eq? head (sym-zext syms)) (cadr expr))
+           ((sym-eq? head (sym-sext syms)) (cadr expr))
+           ((sym-eq? head (sym-fptosi syms)) (cadr expr))
+           ((sym-eq? head (sym-fptoui syms)) (cadr expr))
+           ((sym-eq? head (sym-sitofp syms)) (cadr expr))
+           ((sym-eq? head (sym-uitofp syms)) (cadr expr))
+           ((sym-eq? head (sym-fpext syms)) (cadr expr))
+           ((sym-eq? head (sym-fptrunc syms)) (cadr expr))
            ((sym-eq? head (sym-let syms))
             (let ((binding (car (cadr expr)))
                   (name (car binding))
@@ -1841,13 +1862,50 @@
             (sym-ptr syms)
             (sym-i64 syms)))))
 
+(defun symbol-at-eq? (a: ptr b: ptr) -> i64
+  (let ((aname (symbol-name a))
+        (bname (symbol-name b)))
+    (if (= (load-byte aname) 64)
+        (if (streq (ptr+ aname 1) bname) 1 0)
+        (if (streq aname bname) 1 0))))
+
+(defun call-ret-type-loop (syms: ptr callee: ptr fns: ptr) -> ptr
+  (if (nil? fns)
+      (sym-i64 syms)
+      (let ((fn-def (car fns))
+            (sig (cadr fn-def))
+            (fn-name (car sig))
+            (ret-ty (cadr sig)))
+        (if (= 1 (symbol-at-eq? callee fn-name))
+            ret-ty
+            (call-ret-type-loop syms callee (cdr fns))))))
+
+(defun call-ret-type (ctx: ptr callee: ptr) -> ptr
+  (call-ret-type-loop (cg-syms ctx) callee (cg-fns ctx)))
+
+(defun fn-defs-since (fns: ptr base: ptr) -> ptr
+  (if (nil? fns)
+      nil
+      (if (= fns base)
+          nil
+          (scons (car fns) (fn-defs-since (cdr fns) base)))))
+
 (defun infer-defun-ret-type (has-ret: i64 ret-ty0: ptr fn-ctx: ptr body-v: ptr) -> ptr
   (if (= has-ret 1)
       ret-ty0
       (lir-expr-ret-type fn-ctx body-v)))
 
 ;; Emit if with explicit result type
-(defun codegen-if-typed (ctx: ptr cond-v: ptr then-v: ptr else-v: ptr result-ty: ptr) -> ptr
+(defun wrap-entry-lets (syms: ptr bindings: ptr body: ptr) -> ptr
+  (if (nil? bindings)
+      body
+      (let ((binding (car bindings))
+            (name (car binding))
+            (val (cadr binding)))
+        (lir-let1 syms name val (wrap-entry-lets syms (cdr bindings) body)))))
+
+;; Emit if with explicit result type, optionally wrapping the entry block in lets.
+(defun codegen-if-typed (ctx: ptr cond-v: ptr then-v: ptr else-v: ptr result-ty: ptr entry-binds: ptr) -> ptr
   (let ((syms (cg-syms ctx))
 
         ;; Generate unique block labels
@@ -1863,9 +1921,10 @@
         (ctx (pcons-head merge-result))
         (merge-lbl (pcons-tail merge-result))
 
-        ;; Build entry block: (block entry (br cond then else))
-        (entry-block (lir-block syms (sym-entry syms)
-                                (scons (lir-br-cond syms cond-v then-lbl else-lbl) nil)))
+        ;; Build entry block: (block entry (let ((a ...)) (br cond then else)))
+        (entry-body (wrap-entry-lets syms entry-binds
+                                     (lir-br-cond syms cond-v then-lbl else-lbl)))
+        (entry-block (lir-block syms (sym-entry syms) (scons entry-body nil)))
 
         ;; Build then block
         (then-block (lir-block syms then-lbl
@@ -1913,7 +1972,7 @@
         (ctx (pcons-head else-result))
         (else-v (pcons-tail else-result))
         (result-ty (lir-merge-type ctx then-v else-v)))
-    (codegen-if-typed ctx cond-v then-v else-v result-ty)))
+    (codegen-if-typed ctx cond-v then-v else-v result-ty nil)))
 
 ;; ============================================================
 ;; Let Bindings
@@ -1925,19 +1984,91 @@
       (let ((binding (car bindings))
             (name (car binding))
             (val-form (cadr binding))
+            (rest (cdr bindings)))
+        (if (scons? name)
+            (codegen-let-destructure ctx name val-form rest body)
+            (let ((val-result (codegen-expr ctx val-form))
+                  (ctx (pcons-head val-result))
+                  (val-v (pcons-tail val-result))
+                  (rest-result (codegen-let-body ctx rest body))
+                  (ctx (pcons-head rest-result))
+                  (rest-v (pcons-tail rest-result))
+                  (syms (cg-syms ctx)))
+              (pcons ctx (lir-let1 syms name val-v rest-v)))))))
+
+(defun codegen-let-bindings (ctx: ptr bindings: ptr acc: ptr) -> ptr
+  (if (nil? bindings)
+      (pcons ctx (reverse-scons acc))
+      (let ((binding (car bindings))
+            (name (car binding))
+            (val-form (cadr binding))
             (val-result (codegen-expr ctx val-form))
             (ctx (pcons-head val-result))
             (val-v (pcons-tail val-result))
-            (rest-result (codegen-let-body ctx (cdr bindings) body))
+            (pair (scons name (scons val-v nil))))
+        (codegen-let-bindings ctx (cdr bindings) (scons pair acc)))))
+
+(defun build-field-lets (ctx: ptr tmp-name: ptr fields: ptr struct-info: ptr body-v: ptr) -> ptr
+  (if (nil? fields)
+      (pcons ctx body-v)
+      (let ((field-name (car fields))
+            (field-result (codegen-field-access-found ctx tmp-name field-name struct-info))
+            (ctx (pcons-head field-result))
+            (field-v (pcons-tail field-result))
+            (rest-result (build-field-lets ctx tmp-name (cdr fields) struct-info body-v))
             (ctx (pcons-head rest-result))
             (rest-v (pcons-tail rest-result))
             (syms (cg-syms ctx)))
-        (pcons ctx (lir-let1 syms name val-v rest-v)))))
+        (pcons ctx (lir-let1 syms field-name field-v rest-v)))))
+
+(defun codegen-let-destructure (ctx: ptr pattern: ptr val-form: ptr rest-bindings: ptr body: ptr) -> ptr
+  (let ((struct-name (car pattern))
+        (fields (cdr pattern))
+        (struct-info (cg-lookup-struct ctx struct-name)))
+    (if (nil? struct-info)
+        (codegen-let-body ctx (scons (scons pattern (scons val-form nil)) rest-bindings) body)
+        (let ((val-result (codegen-expr ctx val-form))
+              (ctx (pcons-head val-result))
+              (val-v (pcons-tail val-result))
+              (tmp-result (cg-next-temp-name ctx))
+              (ctx (pcons-head tmp-result))
+              (tmp-name (pcons-tail tmp-result))
+              (rest-result (codegen-let-body ctx rest-bindings body))
+              (ctx (pcons-head rest-result))
+              (rest-v (pcons-tail rest-result))
+              (field-result (build-field-lets ctx tmp-name fields struct-info rest-v))
+              (ctx (pcons-head field-result))
+              (field-v (pcons-tail field-result))
+              (syms (cg-syms ctx)))
+          (pcons ctx (lir-let1 syms tmp-name val-v field-v))))))
+
+(defun codegen-let-if (ctx: ptr bindings: ptr body: ptr) -> ptr
+  (let ((bind-result (codegen-let-bindings ctx bindings nil))
+        (ctx (pcons-head bind-result))
+        (binds (pcons-tail bind-result))
+        (cond-result (codegen-expr ctx (cadr body)))
+        (ctx (pcons-head cond-result))
+        (cond-v (pcons-tail cond-result))
+        (then-result (codegen-expr ctx (caddr body)))
+        (ctx (pcons-head then-result))
+        (then-v (pcons-tail then-result))
+        (else-result (codegen-expr ctx (cadddr body)))
+        (ctx (pcons-head else-result))
+        (else-v (pcons-tail else-result))
+        (result-ty (lir-merge-type ctx then-v else-v)))
+    (codegen-if-typed ctx cond-v then-v else-v result-ty binds)))
 
 (defun codegen-let (ctx: ptr form: ptr) -> ptr
   (let ((bindings (cadr form))
-        (body (caddr form)))
-    (codegen-let-body ctx bindings body)))
+        (body (caddr form))
+        (syms (cg-syms ctx)))
+    (if (scons? body)
+        (if (symbol? (car body))
+            (if (streq (symbol-base-name syms (car body)) (str-if))
+                (codegen-let-if ctx bindings body)
+                (codegen-let-body ctx bindings body))
+            (codegen-let-body ctx bindings body))
+        (codegen-let-body ctx bindings body))))
 
 ;; ============================================================
 ;; Do Block
@@ -2090,7 +2221,17 @@
 
 ;; Transform params from (name : type name : type) to ((type name) (type name))
 ;; Untyped params default to i64, or ptr when used in call position
-(defun transform-params (syms: ptr lst: ptr acc: ptr callable: ptr) -> ptr
+(defun param-type-to-lir (ctx: ptr syms: ptr typ: ptr) -> ptr
+  (if (nil? typ)
+      (sym-i64 syms)
+      (if (symbol? typ)
+          (let ((struct-info (cg-lookup-struct ctx typ)))
+            (if (nil? struct-info)
+                (type-sym-to-lir syms typ)
+                (sym-ptr syms)))
+          (sym-i64 syms))))
+
+(defun transform-params (ctx: ptr syms: ptr lst: ptr acc: ptr callable: ptr) -> ptr
   (if (nil? lst)
       (reverse-scons acc)
       ;; lst is: name : type rest...
@@ -2107,11 +2248,12 @@
                       (reverse-scons acc)  ;; malformed
                       (let ((typ (car rest2))
                             (rest3 (cdr rest2))
-                            (pair (scons typ (scons name nil))))
-                        (transform-params syms rest3 (scons pair acc) callable)))
+                            (lir-typ (param-type-to-lir ctx syms typ))
+                            (pair (scons lir-typ (scons name nil))))
+                        (transform-params ctx syms rest3 (scons pair acc) callable)))
                   (let ((typ (if (= 1 (callable-has? callable name)) (sym-ptr syms) (sym-i64 syms)))
                         (pair (scons typ (scons name nil))))
-                    (transform-params syms rest (scons pair acc) callable))))))))
+                    (transform-params ctx syms rest (scons pair acc) callable))))))))
 
 ;; Build the list of blocks for a function with branching
 ;; Blocks are already in correct order [entry, then, else], just append merge
@@ -2176,6 +2318,20 @@
         (do (store-byte (ptr+ buf end) 0)
             (intern syms buf))))))
 
+(defun gensym-temp (syms: ptr counter: i64) -> ptr
+  (let ((buf (heap-array 20)))
+    (do
+      ;; __tmp_
+      (store-byte buf 95)           ;; _
+      (store-byte (ptr+ buf 1) 95)  ;; _
+      (store-byte (ptr+ buf 2) 116) ;; t
+      (store-byte (ptr+ buf 3) 109) ;; m
+      (store-byte (ptr+ buf 4) 112) ;; p
+      (store-byte (ptr+ buf 5) 95)  ;; _
+      (let ((end (int-to-buf-loop buf 6 counter)))
+        (do (store-byte (ptr+ buf end) 0)
+            (intern syms buf))))))
+
 (defun cg-next-closure-name (ctx: ptr) -> ptr
   (let ((counter (cg-closure-counter ctx))
         (syms (cg-syms ctx))
@@ -2187,6 +2343,13 @@
                                 (cg-proto-defaults ctx) (cg-type-protocols ctx) (+ counter 1)))))
     (pcons ctx name)))
 
+(defun cg-next-temp-name (ctx: ptr) -> ptr
+  (let ((counter (cg-temp ctx))
+        (syms (cg-syms ctx))
+        (name (gensym-temp syms counter))
+        (ctx (cg-next-temp ctx)))
+    (pcons ctx name)))
+
 (defun codegen-defun (ctx: ptr form: ptr) -> ptr
   ;; (defun name (params) body) OR (defun name (params) -> type body)
   (let ((name (cadr form))
@@ -2194,11 +2357,12 @@
         (raw-params (normalize-param-list (caddr form)))
         (body (get-defun-body form))
         (callable (find-callable-params raw-params body))
-        (lir-params (transform-params (cg-syms ctx) raw-params nil callable))
+        (lir-params (transform-params ctx (cg-syms ctx) raw-params nil callable))
         (ret-ty0 (get-defun-return-type (cg-syms ctx) form))
         (syms (cg-syms ctx))
         ;; Reset temp and block counters for function body
-        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) nil 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
+        (outer-fns (cg-fns ctx))
+        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
                                    (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
         (body-result (codegen-expr fn-ctx body))
@@ -2214,10 +2378,12 @@
         ;; Build complete function definition
         (fn-def (scons (sym-define syms)
                        (scons fn-sig
-                              (scons lir-params fn-body)))))
-    ;; Add function to context after fn-def is constructed.
-    (let ((ctx (cg-add-fn-def ctx name fn-def)))
-      (pcons ctx fn-def))))
+                              (scons lir-params fn-body))))
+        (inner-fns (fn-defs-since (cg-fns fn-ctx) outer-fns)))
+    ;; Add nested fns first, then this function.
+    (let ((ctx (cg-merge-fn-defs ctx inner-fns)))
+      (let ((ctx (cg-add-fn-def ctx name fn-def)))
+        (pcons ctx fn-def)))))
 
 ;; Lambda - stub for now
 (defun codegen-fn (ctx: ptr form: ptr) -> ptr
@@ -2228,7 +2394,8 @@
         (fn-name (pcons-tail name-result))
         (syms (cg-syms ctx))
         (lir-params (build-lambda-params syms params nil))
-        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) nil 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
+        (outer-fns (cg-fns ctx))
+        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
                                    (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
         (body-result (codegen-expr fn-ctx body))
@@ -2241,9 +2408,11 @@
         (fn-def (scons (sym-define syms)
                        (scons fn-sig
                               (scons lir-params fn-body))))
-        (fn-ptr (prepend-at syms (symbol-name fn-name))))
-    (let ((ctx (cg-add-fn-def ctx fn-name fn-def)))
-      (pcons ctx fn-ptr))))
+        (fn-ptr (prepend-at syms (symbol-name fn-name)))
+        (inner-fns (fn-defs-since (cg-fns fn-ctx) outer-fns)))
+    (let ((ctx (cg-merge-fn-defs ctx inner-fns)))
+      (let ((ctx (cg-add-fn-def ctx fn-name fn-def)))
+        (pcons ctx fn-ptr)))))
 
 ;; ============================================================
 ;; Top-Level

@@ -106,6 +106,7 @@
     ((= c 63) true)   ;; ?
     ((= c 33) true)   ;; !
     ((= c 38) true)   ;; &
+    ((= c 37) true)   ;; %
     ((= c 46) true)   ;; .
     (else false)))
 
@@ -174,7 +175,11 @@
               (scale (icons-head scale-lex))
               (frac-lex (icons-tail scale-lex))
               (final-int (negate-if is-negative int-val))
-              (final-frac (negate-if is-negative frac-val)))
+              (final-frac (if (= is-negative 1)
+                              (if (= int-val 0)
+                                  (negate-if is-negative frac-val)
+                                  frac-val)
+                              frac-val)))
           (pcons frac-lex (box-float final-int final-frac scale)))
         ;; Integer
         (pcons int-lex (box-int (negate-if is-negative int-val))))))

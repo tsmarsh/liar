@@ -85,14 +85,22 @@
   (let ((sb (pr-sb ctx))
         (int-part (boxed-float-int f))
         (frac-part (boxed-float-frac f))
-        (scale (boxed-float-scale f))
-        ;; Print integer part
-        (sb (append-int sb int-part))
-        ;; Print decimal point
-        (sb (conj sb 46))  ;; '.' = 46
-        ;; Print fractional part with leading zeros if needed
-        (sb (print-frac-with-zeros sb frac-part scale)))
-    (pr-with-sb ctx sb)))
+        (scale (boxed-float-scale f)))
+    (if (< int-part 0)
+        (let ((sb (append-int sb int-part))
+              (sb (conj sb 46))  ;; '.'
+              (sb (print-frac-with-zeros sb frac-part scale)))
+          (pr-with-sb ctx sb))
+        (if (< frac-part 0)
+            (let ((sb (conj sb 45))  ;; '-'
+                  (sb (append-int sb 0))
+                  (sb (conj sb 46))  ;; '.'
+                  (sb (print-frac-with-zeros sb (- 0 frac-part) scale)))
+              (pr-with-sb ctx sb))
+            (let ((sb (append-int sb int-part))
+                  (sb (conj sb 46))  ;; '.'
+                  (sb (print-frac-with-zeros sb frac-part scale)))
+              (pr-with-sb ctx sb))))))
 
 ;; Print fractional part with leading zeros
 ;; E.g., 3.05 has frac=5, scale=100, needs "05" not "5"
