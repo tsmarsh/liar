@@ -701,6 +701,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "liar-spec"
+version = "0.1.0"
+dependencies = [
+ "cucumber",
+ "liar",
+ "tokio",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.177"
 source = "registry+https://github.com/rust-lang/crates.io-index"

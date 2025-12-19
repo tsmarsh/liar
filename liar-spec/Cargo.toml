@@ -1,0 +1,18 @@
+[package]
+name = "liar-spec"
+version.workspace = true
+edition.workspace = true
+description = "Compilation specification tests for liar to lIR transformation"
+
+[lib]
+path = "src/lib.rs"
+
+[[test]]
+name = "spec"
+harness = false
+path = "tests/spec.rs"
+
+[dependencies]
+liar = { path = "../liar" }
+cucumber = "0.21"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

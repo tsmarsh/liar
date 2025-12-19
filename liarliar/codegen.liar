@@ -1539,7 +1539,7 @@
             (param-type-lookup (pcons-tail lst) sym)))))
 
 (defun normalize-param-list (params: ptr) -> ptr
-  (if (and (symbol? params) (= 1 (symbol-name-match? params (str-nil))))
+  (if (and (symbol? params) (= 1 (symbol-name-match? params (str-nil-lit))))
       nil
       params))
 
