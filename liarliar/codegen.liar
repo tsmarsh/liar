@@ -649,7 +649,7 @@
     (do (store-byte b 110) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 108)
         (store-byte (ptr+ b 3) 63) (store-byte (ptr+ b 4) 0) b)))
 
-(defun str-nil () -> ptr
+(defun str-nil-lit () -> ptr
   (let ((b (heap-array 4)))
     (do (store-byte b 110) (store-byte (ptr+ b 1) 105)
         (store-byte (ptr+ b 2) 108) (store-byte (ptr+ b 3) 0) b)))
@@ -949,7 +949,7 @@
 (defun codegen-symbol (ctx: ptr form: ptr) -> ptr
   (let ((name (symbol-name form))
         (syms (cg-syms ctx)))
-    (if (streq name (str-nil))
+    (if (streq name (str-nil-lit))
         (pcons ctx (lir-null syms))
         (pcons ctx form))))
 
