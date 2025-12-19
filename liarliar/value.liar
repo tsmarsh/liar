@@ -96,6 +96,19 @@
   (instance? x BoxedInt))
 
 
+;; --- Boxed Boolean for true/false literals ---
+(defstruct BoxedBool (boxed-bool-val: i64))
+
+(defun box-bool (v: i64) -> ptr
+  (share (BoxedBool v)))
+
+(defun unbox-bool (b: ptr) -> i64
+  (. b boxed-bool-val))
+
+(defun boxed-bool? (x: ptr)
+  (instance? x BoxedBool))
+
+
 ;; --- Boxed Float (stored as integer/fractional parts since struct fields don't support double) ---
 ;; Example: 3.14 → (BoxedFloat 3 14 100) where 3 + 14/100 = 3.14
 ;; scale is 10^(number of decimal digits)

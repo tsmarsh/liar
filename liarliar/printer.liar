@@ -75,6 +75,10 @@
 (defun print-int (ctx: ptr n: ptr) -> ptr
   (pr-with-sb ctx (append-int (pr-sb ctx) (unbox-int n))))
 
+;; Print a boxed boolean - just print 0 or 1 (lIR i1 value)
+(defun print-bool (ctx: ptr b: ptr) -> ptr
+  (pr-with-sb ctx (append-int (pr-sb ctx) (unbox-bool b))))
+
 ;; Print a boxed float (int-part.frac-part)
 ;; BoxedFloat stores: int-part, frac-part, scale
 (defun print-float (ctx: ptr f: ptr) -> ptr
@@ -160,6 +164,9 @@
 
     ((boxed-int? form)
      (print-int ctx form))
+
+    ((boxed-bool? form)
+     (print-bool ctx form))
 
     ((boxed-float? form)
      (print-float ctx form))

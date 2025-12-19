@@ -215,8 +215,39 @@
 (defun copy-bytes (src: ptr dest: ptr n: i64) -> i64
   (copy-bytes-loop src dest n 0))
 
+;; Check if buffer matches "true" (4 chars: 116 114 117 101)
+(defun is-true-str? (buf: ptr len: i64) -> i64
+  (if (= len 4)
+      (if (= (zext i64 (load-byte buf)) 116)           ;; t
+          (if (= (zext i64 (load-byte (ptr+ buf 1))) 114) ;; r
+              (if (= (zext i64 (load-byte (ptr+ buf 2))) 117) ;; u
+                  (if (= (zext i64 (load-byte (ptr+ buf 3))) 101) ;; e
+                      1
+                      0)
+                  0)
+              0)
+          0)
+      0))
+
+;; Check if buffer matches "false" (5 chars: 102 97 108 115 101)
+(defun is-false-str? (buf: ptr len: i64) -> i64
+  (if (= len 5)
+      (if (= (zext i64 (load-byte buf)) 102)           ;; f
+          (if (= (zext i64 (load-byte (ptr+ buf 1))) 97)  ;; a
+              (if (= (zext i64 (load-byte (ptr+ buf 2))) 108) ;; l
+                  (if (= (zext i64 (load-byte (ptr+ buf 3))) 115) ;; s
+                      (if (= (zext i64 (load-byte (ptr+ buf 4))) 101) ;; e
+                          1
+                          0)
+                      0)
+                  0)
+              0)
+          0)
+      0))
+
 ;; Read a symbol and intern it
 ;; Returns (new-lexer . symbol)
+;; Special handling: "true" and "false" return BoxedBool values
 (defun read-symbol (lex: ptr table: ptr) -> ptr
   (let ((start-pos (lexer-pos lex))
         (len (count-symbol-len lex 0))
@@ -226,10 +257,14 @@
         ;; Null-terminate
         (s (store-byte (ptr+ buf len) 0))
         ;; Advance lexer past the symbol
-        (new-lex (advance-n lex len))
-        ;; Intern the symbol
-        (sym (intern table buf)))
-    (pcons new-lex sym)))
+        (new-lex (advance-n lex len)))
+    ;; Check for boolean literals
+    (if (= 1 (is-true-str? buf len))
+        (pcons new-lex (box-bool 1))
+        (if (= 1 (is-false-str? buf len))
+            (pcons new-lex (box-bool 0))
+            ;; Regular symbol - intern it
+            (pcons new-lex (intern table buf))))))
 
 ;; ============================================================================
 ;; String Parsing

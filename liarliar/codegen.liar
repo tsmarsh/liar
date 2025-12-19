@@ -719,6 +719,7 @@
 
 (defun ast-symbol? (form: ptr) (symbol? form))
 (defun ast-int? (form: ptr) (boxed-int? form))
+(defun ast-bool? (form: ptr) (boxed-bool? form))
 (defun ast-float? (form: ptr) (boxed-float? form))
 (defun ast-string? (form: ptr) (liar-string? form))
 (defun ast-list? (form: ptr) (scons? form))
@@ -765,6 +766,10 @@
 ;; Build: (i64 N)
 (defun lir-int (syms: ptr val: i64) -> ptr
   (scons (sym-i64 syms) (scons (box-int val) nil)))
+
+;; Build: (i1 0) or (i1 1) for boolean values
+(defun lir-bool (syms: ptr val: i64) -> ptr
+  (scons (sym-i1 syms) (scons (box-int val) nil)))
 
 ;; Build: %N (temp reference as symbol)
 (defun lir-temp (syms: ptr n: i64) -> ptr
@@ -909,6 +914,7 @@
 (defun codegen-expr (ctx: ptr form: ptr) -> ptr
   (cond
     ((ast-int? form)    (codegen-int ctx form))
+    ((ast-bool? form)   (codegen-bool ctx form))
     ((ast-float? form)  (codegen-float ctx form))
     ((ast-symbol? form) (codegen-symbol ctx form))
     ((ast-string? form) (codegen-string ctx form))
@@ -923,6 +929,12 @@
   (let ((syms (cg-syms ctx))
         (val (unbox-int form)))
     (pcons ctx (lir-int syms val))))
+
+;; Boolean literal: (i1 0) or (i1 1)
+(defun codegen-bool (ctx: ptr form: ptr) -> ptr
+  (let ((syms (cg-syms ctx))
+        (val (unbox-bool form)))
+    (pcons ctx (lir-bool syms val))))
 
 ;; Float literal: (double N.M)
 ;; BoxedFloat stores: int-part, frac-part, scale (10^digits in frac)
