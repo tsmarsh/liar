@@ -133,6 +133,17 @@
 (defun sym-fdiv (s: ptr) -> ptr    (make-sym s 102 100 105 118 0 0 0 0 4))   ;; fdiv
 (defun sym-frem (s: ptr) -> ptr    (make-sym s 102 114 101 109 0 0 0 0 4))   ;; frem
 
+;; Type conversion lIR symbols
+(defun sym-trunc (s: ptr) -> ptr   (make-sym s 116 114 117 110 99 0 0 0 5))  ;; trunc
+(defun sym-zext (s: ptr) -> ptr    (make-sym s 122 101 120 116 0 0 0 0 4))   ;; zext
+(defun sym-sext (s: ptr) -> ptr    (make-sym s 115 101 120 116 0 0 0 0 4))   ;; sext
+(defun sym-fptosi (s: ptr) -> ptr  (make-sym s 102 112 116 111 115 105 0 0 6)) ;; fptosi
+(defun sym-fptoui (s: ptr) -> ptr  (make-sym s 102 112 116 111 117 105 0 0 6)) ;; fptoui
+(defun sym-sitofp (s: ptr) -> ptr  (make-sym s 115 105 116 111 102 112 0 0 6)) ;; sitofp
+(defun sym-uitofp (s: ptr) -> ptr  (make-sym s 117 105 116 111 102 112 0 0 6)) ;; uitofp
+(defun sym-fpext (s: ptr) -> ptr   (make-sym s 102 112 101 120 116 0 0 0 5))  ;; fpext
+(defun sym-fptrunc (s: ptr) -> ptr (make-sym s 102 112 116 114 117 110 99 0 7)) ;; fptrunc
+
 ;; Liar special forms (for dispatch)
 (defun str-if () -> ptr
   (let ((b (heap-array 3)))
@@ -236,6 +247,57 @@
   (let ((b (heap-array 5)))
     (do (store-byte b 102) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 101)
         (store-byte (ptr+ b 3) 109) (store-byte (ptr+ b 4) 0) b)))
+
+;; Type conversion operator strings
+(defun str-trunc () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 116) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 117)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 99) (store-byte (ptr+ b 5) 0) b)))
+
+(defun str-zext () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 122) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 120)
+        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-sext () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 115) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 120)
+        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-fptosi () -> ptr
+  (let ((b (heap-array 7)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 112) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 105)
+        (store-byte (ptr+ b 6) 0) b)))
+
+(defun str-fptoui () -> ptr
+  (let ((b (heap-array 7)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 112) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 117) (store-byte (ptr+ b 5) 105)
+        (store-byte (ptr+ b 6) 0) b)))
+
+(defun str-sitofp () -> ptr
+  (let ((b (heap-array 7)))
+    (do (store-byte b 115) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 102) (store-byte (ptr+ b 5) 112)
+        (store-byte (ptr+ b 6) 0) b)))
+
+(defun str-uitofp () -> ptr
+  (let ((b (heap-array 7)))
+    (do (store-byte b 117) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 102) (store-byte (ptr+ b 5) 112)
+        (store-byte (ptr+ b 6) 0) b)))
+
+(defun str-fpext () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 112) (store-byte (ptr+ b 2) 101)
+        (store-byte (ptr+ b 3) 120) (store-byte (ptr+ b 4) 116) (store-byte (ptr+ b 5) 0) b)))
+
+(defun str-fptrunc () -> ptr
+  (let ((b (heap-array 8)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 112) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 117) (store-byte (ptr+ b 5) 110)
+        (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 0) b)))
 
 ;; ============================================================
 ;; AST Predicates
@@ -455,6 +517,16 @@
             ((streq name (str-fmul))        (codegen-float-binop ctx form (sym-fmul (cg-syms ctx))))
             ((streq name (str-fdiv))        (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx))))
             ((streq name (str-frem))        (codegen-float-binop ctx form (sym-frem (cg-syms ctx))))
+            ;; Type conversion operators
+            ((streq name (str-trunc))       (codegen-conv ctx form (sym-trunc (cg-syms ctx))))
+            ((streq name (str-zext))        (codegen-conv ctx form (sym-zext (cg-syms ctx))))
+            ((streq name (str-sext))        (codegen-conv ctx form (sym-sext (cg-syms ctx))))
+            ((streq name (str-fptosi))      (codegen-conv ctx form (sym-fptosi (cg-syms ctx))))
+            ((streq name (str-fptoui))      (codegen-conv ctx form (sym-fptoui (cg-syms ctx))))
+            ((streq name (str-sitofp))      (codegen-conv ctx form (sym-sitofp (cg-syms ctx))))
+            ((streq name (str-uitofp))      (codegen-conv ctx form (sym-uitofp (cg-syms ctx))))
+            ((streq name (str-fpext))       (codegen-conv ctx form (sym-fpext (cg-syms ctx))))
+            ((streq name (str-fptrunc))     (codegen-conv ctx form (sym-fptrunc (cg-syms ctx))))
             (else                      (codegen-call ctx form))))
         (codegen-call ctx form))))
 
@@ -492,6 +564,18 @@
         (right-v (pcons-tail right-result))
         (syms (cg-syms ctx)))
     (pcons ctx (lir-binop syms op left-v right-v))))
+
+;; Type conversion operations - emit (op target-type value)
+;; Form: (trunc i8 value) or (fptosi i64 value)
+(defun codegen-conv (ctx: ptr form: ptr op: ptr) -> ptr
+  (let ((target-type (cadr form))    ;; e.g., i8, i64, double
+        (value-form (caddr form))
+        (value-result (codegen-expr ctx value-form))
+        (ctx (pcons-head value-result))
+        (value-v (pcons-tail value-result))
+        (syms (cg-syms ctx)))
+    ;; Emit: (op target-type value)
+    (pcons ctx (scons op (scons target-type (scons value-v nil))))))
 
 ;; ============================================================
 ;; If Expression (with proper branching)
