@@ -741,14 +741,16 @@
   (let ((name (symbol-name sym))
         (len (strlen name))
         (slash (find-last-char name 0 -1 47)))
-    (if (< slash 0)
+    (if (and (= len 1) (= slash 0))
+        name
+        (if (< slash 0)
         name
         (let ((base-len (- len (+ slash 1)))
               (buf (heap-array (+ base-len 1))))
           (do
             (copy-str-loop buf 0 (ptr+ name (+ slash 1)) 0 base-len)
             (store-byte (ptr+ buf base-len) 0)
-            buf)))))
+            buf))))))
 
 ;; Check if symbol name matches a string, returning i64 1/0
 (defun symbol-name-match? (sym: ptr name: ptr) -> i64
