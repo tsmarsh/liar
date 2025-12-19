@@ -526,6 +526,7 @@
       ((= c 39)         (read-quote lex2 table))       ;; '
       ((= c 96)         (read-quasiquote lex2 table))  ;; `
       ((= c 126)        (read-unquote lex2 table))     ;; ~
+      ((= c 44)         (read-unquote lex2 table))     ;; , (comma also means unquote)
       ((digit? c)       (read-number lex2))
       ((= c 45)         (if (digit? (peek-char-at lex2 1))   ;; - number or symbol
                             (read-number lex2)

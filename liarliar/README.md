@@ -15,13 +15,15 @@ A bootstrap liar compiler written in liar itself. Compiles liar source to lIR.
 - Function definitions with typed parameters
 - Function calls (direct, no closures)
 - Return type annotations (`-> i64`)
+- Macros with quasiquote, unquote (`,` and `~`), unquote-splicing (`~@`)
+- Nested macro expansion
 
 **Known limitations:**
 - No `ns` (namespace) support
-- No `defstruct` 
+- No `defstruct`
 - No `extern` (FFI)
 - No closures (`fn`)
-- No macros
+- No variadic macros (`...` rest parameters)
 - No field access (`.`)
 - No `instance?`, `share`, `nil?`
 - Only `i64` return type supported
@@ -58,7 +60,7 @@ cargo run --release -p liar -- liarliar/main.liar 2>/dev/null > /tmp/liarliar.li
 USE_LIARLIAR=1 cargo test --release -p liar-cert --test cert
 ```
 
-This runs all 118 scenarios from `liar-cert/features/*.feature` against liarliar instead of the Rust compiler. Currently **15 scenarios pass** (basic arithmetic, type conversions, let bindings, simple macros). As liarliar gains features, more scenarios will pass.
+This runs all 118 scenarios from `liar-cert/features/*.feature` against liarliar instead of the Rust compiler. Currently **29 scenarios pass** (basic arithmetic, type conversions, let bindings, macros with quasiquote/unquote). As liarliar gains features, more scenarios will pass.
 
 **Note:** Float tests require return type inference or explicit annotations. Since the test harness uses exit codes (integers), float return values don't work yet.
 

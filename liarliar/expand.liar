@@ -190,82 +190,56 @@
       false))
 
 ;; ============================================================================
-;; Quasiquote Expansion
+;; Quasiquote Expansion (Compile-Time Template Substitution)
 ;; ============================================================================
+;;
+;; Quasiquote (`x) is a compile-time template mechanism for macros.
+;; It produces the actual S-expression structure directly, not code to build it.
+;;
+;; Example: `(+ ,x 1) with x=5 produces the S-expression (+ 5 1)
+;;          NOT (cons (quote +) (cons 5 (cons 1 nil)))
 
-;; Build (cons a b) form
-(defun make-cons-form (ctx: ptr a: ptr b: ptr) -> ptr
-  (let ((symbols (ctx-symbols ctx))
-        (cons-sym (intern symbols (make-cons-name))))
-    (scons cons-sym (scons a (scons b nil)))))
-
-;; "cons" = 99 111 110 115 0
-(defun make-cons-name () -> ptr
-  (let ((buf (heap-array 5))
-        (s0 (store-byte buf 99))
-        (s1 (store-byte (ptr+ buf 1) 111))
-        (s2 (store-byte (ptr+ buf 2) 110))
-        (s3 (store-byte (ptr+ buf 3) 115))
-        (s4 (store-byte (ptr+ buf 4) 0)))
-    buf))
-
-;; Build (append a b) form
-(defun make-append-form (ctx: ptr a: ptr b: ptr) -> ptr
-  (let ((symbols (ctx-symbols ctx))
-        (append-sym (intern symbols (make-append-name))))
-    (scons append-sym (scons a (scons b nil)))))
-
-;; "append" = 97 112 112 101 110 100 0
-(defun make-append-name () -> ptr
-  (let ((buf (heap-array 7))
-        (s0 (store-byte buf 97))
-        (s1 (store-byte (ptr+ buf 1) 112))
-        (s2 (store-byte (ptr+ buf 2) 112))
-        (s3 (store-byte (ptr+ buf 3) 101))
-        (s4 (store-byte (ptr+ buf 4) 110))
-        (s5 (store-byte (ptr+ buf 5) 100))
-        (s6 (store-byte (ptr+ buf 6) 0)))
-    buf))
-
-;; Build (quote x) form
-(defun make-quote-form (ctx: ptr x: ptr) -> ptr
-  (let ((symbols (ctx-symbols ctx))
-        (quote-sym (intern symbols (make-quote-name))))
-    (scons quote-sym (scons x nil))))
+;; Append two scons lists at compile time
+(defun append-scons (a: ptr b: ptr) -> ptr
+  (if (nil? a)
+      b
+      (scons (scons-head a) (append-scons (scons-tail a) b))))
 
 ;; Expand quasiquote on a list element by element
-;; Returns code that builds the list at runtime
+;; Returns the actual S-expression structure (compile-time)
 (defun expand-qq-list (ctx: ptr form: ptr) -> ptr
   (if (nil? form)
-      nil  ;; empty list stays nil
+      nil
       (let ((head (scons-head form))
             (tail (scons-tail form)))
         (if (unquote-splicing-form? head)
-            ;; ~@xs - splice: (append xs (expand-qq-list tail))
+            ;; ~@xs - splice elements directly into the list
             (let ((spliced (cadr head))
                   (rest (expand-qq-list ctx tail)))
-              (if (nil? rest)
-                  spliced  ;; just the spliced value
-                  (make-append-form ctx spliced rest)))
-            ;; Regular element: (cons (expand-qq head) (expand-qq-list tail))
-            (let ((expanded-head (expand-qq ctx head))
-                  (expanded-tail (expand-qq-list ctx tail)))
-              (make-cons-form ctx expanded-head expanded-tail))))))
+              (if (nil? spliced)
+                  rest
+                  (if (scons? spliced)
+                      (append-scons spliced rest)
+                      ;; spliced is not a list - just include it
+                      (scons spliced rest))))
+            ;; Regular element: build scons with expanded head
+            (scons (expand-qq ctx head)
+                   (expand-qq-list ctx tail))))))
 
-;; Main quasiquote expansion
+;; Main quasiquote expansion - compile-time template substitution
 ;; `x where x may contain ~y and ~@z
 (defun expand-qq (ctx: ptr form: ptr) -> ptr
   (if (unquote-form? form)
-      ;; ~x - just return x (it will be evaluated)
+      ;; ~x - return x directly (already substituted by macro expansion)
       (cadr form)
       (if (unquote-splicing-form? form)
-          ;; ~@x at top level is an error (can't splice into non-list)
-          nil  ;; TODO: proper error handling
+          ;; ~@x at top level is an error (can't splice into non-list context)
+          nil
           (if (scons? form)
-              ;; List: expand each element
+              ;; List: expand each element, building scons structure
               (expand-qq-list ctx form)
-              ;; Atom: quote it
-              (make-quote-form ctx form)))))
+              ;; Atom (symbol, number, etc.): return as-is
+              form))))
 
 ;; ============================================================================
 ;; Macro Expansion
@@ -346,8 +320,8 @@
           ;; 'x - return x unchanged
           (cadr form)
           (if (quasiquote-form? form)
-              ;; `x - expand quasiquote
-              (expand-qq ctx (cadr form))
+              ;; `x - expand quasiquote, then expand result for nested macros
+              (expand ctx (expand-qq ctx (cadr form)))
               (if (scons? form)
                   ;; List - could be macro call or regular form
                   (if (macro-call? ctx form)
