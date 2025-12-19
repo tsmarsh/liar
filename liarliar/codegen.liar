@@ -26,10 +26,13 @@
    cg-fns: ptr         ;; List of generated function definitions
    cg-block-counter: i64  ;; Counter for unique block labels
    cg-blocks: ptr      ;; List of accumulated blocks (for branching)
-   cg-merge-label: ptr)) ;; Label for merge block (set by if)
+   cg-merge-label: ptr ;; Label for merge block (set by if)
+   cg-structs: ptr     ;; NEW: List of struct definitions (unused)
+   cg-type-id: i64     ;; NEW: Counter for type IDs (unused)
+   cg-struct-defs: ptr)) ;; NEW: List of struct defs (unused)
 
 (defun make-codegen-ctx (syms: ptr) -> ptr
-  (share (CodegenCtx 0 syms (make-global-env) nil 0 nil nil)))
+  (share (CodegenCtx 0 syms (make-global-env) nil 0 nil nil nil 1 nil)))
 
 (defun cg-temp (ctx: ptr) -> i64 (. ctx cg-temp))
 (defun cg-syms (ctx: ptr) -> ptr (. ctx cg-syms))
@@ -38,22 +41,68 @@
 (defun cg-block-counter (ctx: ptr) -> i64 (. ctx cg-block-counter))
 (defun cg-blocks (ctx: ptr) -> ptr (. ctx cg-blocks))
 (defun cg-merge-label (ctx: ptr) -> ptr (. ctx cg-merge-label))
+(defun cg-structs (ctx: ptr) -> ptr (. ctx cg-structs))
+(defun cg-type-id (ctx: ptr) -> i64 (. ctx cg-type-id))
+(defun cg-struct-defs (ctx: ptr) -> ptr (. ctx cg-struct-defs))
+
+;; Register a struct (returns updated context with new type_id)
+;; Entry is stored as (name fields type_id) - a 3-element scons list
+(defun cg-register-struct (ctx: ptr name: ptr fields: ptr) -> ptr
+  (let ((type-id (cg-type-id ctx))
+        (entry (scons name (scons fields (scons (box-int type-id) nil)))))
+    (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
+                       (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
+                       (scons entry (cg-structs ctx)) (+ type-id 1) (cg-struct-defs ctx)))))
+
+;; Add defstruct definition to list
+(defun cg-add-struct-def (ctx: ptr sdef: ptr) -> ptr
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
+                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
+                     (cg-structs ctx) (cg-type-id ctx) (scons sdef (cg-struct-defs ctx)))))
+
+;; Compare two interned symbols by their IDs
+(defun sym-eq? (a: ptr b: ptr) -> i64
+  (if (= (symbol-id a) (symbol-id b)) 1 0))
+
+;; Lookup struct by name - returns entry (name fields type_id) scons list or nil
+(defun cg-lookup-struct (ctx: ptr name: ptr) -> ptr
+  (lookup-struct-loop (cg-structs ctx) name))
+
+(defun lookup-struct-loop (lst: ptr name: ptr) -> ptr
+  (if (nil? lst)
+      nil
+      (let ((entry (car lst))
+            (entry-name (car entry)))  ;; name is first element
+        (if (= 1 (sym-eq? entry-name name))
+            entry  ;; return full entry (name fields type_id)
+            (lookup-struct-loop (cdr lst) name)))))
+
+;; Helper to get fields from struct entry
+(defun struct-entry-fields (entry: ptr) -> ptr
+  (cadr entry))
+
+;; Helper to get type_id from struct entry
+(defun struct-entry-type-id (entry: ptr) -> i64
+  (unbox-int (caddr entry)))
 
 ;; Get next temp and increment counter
 (defun cg-next-temp (ctx: ptr) -> ptr
   (share (CodegenCtx (+ (cg-temp ctx) 1) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
-                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx))))
+                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
+                     (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx))))
 
 ;; Update environment
 (defun cg-with-env (ctx: ptr new-env: ptr) -> ptr
   (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) new-env (cg-fns ctx)
-                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx))))
+                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
+                     (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx))))
 
 ;; Add function to list
 (defun cg-add-fn (ctx: ptr fn-def: ptr) -> ptr
   (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx)
                      (scons fn-def (cg-fns ctx))
-                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx))))
+                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
+                     (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx))))
 
 ;; ============================================================
 ;; Block Management Helpers
@@ -62,22 +111,25 @@
 ;; Increment block counter and return updated context
 (defun cg-inc-block-counter (ctx: ptr) -> ptr
   (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
-                     (+ (cg-block-counter ctx) 1) (cg-blocks ctx) (cg-merge-label ctx))))
+                     (+ (cg-block-counter ctx) 1) (cg-blocks ctx) (cg-merge-label ctx)
+                     (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx))))
 
 ;; Add a block to the accumulated blocks list
 (defun cg-add-block (ctx: ptr block: ptr) -> ptr
   (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
-                     (cg-block-counter ctx) (scons block (cg-blocks ctx)) (cg-merge-label ctx))))
+                     (cg-block-counter ctx) (scons block (cg-blocks ctx)) (cg-merge-label ctx)
+                     (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx))))
 
 ;; Set the merge label for the if expression
 (defun cg-set-merge-label (ctx: ptr label: ptr) -> ptr
   (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
-                     (cg-block-counter ctx) (cg-blocks ctx) label)))
+                     (cg-block-counter ctx) (cg-blocks ctx) label
+                     (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx))))
 
 ;; Reset block state for new function
 (defun cg-reset-blocks (ctx: ptr) -> ptr
   (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
-                     0 nil nil)))
+                     0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx))))
 
 ;; ============================================================
 ;; Symbol/String Helpers
@@ -97,6 +149,45 @@
       (store-byte (ptr+ buf 6) b6)
       (store-byte (ptr+ buf 7) b7)
       (store-byte (ptr+ buf len) 0)  ;; null terminate at len
+      (intern syms buf))))
+
+;; Helper for symbols up to 12 chars
+(defun make-sym-long (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 len: i64) -> ptr
+  (let ((buf (heap-array 13)))  ;; 12 + null
+    (do
+      (store-byte buf b0)
+      (store-byte (ptr+ buf 1) b1)
+      (store-byte (ptr+ buf 2) b2)
+      (store-byte (ptr+ buf 3) b3)
+      (store-byte (ptr+ buf 4) b4)
+      (store-byte (ptr+ buf 5) b5)
+      (store-byte (ptr+ buf 6) b6)
+      (store-byte (ptr+ buf 7) b7)
+      (store-byte (ptr+ buf 8) b8)
+      (store-byte (ptr+ buf 9) b9)
+      (store-byte (ptr+ buf 10) b10)
+      (store-byte (ptr+ buf 11) b11)
+      (store-byte (ptr+ buf len) 0)
+      (intern syms buf))))
+
+;; Helper for symbols of exactly 13 chars
+(defun make-sym-13 (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12: i64) -> ptr
+  (let ((buf (heap-array 14)))  ;; 13 + null
+    (do
+      (store-byte buf b0)
+      (store-byte (ptr+ buf 1) b1)
+      (store-byte (ptr+ buf 2) b2)
+      (store-byte (ptr+ buf 3) b3)
+      (store-byte (ptr+ buf 4) b4)
+      (store-byte (ptr+ buf 5) b5)
+      (store-byte (ptr+ buf 6) b6)
+      (store-byte (ptr+ buf 7) b7)
+      (store-byte (ptr+ buf 8) b8)
+      (store-byte (ptr+ buf 9) b9)
+      (store-byte (ptr+ buf 10) b10)
+      (store-byte (ptr+ buf 11) b11)
+      (store-byte (ptr+ buf 12) b12)
+      (store-byte (ptr+ buf 13) 0)
       (intern syms buf))))
 
 ;; Common lIR symbols
@@ -143,6 +234,18 @@
 (defun sym-uitofp (s: ptr) -> ptr  (make-sym s 117 105 116 111 102 112 0 0 6)) ;; uitofp
 (defun sym-fpext (s: ptr) -> ptr   (make-sym s 102 112 101 120 116 0 0 0 5))  ;; fpext
 (defun sym-fptrunc (s: ptr) -> ptr (make-sym s 102 112 116 114 117 110 99 0 7)) ;; fptrunc
+
+;; Pointer and null
+(defun sym-null (s: ptr) -> ptr    (make-sym s 110 117 108 108 0 0 0 0 4))     ;; null
+
+;; Struct-related lIR symbols
+(defun sym-defstruct (s: ptr) -> ptr   (make-sym-long s 100 101 102 115 116 114 117 99 116 0 0 0 9)) ;; defstruct
+(defun sym-heap-struct (s: ptr) -> ptr (make-sym-long s 104 101 97 112 45 115 116 114 117 99 116 0 11)) ;; heap-struct
+(defun sym-getelementptr (s: ptr) -> ptr (make-sym-13 s 103 101 116 101 108 101 109 101 110 116 112 116 114)) ;; getelementptr
+(defun sym-load (s: ptr) -> ptr    (make-sym s 108 111 97 100 0 0 0 0 4))      ;; load
+(defun sym-inbounds (s: ptr) -> ptr (make-sym s 105 110 98 111 117 110 100 115 8)) ;; inbounds
+(defun sym-alloca (s: ptr) -> ptr  (make-sym s 97 108 108 111 99 97 0 0 6))    ;; alloca
+(defun sym-store (s: ptr) -> ptr   (make-sym s 115 116 111 114 101 0 0 0 5))   ;; store
 
 ;; Liar special forms (for dispatch)
 (defun str-if () -> ptr
@@ -299,6 +402,34 @@
         (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 117) (store-byte (ptr+ b 5) 110)
         (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 0) b)))
 
+;; Builtin operator strings
+(defun str-nil? () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 110) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 108)
+        (store-byte (ptr+ b 3) 63) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-defstruct () -> ptr
+  (let ((b (heap-array 10)))
+    (do (store-byte b 100) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 102)
+        (store-byte (ptr+ b 3) 115) (store-byte (ptr+ b 4) 116) (store-byte (ptr+ b 5) 114)
+        (store-byte (ptr+ b 6) 117) (store-byte (ptr+ b 7) 99) (store-byte (ptr+ b 8) 116)
+        (store-byte (ptr+ b 9) 0) b)))
+
+(defun str-share () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 115) (store-byte (ptr+ b 1) 104) (store-byte (ptr+ b 2) 97)
+        (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 0) b)))
+
+(defun str-instance? () -> ptr
+  (let ((b (heap-array 10)))
+    (do (store-byte b 105) (store-byte (ptr+ b 1) 110) (store-byte (ptr+ b 2) 115)
+        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 97) (store-byte (ptr+ b 5) 110)
+        (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 63)
+        (store-byte (ptr+ b 9) 0) b)))
+
+(defun str-dot () -> ptr
+  (let ((b (heap-array 2))) (do (store-byte b 46) (store-byte (ptr+ b 1) 0) b)))
+
 ;; ============================================================
 ;; AST Predicates
 ;; ============================================================
@@ -334,6 +465,10 @@
 ;; Build: (select cond then else)
 (defun lir-select (syms: ptr cond-v: ptr then-v: ptr else-v: ptr) -> ptr
   (scons (sym-select syms) (scons cond-v (scons then-v (scons else-v nil)))))
+
+;; Build: (ptr null)
+(defun lir-null (syms: ptr) -> ptr
+  (scons (sym-ptr syms) (scons (sym-null syms) nil)))
 
 ;; Helper: prepend @ to a string and intern it as a symbol
 (extern strlen i64 (ptr))
@@ -527,7 +662,14 @@
             ((streq name (str-uitofp))      (codegen-conv ctx form (sym-uitofp (cg-syms ctx))))
             ((streq name (str-fpext))       (codegen-conv ctx form (sym-fpext (cg-syms ctx))))
             ((streq name (str-fptrunc))     (codegen-conv ctx form (sym-fptrunc (cg-syms ctx))))
-            (else                      (codegen-call ctx form))))
+            ;; Builtin predicates
+            ((streq name (str-nil?))        (codegen-nil? ctx form))
+            ;; Struct operations
+            ((streq name (str-defstruct))   (codegen-defstruct ctx form))
+            ((streq name (str-share))       (codegen-share ctx form))
+            ((streq name (str-instance?))   (codegen-instance? ctx form))
+            ((streq name (str-dot))         (codegen-field-access ctx form))
+            (else                      (codegen-call-or-struct ctx form))))
         (codegen-call ctx form))))
 
 ;; ============================================================
@@ -576,6 +718,284 @@
         (syms (cg-syms ctx)))
     ;; Emit: (op target-type value)
     (pcons ctx (scons op (scons target-type (scons value-v nil))))))
+
+;; ============================================================
+;; Builtin Predicates
+;; ============================================================
+
+;; nil? - check if a pointer is null
+;; Form: (nil? expr)
+;; Emits: (icmp eq arg (ptr null))
+(defun codegen-nil? (ctx: ptr form: ptr) -> ptr
+  (let ((arg-form (cadr form))
+        (arg-result (codegen-expr ctx arg-form))
+        (ctx (pcons-head arg-result))
+        (arg-v (pcons-tail arg-result))
+        (syms (cg-syms ctx)))
+    ;; Emit: (icmp eq arg (ptr null))
+    (pcons ctx (lir-icmp syms (sym-eq syms) arg-v (lir-null syms)))))
+
+;; ============================================================
+;; Struct Operations
+;; ============================================================
+
+;; Try to codegen as struct constructor, fall back to function call
+(defun codegen-call-or-struct (ctx: ptr form: ptr) -> ptr
+  (let ((head (car form))
+        (struct-info (if (symbol? head) (cg-lookup-struct ctx head) nil)))
+    (if (nil? struct-info)
+        (codegen-call ctx form)
+        (codegen-struct-constructor ctx form struct-info))))
+
+;; Helper to count scons list length
+(defun scons-length (lst: ptr) -> i64
+  (scons-length-loop lst 0))
+
+(defun scons-length-loop (lst: ptr acc: i64) -> i64
+  (if (nil? lst)
+      acc
+      (scons-length-loop (cdr lst) (+ acc 1))))
+
+;; Helper string for __type_id
+(defun str-type-id () -> ptr
+  (let ((b (heap-array 10)))
+    (do (store-byte b 95) (store-byte (ptr+ b 1) 95)   ;; __
+        (store-byte (ptr+ b 2) 116) (store-byte (ptr+ b 3) 121) ;; ty
+        (store-byte (ptr+ b 4) 112) (store-byte (ptr+ b 5) 101) ;; pe
+        (store-byte (ptr+ b 6) 95) (store-byte (ptr+ b 7) 105)  ;; _i
+        (store-byte (ptr+ b 8) 100) (store-byte (ptr+ b 9) 0) b))) ;; d
+
+;; Helper to build %struct.Name symbol
+(defun make-struct-type-sym (syms: ptr name: ptr) -> ptr
+  (let ((name-str (symbol-name name))
+        (name-len (strlen name-str))
+        (buf-len (+ 9 name-len))  ;; "%struct." + name + null
+        (buf (heap-array buf-len)))
+    (do
+      (store-byte buf 37)           ;; %
+      (store-byte (ptr+ buf 1) 115) ;; s
+      (store-byte (ptr+ buf 2) 116) ;; t
+      (store-byte (ptr+ buf 3) 114) ;; r
+      (store-byte (ptr+ buf 4) 117) ;; u
+      (store-byte (ptr+ buf 5) 99)  ;; c
+      (store-byte (ptr+ buf 6) 116) ;; t
+      (store-byte (ptr+ buf 7) 46)  ;; .
+      (copy-str-loop buf 8 name-str 0 name-len)
+      (store-byte (ptr+ buf (+ 8 name-len)) 0)
+      (intern syms buf))))
+
+;; Parse defstruct field types (x: i64 y: i64) -> (i64 i64)
+(defun parse-struct-fields (lst: ptr acc: ptr) -> ptr
+  (if (nil? lst)
+      (reverse-scons acc)
+      (let ((name (car lst))
+            (rest (cdr lst)))
+        (if (nil? rest)
+            (reverse-scons acc)
+            (let ((colon (car rest))
+                  (rest2 (cdr rest)))
+              (if (nil? rest2)
+                  (reverse-scons acc)
+                  (let ((typ (car rest2))
+                        (rest3 (cdr rest2)))
+                    (parse-struct-fields rest3 (scons typ acc)))))))))
+
+;; Build field list for struct registry: ((field-name . type) ...)
+(defun build-field-info (lst: ptr acc: ptr) -> ptr
+  (if (nil? lst)
+      (reverse-scons acc)
+      (let ((name (car lst))
+            (rest (cdr lst)))
+        (if (nil? rest)
+            (reverse-scons acc)
+            (let ((colon (car rest))
+                  (rest2 (cdr rest)))
+              (if (nil? rest2)
+                  (reverse-scons acc)
+                  (let ((typ (car rest2))
+                        (rest3 (cdr rest2)))
+                    (build-field-info rest3 (scons (pcons name typ) acc)))))))))
+
+;; Codegen for defstruct: (defstruct Name (x: i64 y: i64))
+(defun codegen-defstruct (ctx: ptr form: ptr) -> ptr
+  (let ((name (cadr form))
+        (raw-fields (caddr form))
+        (field-types (parse-struct-fields raw-fields nil))
+        (field-info (build-field-info raw-fields nil))
+        (syms (cg-syms ctx))
+        ;; Prepend i64 for type_id field
+        (all-types (scons (sym-i64 syms) field-types))
+        ;; Build defstruct form
+        (lir-def (scons (sym-defstruct syms) (scons name (scons all-types nil))))
+        ;; Register struct with prepended __type_id field
+        (type-id-field (pcons (intern syms (str-type-id)) (sym-i64 syms)))
+        (all-fields (scons type-id-field field-info))
+        (ctx (cg-register-struct ctx name all-fields))
+        (ctx (cg-add-struct-def ctx lir-def)))
+    (pcons ctx nil)))
+
+;; Helper to codegen a list of args
+(defun codegen-args-list (ctx: ptr args: ptr acc: ptr) -> ptr
+  (if (nil? args)
+      (pcons ctx (reverse-scons acc))
+      (let ((result (codegen-expr ctx (car args)))
+            (ctx (pcons-head result))
+            (v (pcons-tail result)))
+        (codegen-args-list ctx (cdr args) (scons v acc)))))
+
+;; Codegen for share: (share (Point 10 20))
+;; Emits: (heap-struct Point type-id arg1 arg2 ...)
+(defun codegen-share (ctx: ptr form: ptr) -> ptr
+  (let ((inner (cadr form)))
+    (if (scons? inner)
+        (let ((struct-name (car inner))
+              (struct-info (cg-lookup-struct ctx struct-name)))
+          (if (nil? struct-info)
+              ;; Not a struct constructor - error
+              (pcons ctx (box-int 0))
+              (let ((args (cdr inner))
+                    (type-id (struct-entry-type-id struct-info))
+                    (syms (cg-syms ctx))
+                    ;; Generate argument expressions
+                    (args-result (codegen-args-list ctx args nil))
+                    (ctx (pcons-head args-result))
+                    (arg-vals (pcons-tail args-result))
+                    ;; Prepend type-id to field values
+                    (all-vals (scons (lir-int syms type-id) arg-vals)))
+                (pcons ctx (scons (sym-heap-struct syms)
+                                 (scons struct-name all-vals))))))
+        (pcons ctx (box-int 0)))))
+
+;; Find field index in struct fields list (0-indexed)
+(defun find-field-index (fields: ptr field-name: ptr idx: i64) -> i64
+  (if (nil? fields)
+      -1
+      (let ((entry (car fields))
+            (name (pcons-head entry)))
+        (if (= 1 (sym-eq? name field-name))
+            idx
+            (find-field-index (cdr fields) field-name (+ idx 1))))))
+
+;; Find struct that has a given field
+(defun find-struct-with-field (ctx: ptr field-name: ptr) -> ptr
+  (find-struct-loop (cg-structs ctx) field-name))
+
+(defun find-struct-loop (structs: ptr field-name: ptr) -> ptr
+  (if (nil? structs)
+      nil
+      (let ((entry (car structs))
+            (fields (struct-entry-fields entry)))
+        (if (= 1 (struct-has-field? fields field-name))
+            entry
+            (find-struct-loop (cdr structs) field-name)))))
+
+(defun struct-has-field? (fields: ptr field-name: ptr) -> i64
+  (if (nil? fields)
+      0
+      (let ((entry (car fields))
+            (name (pcons-head entry)))
+        (if (= 1 (sym-eq? name field-name))
+            1
+            (struct-has-field? (cdr fields) field-name)))))
+
+;; Codegen for field access: (. obj field)
+(defun codegen-field-access (ctx: ptr form: ptr) -> ptr
+  (let ((obj-form (cadr form))
+        (field-name (caddr form))
+        (obj-result (codegen-expr ctx obj-form))
+        (ctx (pcons-head obj-result))
+        (obj-v (pcons-tail obj-result))
+        (syms (cg-syms ctx))
+        (struct-info (find-struct-with-field ctx field-name)))
+    (if (nil? struct-info)
+        (pcons ctx (lir-int syms -999))
+        (codegen-field-access-found ctx obj-v field-name struct-info))))
+
+(defun codegen-field-access-found (ctx: ptr obj-v: ptr field-name: ptr struct-info: ptr) -> ptr
+  (let ((syms (cg-syms ctx))
+        (struct-name (car struct-info))
+        (fields (struct-entry-fields struct-info))
+        (field-idx (find-field-index fields field-name 0))
+        (struct-ty (make-struct-type-sym syms struct-name)))
+    ;; Emit: (load i64 (getelementptr inbounds %struct.X obj (i64 0) (i64 idx)))
+    (pcons ctx (scons (sym-load syms)
+                     (scons (sym-i64 syms)
+                            (scons (scons (sym-getelementptr syms)
+                                         (scons (sym-inbounds syms)
+                                                (scons struct-ty
+                                                       (scons obj-v
+                                                              (scons (lir-int syms 0)
+                                                                     (scons (lir-int syms field-idx) nil))))))
+                                   nil))))))
+
+;; Codegen for struct constructor: (Point 10 20)
+(defun codegen-struct-constructor (ctx: ptr form: ptr struct-info: ptr) -> ptr
+  (let ((name (car form))
+        (args (cdr form))
+        (fields (struct-entry-fields struct-info))
+        (type-id (struct-entry-type-id struct-info))
+        (num-fields (scons-length fields))
+        (syms (cg-syms ctx))
+        ;; Generate argument expressions
+        (args-result (codegen-args-list ctx args nil))
+        (ctx (pcons-head args-result))
+        (arg-vals (pcons-tail args-result))
+        (struct-ty (make-struct-type-sym syms name))
+        (ptr-sym (sym-ptr syms))
+        ;; Build the alloca + stores + ptr return expression
+        (body (build-struct-stores syms struct-ty arg-vals type-id 1 nil)))
+    ;; Wrap in let with alloca
+    (pcons ctx (scons (sym-let syms)
+                      (scons (scons (scons ptr-sym
+                                          (scons (scons (sym-alloca syms)
+                                                       (scons (sym-i64 syms)
+                                                              (scons (lir-int syms num-fields) nil)))
+                                                nil))
+                                   nil)
+                            (scons (scons (sym-store syms)
+                                         (scons (lir-int syms type-id)
+                                                (scons (make-gep-idx0 syms struct-ty ptr-sym 0) nil)))
+                                   body))))))
+
+;; Helper to generate GEP for field index 0,N
+(defun make-gep-idx0 (syms: ptr struct-ty: ptr ptr-sym: ptr idx: i64) -> ptr
+  (scons (sym-getelementptr syms)
+         (scons (sym-inbounds syms)
+                (scons struct-ty
+                       (scons ptr-sym
+                              (scons (lir-int syms 0)
+                                     (scons (lir-int syms idx) nil)))))))
+
+;; Build store expressions for struct fields
+(defun build-struct-stores (syms: ptr struct-ty: ptr args: ptr type-id: i64 idx: i64 acc: ptr) -> ptr
+  (if (nil? args)
+      (reverse-scons (scons (sym-ptr syms) acc))
+      (let ((arg (car args))
+            (store-expr (scons (sym-store syms)
+                              (scons arg
+                                     (scons (make-gep-idx0 syms struct-ty (sym-ptr syms) idx) nil)))))
+        (build-struct-stores syms struct-ty (cdr args) type-id (+ idx 1) (scons store-expr acc)))))
+
+;; Codegen for instance?: (instance? obj Type)
+(defun codegen-instance? (ctx: ptr form: ptr) -> ptr
+  (let ((obj-form (cadr form))
+        (type-name (caddr form))
+        (struct-info (cg-lookup-struct ctx type-name)))
+    (if (nil? struct-info)
+        ;; Type not found - return false
+        (pcons ctx (lir-int (cg-syms ctx) 0))
+        ;; Generate runtime check
+        (let ((obj-result (codegen-expr ctx obj-form))
+              (ctx (pcons-head obj-result))
+              (obj-v (pcons-tail obj-result))
+              (type-id (struct-entry-type-id struct-info))
+              (syms (cg-syms ctx)))
+          ;; Emit: (icmp eq (load i64 (gep obj 0 0)) type-id)
+          (pcons ctx (lir-icmp syms (sym-eq syms)
+                              (scons (sym-load syms)
+                                    (scons (sym-i64 syms)
+                                           (scons (make-gep-idx0 syms (make-struct-type-sym syms type-name) obj-v 0) nil)))
+                              (lir-int syms type-id)))))))
 
 ;; ============================================================
 ;; If Expression (with proper branching)
@@ -794,7 +1214,7 @@
         (body (get-defun-body form))
         (syms (cg-syms ctx))
         ;; Reset temp and block counters for function body
-        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) nil 0 nil nil)))
+        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) nil 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx))))
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
@@ -831,6 +1251,8 @@
 (defun codegen-module (forms: ptr syms: ptr) -> ptr
   (let ((ctx (make-codegen-ctx syms))
         (ctx (codegen-toplevel ctx forms))
-        (result (cg-fns ctx)))
-    result))
+        (struct-defs (cg-struct-defs ctx))
+        (fn-defs (cg-fns ctx)))
+    ;; Combine struct defs and function defs
+    (append-scons (reverse-scons struct-defs) fn-defs)))
 

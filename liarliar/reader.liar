@@ -91,7 +91,7 @@
       (if (<= c 122) true (if (>= c 65) (if (<= c 90) true false) false))
       (if (>= c 65) (if (<= c 90) true false) false)))
 
-;; Symbol start: alpha, _, +, -, *, /, <, >, =, ?, !, &
+;; Symbol start: alpha, _, +, -, *, /, <, >, =, ?, !, &, .
 (defun symbol-start? (c: i64)
   (cond
     ((alpha? c) true)
@@ -106,6 +106,7 @@
     ((= c 63) true)   ;; ?
     ((= c 33) true)   ;; !
     ((= c 38) true)   ;; &
+    ((= c 46) true)   ;; .
     (else false)))
 
 ;; Symbol continue: symbol-start, digit, or .
