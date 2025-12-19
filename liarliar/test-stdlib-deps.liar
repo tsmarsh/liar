@@ -1,0 +1,93 @@
+;; test-stdlib-deps.liar - Validate stdlib works for liarliar's needs
+;;
+;; This file tests the liar stdlib components that liarliar will use.
+;; If any test fails, the bug must be fixed in liar before proceeding
+;; with the stdlib rewrite.
+;;
+;; Run: liarc liarliar/test-stdlib-deps.liar -o /tmp/test-deps.lir
+;;      lair /tmp/test-deps.lir -o /tmp/test-deps
+;;      /tmp/test-deps
+;;
+;; KNOWN LIMITATIONS DISCOVERED:
+;; 1. Cons stores head as i64, not ptr - liarliar needs ptr storage
+;; 2. HashMap only supports integer keys - liarliar needs string keys
+;; 3. HashMap protocol dispatch (get/assoc) crashes - use hm-get/hm-assoc
+
+(ns liarliar.test-stdlib-deps
+  (:require [liar.core :refer :all]
+            [liar.seq :refer :all]
+            [liar.hashmap :refer :all]))
+
+;; ============================================================
+;; Test Helpers
+;; ============================================================
+
+(defun assert-eq-int (actual: i64 expected: i64 msg: string) -> i64
+  (if (= actual expected)
+      0
+      (do (print "FAIL: ")
+          (println msg)
+          1)))
+
+;; ============================================================
+;; Seq Tests (liar.seq)
+;; ============================================================
+
+;; Test basic cons and first/rest
+(defun test-cons-basic () -> i64
+  (let ((lst (cons 1 (cons 2 (cons 3 nil)))))
+    (let ((f1 (assert-eq-int (first lst) 1 "first of (1 2 3)")))
+      (let ((f2 (assert-eq-int (second lst) 2 "second of (1 2 3)")))
+        (let ((f3 (assert-eq-int (third lst) 3 "third of (1 2 3)")))
+          (+ f1 (+ f2 f3)))))))
+
+;; ============================================================
+;; HashMap Tests (liar.hashmap)
+;; Uses hm-get/hm-assoc directly (protocol dispatch crashes)
+;; ============================================================
+
+;; Test hashmap with integer keys
+(defun test-hashmap-int-keys () -> i64
+  (let ((m0 (hash-map)))
+    (let ((m1 (hm-assoc m0 1 42)))
+      (let ((m2 (hm-assoc m1 2 99)))
+        (let ((m (hm-assoc m2 3 77)))
+          (let ((f1 (assert-eq-int (hm-get m 1) 42 "hm-get 1")))
+            (let ((f2 (assert-eq-int (hm-get m 2) 99 "hm-get 2")))
+              (let ((f3 (assert-eq-int (hm-get m 3) 77 "hm-get 3")))
+                (let ((f4 (assert-eq-int (hm-get m 999) 0 "hm-get missing")))
+                  (+ f1 (+ f2 (+ f3 f4))))))))))))
+
+;; ============================================================
+;; Core Tests (liar.core)
+;; ============================================================
+
+;; Test inc from core
+(defun test-core-inc () -> i64
+  (assert-eq-int (inc (inc (inc 1))) 4 "inc chain"))
+
+;; ============================================================
+;; Main
+;; ============================================================
+
+(defun main () -> i64
+  (do
+    (println "=== Stdlib Dependency Validation ===")
+    (println "")
+    (println "Testing liar.seq...")
+    (let ((seq-fails (test-cons-basic)))
+      (do (if (= seq-fails 0) (println "  seq: OK") 0)
+          (println "")
+          (println "Testing liar.hashmap...")
+          (let ((hashmap-fails (test-hashmap-int-keys)))
+            (do (if (= hashmap-fails 0) (println "  hashmap: OK") 0)
+                (println "")
+                (println "Testing liar.core...")
+                (let ((core-fails (test-core-inc)))
+                  (do (if (= core-fails 0) (println "  core: OK") 0)
+                      (println "")
+                      (let ((total (+ seq-fails (+ hashmap-fails core-fails))))
+                        (do (if (= total 0)
+                                (println "All tests passed!")
+                                (println "Some tests FAILED"))
+                            total))))))))))
