@@ -7,3 +7,6 @@ Cargo.lock
 
 # Test artifacts
 *.ll
+
+# Local tooling state
+.moth/.current
