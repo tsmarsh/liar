@@ -315,24 +315,33 @@
     (read-list-elements start-lex table)))
 
 ;; ============================================================================
-;; Vector Parsing - produces actual PersistentVector
+;; Vector Parsing - parsed as lists for bootstrap
 ;; ============================================================================
 
-;; Read vector elements until ] - STUB for bootstrap
-;; Vector literals not supported in bootstrap compiler
-(defun skip-until-bracket (lex: ptr) -> ptr
-  (let ((c (peek-char lex)))
+;; Read vector elements until ]
+;; Returns (new-lexer . scons-list)
+(defun read-vector-elements (lex: ptr table: ptr) -> ptr
+  (let ((lex2 (skip-ws lex))
+        (c (peek-char lex2))
+        (line (lexer-line lex2))
+        (col (lexer-col lex2)))
     (if (= c 93)  ;; ]
-        (advance-char lex)
+        (pcons (advance-char lex2) nil)  ;; end of vector
         (if (eof? c)
-            lex
-            (skip-until-bracket (advance-char lex))))))
+            (pcons lex2 nil)  ;; unclosed vector
+            (let ((elem-result (read-value lex2 table))
+                  (elem-lex (pcons-head elem-result))
+                  (elem-val (pcons-tail elem-result))
+                  (rest-result (read-vector-elements elem-lex table))
+                  (rest-lex (pcons-head rest-result))
+                  (rest-list (pcons-tail rest-result)))
+              (pcons rest-lex (scons-loc elem-val rest-list line col)))))))
 
-;; Read a vector: [ ... ] - STUB returns nil
-;; Vector literals not supported in bootstrap compiler
+;; Read a vector: [ ... ]
+;; Parsed as a list for now (sufficient for protocol param lists).
 (defun read-vector (lex: ptr table: ptr) -> ptr
-  (let ((end-lex (skip-until-bracket (advance-char lex))))
-    (pcons end-lex nil)))
+  (let ((start-lex (advance-char lex)))  ;; skip [
+    (read-vector-elements start-lex table)))
 
 ;; ============================================================================
 ;; Quote Handling
