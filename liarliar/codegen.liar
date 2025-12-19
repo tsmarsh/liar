@@ -728,6 +728,43 @@
         (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 63)
         (store-byte (ptr+ b 9) 0) b)))
 
+(defun str-instance-check () -> ptr
+  (let ((b (heap-array 17)))
+    (do (store-byte b 95) (store-byte (ptr+ b 1) 95) (store-byte (ptr+ b 2) 105)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 116)
+        (store-byte (ptr+ b 6) 97) (store-byte (ptr+ b 7) 110) (store-byte (ptr+ b 8) 99)
+        (store-byte (ptr+ b 9) 101) (store-byte (ptr+ b 10) 95) (store-byte (ptr+ b 11) 99)
+        (store-byte (ptr+ b 12) 104) (store-byte (ptr+ b 13) 101) (store-byte (ptr+ b 14) 99)
+        (store-byte (ptr+ b 15) 107) (store-byte (ptr+ b 16) 0) b)))
+
+(defun str-instance-obj () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 111) (store-byte (ptr+ b 1) 98) (store-byte (ptr+ b 2) 106)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-instance-type-id () -> ptr
+  (let ((b (heap-array 8)))
+    (do (store-byte b 116) (store-byte (ptr+ b 1) 121) (store-byte (ptr+ b 2) 112)
+        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 105)
+        (store-byte (ptr+ b 6) 100) (store-byte (ptr+ b 7) 0) b)))
+
+(defun str-instance-null () -> ptr
+  (let ((b (heap-array 15)))
+    (do (store-byte b 95) (store-byte (ptr+ b 1) 95) (store-byte (ptr+ b 2) 105)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 116)
+        (store-byte (ptr+ b 6) 97) (store-byte (ptr+ b 7) 110) (store-byte (ptr+ b 8) 99)
+        (store-byte (ptr+ b 9) 101) (store-byte (ptr+ b 10) 95) (store-byte (ptr+ b 11) 110)
+        (store-byte (ptr+ b 12) 117) (store-byte (ptr+ b 13) 108) (store-byte (ptr+ b 14) 0) b)))
+
+(defun str-instance-check-lbl () -> ptr
+  (let ((b (heap-array 17)))
+    (do (store-byte b 95) (store-byte (ptr+ b 1) 95) (store-byte (ptr+ b 2) 105)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 116)
+        (store-byte (ptr+ b 6) 97) (store-byte (ptr+ b 7) 110) (store-byte (ptr+ b 8) 99)
+        (store-byte (ptr+ b 9) 101) (store-byte (ptr+ b 10) 95) (store-byte (ptr+ b 11) 99)
+        (store-byte (ptr+ b 12) 104) (store-byte (ptr+ b 13) 101) (store-byte (ptr+ b 14) 99)
+        (store-byte (ptr+ b 15) 107) (store-byte (ptr+ b 16) 0) b)))
+
 (defun str-dot () -> ptr
   (let ((b (heap-array 2))) (do (store-byte b 46) (store-byte (ptr+ b 1) 0) b)))
 
@@ -1354,6 +1391,38 @@
                                      (scons (make-gep-idx0 syms struct-ty (sym-ptr syms) idx) nil)))))
         (build-struct-stores syms struct-ty (cdr args) type-id (+ idx 1) (scons store-expr acc)))))
 
+(defun ensure-instance-check-fn (ctx: ptr) -> ptr
+  (let ((syms (cg-syms ctx))
+        (fn-name (intern (cg-syms ctx) (str-instance-check))))
+    (if (= 1 (fn-list-has? (cg-fn-names ctx) fn-name))
+        (pcons ctx fn-name)
+        (let ((obj-name (intern syms (str-instance-obj)))
+              (type-name (intern syms (str-instance-type-id)))
+              (null-lbl (intern syms (str-instance-null)))
+              (check-lbl (intern syms (str-instance-check-lbl)))
+              (cond-v (lir-icmp syms (sym-eq syms) obj-name (lir-null syms)))
+              (entry-block (lir-block syms (sym-entry syms)
+                                      (scons (lir-br-cond syms cond-v null-lbl check-lbl) nil)))
+              (null-block (lir-block syms null-lbl
+                                     (scons (lir-ret syms (lir-int syms 0)) nil)))
+              (check-ret (scons (sym-zext syms)
+                                (scons (sym-i64 syms)
+                                       (scons (lir-icmp syms (sym-eq syms)
+                                                        (lir-load syms (sym-i64 syms) obj-name)
+                                                        type-name)
+                                              nil))))
+              (check-block (lir-block syms check-lbl
+                                      (scons (lir-ret syms check-ret) nil)))
+              (fn-sig (scons fn-name (scons (sym-i64 syms) nil)))
+              (params (scons (scons (sym-ptr syms) (scons obj-name nil))
+                             (scons (scons (sym-i64 syms) (scons type-name nil)) nil)))
+              (fn-def (scons (sym-define syms)
+                             (scons fn-sig
+                                    (scons params
+                                           (scons entry-block
+                                                  (scons null-block (scons check-block nil))))))))
+          (pcons (cg-add-fn-def ctx fn-name fn-def) fn-name)))))
+
 ;; Codegen for instance?: (instance? obj Type)
 (defun codegen-instance? (ctx: ptr form: ptr) -> ptr
   (let ((obj-form (cadr form))
@@ -1362,16 +1431,17 @@
     (if (nil? struct-info)
         ;; Type not found - return false
         (pcons ctx (lir-int (cg-syms ctx) 0))
-        ;; Generate runtime check
-        (let ((obj-result (codegen-expr ctx obj-form))
+        ;; Delegate to helper function to keep phi/branches out of expressions.
+        (let ((fn-result (ensure-instance-check-fn ctx))
+              (ctx (pcons-head fn-result))
+              (fn-name (pcons-tail fn-result))
+              (obj-result (codegen-expr ctx obj-form))
               (ctx (pcons-head obj-result))
               (obj-v (pcons-tail obj-result))
               (type-id (struct-entry-type-id struct-info))
-              (syms (cg-syms ctx)))
-          ;; Emit: (icmp eq (load i64 obj) type-id) using the common type-id header.
-          (pcons ctx (lir-icmp syms (sym-eq syms)
-                              (lir-load syms (sym-i64 syms) obj-v)
-                              (lir-int syms type-id)))))))
+              (syms (cg-syms ctx))
+              (args (scons obj-v (scons (lir-int syms type-id) nil))))
+          (pcons ctx (lir-call syms fn-name args))))))
 
 ;; ============================================================
 ;; Protocols
@@ -1830,6 +1900,7 @@
            ((sym-eq? head (sym-fmul syms)) (sym-double syms))
            ((sym-eq? head (sym-fdiv syms)) (sym-double syms))
            ((sym-eq? head (sym-frem syms)) (sym-double syms))
+           ((sym-eq? head (sym-icmp syms)) (sym-i1 syms))
            ((sym-eq? head (sym-trunc syms)) (cadr expr))
            ((sym-eq? head (sym-zext syms)) (cadr expr))
            ((sym-eq? head (sym-sext syms)) (cadr expr))
