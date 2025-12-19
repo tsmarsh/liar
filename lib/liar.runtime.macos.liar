@@ -76,16 +76,17 @@
 ;; returns: pointer to kevent
 (defun kevent-new (ident: i64 filter: i16 flags: i16 udata: ptr) -> ptr
   (let ((ev (malloc KEVENT_SIZE)))
-    (memset ev 0 KEVENT_SIZE)
-    ;; Store ident (8 bytes at offset 0)
-    (store-byte ev 0 ident)
-    ;; Store filter (2 bytes at offset 8) and flags (2 bytes at offset 10)
-    ;; Pack filter and flags into a 4-byte value
-    (let ((filter-flags (+ (band filter 65535) (* (band flags 65535) 65536))))
-      (store-byte (ptr+ ev 8) 0 filter-flags))
-    ;; Store udata (8 bytes at offset 24)
-    (store-byte (ptr+ ev 24) 0 udata)
-    ev))
+    (do
+      (memset ev 0 KEVENT_SIZE)
+      ;; Store ident (8 bytes at offset 0)
+      (store-byte ev 0 ident)
+      ;; Store filter (2 bytes at offset 8) and flags (2 bytes at offset 10)
+      ;; Pack filter and flags into a 4-byte value
+      (let ((filter-flags (+ (band filter 65535) (* (band flags 65535) 65536))))
+        (store-byte (ptr+ ev 8) 0 filter-flags))
+      ;; Store udata (8 bytes at offset 24)
+      (store-byte (ptr+ ev 24) 0 udata)
+      ev)))
 
 ;; Get ident from kevent
 (defun kevent-ident (ev: ptr) -> i64
@@ -117,9 +118,10 @@
 ;; Create a timespec for timeout (in milliseconds)
 (defun timespec-new (ms: i64) -> ptr
   (let ((ts (malloc TIMESPEC_SIZE)))
-    (store-byte ts 0 (/ ms 1000))            ; tv_sec
-    (store-byte (ptr+ ts 8) 0 (* (% ms 1000) 1000000)) ; tv_nsec
-    ts))
+    (do
+      (store-byte ts 0 (/ ms 1000))            ; tv_sec
+      (store-byte (ptr+ ts 8) 0 (* (% ms 1000) 1000000)) ; tv_nsec
+      ts)))
 
 ;; ============================================================
 ;; Reactor Structure
@@ -146,18 +148,20 @@
         nil  ; Failed to create kqueue
         (let ((r (malloc 24))
               (events (malloc (* DEFAULT_MAX_EVENTS KEVENT_SIZE))))
-          (store-byte r 0 kq)                ; kq
-          (store-byte (ptr+ r 8) 0 events)    ; events buffer
-          (store-byte (ptr+ r 16) 0 DEFAULT_MAX_EVENTS) ; max-events
-          r))))
+          (do
+            (store-byte r 0 kq)                ; kq
+            (store-byte (ptr+ r 8) 0 events)    ; events buffer
+            (store-byte (ptr+ r 16) 0 DEFAULT_MAX_EVENTS) ; max-events
+            r)))))
 
 ;; Destroy a reactor
 (defun reactor-destroy (r: ptr)
   (let ((kq (load-byte r 0))
         (events (load-byte (ptr+ r 8) 0)))
-    (close kq)
-    (free events)
-    (free r)))
+    (do
+      (close kq)
+      (free events)
+      (free r))))
 
 ;; ============================================================
 ;; Reactor Operations
@@ -171,8 +175,9 @@
   (let ((kq (load-byte r 0))
         (ev (kevent-new fd EVFILT_READ (+ EV_ADD EV_CLEAR) waker)))
     (let ((result (kevent kq ev 1 nil 0 nil)))
-      (free ev)
-      (if (>= result 0) 0 -1))))
+      (do
+        (free ev)
+        (if (>= result 0) 0 -1)))))
 
 ;; Register a file descriptor for write readiness
 ;; fd: file descriptor to watch
@@ -182,29 +187,33 @@
   (let ((kq (load-byte r 0))
         (ev (kevent-new fd EVFILT_WRITE (+ EV_ADD EV_CLEAR) waker)))
     (let ((result (kevent kq ev 1 nil 0 nil)))
-      (free ev)
-      (if (>= result 0) 0 -1))))
+      (do
+        (free ev)
+        (if (>= result 0) 0 -1)))))
 
 ;; Deregister a file descriptor from read events
 (defun reactor-deregister-read (r: ptr fd: i32) -> i32
   (let ((kq (load-byte r 0))
         (ev (kevent-new fd EVFILT_READ EV_DELETE nil)))
     (let ((result (kevent kq ev 1 nil 0 nil)))
-      (free ev)
-      (if (>= result 0) 0 -1))))
+      (do
+        (free ev)
+        (if (>= result 0) 0 -1)))))
 
 ;; Deregister a file descriptor from write events
 (defun reactor-deregister-write (r: ptr fd: i32) -> i32
   (let ((kq (load-byte r 0))
         (ev (kevent-new fd EVFILT_WRITE EV_DELETE nil)))
     (let ((result (kevent kq ev 1 nil 0 nil)))
-      (free ev)
-      (if (>= result 0) 0 -1))))
+      (do
+        (free ev)
+        (if (>= result 0) 0 -1)))))
 
 ;; Deregister a file descriptor from all events
 (defun reactor-deregister (r: ptr fd: i32) -> i32
-  (reactor-deregister-read r fd)
-  (reactor-deregister-write r fd))
+  (do
+    (reactor-deregister-read r fd)
+    (reactor-deregister-write r fd)))
 
 ;; Poll the reactor for events
 ;; timeout: timeout in milliseconds (-1 = block, 0 = poll)
@@ -215,10 +224,11 @@
         (max-events (load-byte (ptr+ r 16) 0)))
     (let ((ts (if (>= timeout 0) (timespec-new timeout) nil))
           (n (kevent kq nil 0 events max-events ts)))
-      (if (> ts 0) (free ts) nil)
-      (if (> n 0)
-          (reactor-process-events r events n)
-          nil))))
+      (do
+        (if (> ts 0) (free ts) nil)
+        (if (> n 0)
+            (reactor-process-events r events n)
+            nil)))))
 
 ;; Process events returned by kevent
 (defun reactor-process-events (r: ptr events: ptr n: i32)
@@ -229,10 +239,11 @@
       nil
       (let ((ev (ptr+ events (* i KEVENT_SIZE)))
             (waker (kevent-udata ev)))
-        (if (> waker 0)
-            (waker-wake waker)
-            nil)
-        (reactor-process-events-loop events n (+ i 1)))))
+        (do
+          (if (> waker 0)
+              (waker-wake waker)
+              nil)
+          (reactor-process-events-loop events n (+ i 1))))))
 
 ;; ============================================================
 ;; Non-blocking I/O Helpers

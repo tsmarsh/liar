@@ -93,10 +93,7 @@ async fn then_compilation_succeeds(world: &mut SpecWorld) {
 #[then("compilation fails")]
 async fn then_compilation_fails(world: &mut SpecWorld) {
     if world.error.is_none() {
-        let lir = world
-            .lir_output
-            .as_deref()
-            .unwrap_or("<no lIR output>");
+        let lir = world.lir_output.as_deref().unwrap_or("<no lIR output>");
         panic!("Expected compilation to fail, but it succeeded:\n{}", lir);
     }
 }

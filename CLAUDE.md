@@ -14,6 +14,7 @@ liar source → liar → lIR → lair → LLVM IR → native
 | `lir` | **Done** | Expression evaluator | lIR expression | Result |
 | `lir-repl` | **Done** | Interactive REPL | - | - |
 | `liar` | **Done** | High-level compiler | liar source | lIR |
+| `liarliar` | **In Progress** | Self-hosted compiler | liar source | lIR |
 | `liar-repl` | **Done** | Interactive REPL with JIT | - | - |
 | `liar-nrepl` | **Done** | nREPL server for IDE integration | - | - |
 
@@ -40,7 +41,7 @@ lIR is fully functional as an LLVM IR assembler:
 
 ### liar
 
-liar is a working compiler (117 passing test scenarios):
+liar is a working compiler (117 passing liar-cert scenarios):
 - Arithmetic, comparisons, boolean logic (int and float)
 - Functions with type inference and annotations
 - Let bindings (sequential and parallel, with destructuring)
@@ -77,6 +78,14 @@ liar is a working compiler (117 passing test scenarios):
 - Module system
 - Full borrow checking (simplified ownership model)
 - Garbage collection
+
+## Build and Test
+
+Prefer `make` targets for repeatable builds:
+- `make` builds `liarc`, `lair`, and `liarliar` into `target/release/`.
+- `make liar-spec` runs the liar -> lIR spec suite and writes `target/liar-spec.ok`.
+- `make test` runs `make liar-spec` plus `cargo test`.
+- `make lint` runs `liar-lint` over `lib/*.liar` and `liarliar/*.liar`.
 
 ---
 

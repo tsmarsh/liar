@@ -35,7 +35,7 @@ echo "Unit tests OK"
 
 # Run lIR certification tests
 echo "Running lIR certification tests..."
-cargo test -p cert --test cert
+cargo test -p lir-cli --test cert
 if [ $? -ne 0 ]; then
     echo "lIR certification tests failed."
     exit 1

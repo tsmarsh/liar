@@ -78,12 +78,13 @@
 ;; returns: pointer to epoll_event
 (defun epoll-event-new (events: i32 data: ptr) -> ptr
   (let ((ev (malloc EPOLL_EVENT_SIZE)))
-    (memset ev 0 EPOLL_EVENT_SIZE)
-    ;; Store events as u32 at offset 0
-    (store-byte ev 0 events)
-    ;; Store data pointer at offset 8 (after 4-byte events + 4-byte padding)
-    (store-byte (ptr+ ev 8) 0 data)
-    ev))
+    (do
+      (memset ev 0 EPOLL_EVENT_SIZE)
+      ;; Store events as u32 at offset 0
+      (store-byte ev 0 events)
+      ;; Store data pointer at offset 8 (after 4-byte events + 4-byte padding)
+      (store-byte (ptr+ ev 8) 0 data)
+      ev)))
 
 ;; Get events from epoll_event
 (defun epoll-event-events (ev: ptr) -> i32
@@ -118,18 +119,20 @@
         nil  ; Failed to create epoll
         (let ((r (malloc 24))
               (events (malloc (* DEFAULT_MAX_EVENTS EPOLL_EVENT_SIZE))))
-          (store-byte r 0 epfd)             ; epoll-fd
-          (store-byte (ptr+ r 8) 0 events)   ; events buffer
-          (store-byte (ptr+ r 16) 0 DEFAULT_MAX_EVENTS) ; max-events
-          r))))
+          (do
+            (store-byte r 0 epfd)             ; epoll-fd
+            (store-byte (ptr+ r 8) 0 events)   ; events buffer
+            (store-byte (ptr+ r 16) 0 DEFAULT_MAX_EVENTS) ; max-events
+            r)))))
 
 ;; Destroy a reactor
 (defun reactor-destroy (r: ptr)
   (let ((epfd (load-byte r 0))
         (events (load-byte (ptr+ r 8) 0)))
-    (close epfd)
-    (free events)
-    (free r)))
+    (do
+      (close epfd)
+      (free events)
+      (free r))))
 
 ;; ============================================================
 ;; Reactor Operations
@@ -143,8 +146,9 @@
   (let ((epfd (load-byte r 0))
         (ev (epoll-event-new (+ EPOLLIN EPOLLET) waker)))
     (let ((result (epoll_ctl epfd EPOLL_CTL_ADD fd ev)))
-      (free ev)
-      result)))
+      (do
+        (free ev)
+        result))))
 
 ;; Register a file descriptor for write readiness
 ;; fd: file descriptor to watch
@@ -154,8 +158,9 @@
   (let ((epfd (load-byte r 0))
         (ev (epoll-event-new (+ EPOLLOUT EPOLLET) waker)))
     (let ((result (epoll_ctl epfd EPOLL_CTL_ADD fd ev)))
-      (free ev)
-      result)))
+      (do
+        (free ev)
+        result))))
 
 ;; Deregister a file descriptor
 ;; fd: file descriptor to stop watching
@@ -185,10 +190,11 @@
       nil
       (let ((ev (ptr+ events (* i EPOLL_EVENT_SIZE)))
             (waker (epoll-event-data ev)))
-        (if (> waker 0)
-            (waker-wake waker)
-            nil)
-        (reactor-process-events-loop events n (+ i 1)))))
+        (do
+          (if (> waker 0)
+              (waker-wake waker)
+              nil)
+          (reactor-process-events-loop events n (+ i 1))))))
 
 ;; ============================================================
 ;; Non-blocking I/O Helpers

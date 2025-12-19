@@ -71,9 +71,10 @@
 ;; Create a new empty task queue
 (defun task-queue-new () -> ptr
   (let ((q (malloc 16)))
-    (store-byte q 0 0)   ; head = null
-    (store-byte (ptr+ q 8) 0 0) ; tail = null
-    q))
+    (do
+      (store-byte q 0 0)   ; head = null
+      (store-byte (ptr+ q 8) 0 0) ; tail = null
+      q)))
 
 ;; Check if queue is empty
 (defun task-queue-empty? (q: ptr) -> i64
@@ -99,11 +100,12 @@
       nil
       (let ((head (load-byte q 0))
             (next (load-byte (ptr+ head 32) 0)))
-        (store-byte q 0 next) ; head = head.next
-        (if (= next 0)
-            (store-byte (ptr+ q 8) 0 0) ; tail = null if now empty
-            nil)
-        head)))
+        (do
+          (store-byte q 0 next) ; head = head.next
+          (if (= next 0)
+              (store-byte (ptr+ q 8) 0 0) ; tail = null if now empty
+              nil)
+          head))))
 
 ;; ============================================================
 ;; Waker
@@ -118,8 +120,9 @@
 ;; Create a waker for a task
 (defun waker-new (task: ptr) -> ptr
   (let ((w (malloc 8)))
-    (store-byte w 0 task)
-    w))
+    (do
+      (store-byte w 0 task)
+      w)))
 
 ;; Wake a task by marking it ready
 (defun waker-wake (w: ptr)
@@ -143,23 +146,25 @@
 ;; Create a new executor
 (defun executor-new (reactor: ptr) -> ptr
   (let ((ex (malloc 24)))
-    (store-byte ex 0 (task-queue-new)) ; ready-queue
-    (store-byte (ptr+ ex 8) 0 reactor) ; reactor
-    (store-byte (ptr+ ex 16) 0 1)      ; running = true
-    ex))
+    (do
+      (store-byte ex 0 (task-queue-new)) ; ready-queue
+      (store-byte (ptr+ ex 8) 0 reactor) ; reactor
+      (store-byte (ptr+ ex 16) 0 1)      ; running = true
+      ex)))
 
 ;; Spawn a new task on the executor
 (defun executor-spawn (ex: ptr pollable: ptr poll-fn: ptr) -> ptr
   (let ((task (malloc 48)))  ; sizeof(Task) = 6 * 8 = 48
-    (store-byte task 0 TASK_READY)        ; state = READY
-    (store-byte (ptr+ task 8) 0 pollable)  ; pollable
-    (store-byte (ptr+ task 16) 0 poll-fn)  ; poll-fn
-    (store-byte (ptr+ task 24) 0 0)        ; result = 0
-    (store-byte (ptr+ task 32) 0 0)        ; next = null
-    (store-byte (ptr+ task 40) 0 -1)       ; fd = -1 (not waiting on I/O)
-    ;; Add to ready queue
-    (task-queue-push (load-byte ex 0) task)
-    task))
+    (do
+      (store-byte task 0 TASK_READY)        ; state = READY
+      (store-byte (ptr+ task 8) 0 pollable)  ; pollable
+      (store-byte (ptr+ task 16) 0 poll-fn)  ; poll-fn
+      (store-byte (ptr+ task 24) 0 0)        ; result = 0
+      (store-byte (ptr+ task 32) 0 0)        ; next = null
+      (store-byte (ptr+ task 40) 0 -1)       ; fd = -1 (not waiting on I/O)
+      ;; Add to ready queue
+      (task-queue-push (load-byte ex 0) task)
+      task)))
 
 ;; Run the executor until all tasks complete
 ;; This is the main event loop
@@ -224,7 +229,8 @@
 (defun executor-run-step (ex: ptr)
   (let ((ready-queue (load-byte ex 0))
         (reactor (load-byte (ptr+ ex 8) 0)))
-    ;; Process ready tasks
-    (executor-process-ready ex ready-queue)
-    ;; Poll reactor
-    nil))
+    (do
+      ;; Process ready tasks
+      (executor-process-ready ex ready-queue)
+      ;; Poll reactor
+      nil)))
