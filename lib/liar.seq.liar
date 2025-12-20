@@ -213,6 +213,63 @@
   (rseq [self] (seq-reverse self)))
 
 ;;; ============================================================
+;;; PtrCons - cons cell with pointer head (for S-expressions, ASTs, etc.)
+;;;
+;;; NOTE: PtrCons does NOT implement Seq protocol because Seq.first returns
+;;; different types for Cons (i64) vs PtrCons (ptr), and protocol dispatch
+;;; can't currently handle heterogeneous return types. Use direct accessors.
+;;; ============================================================
+
+(defstruct PtrCons (head: ptr tail: ptr))
+
+;; Direct accessors (not protocol methods)
+(defun pfirst (lst: ptr) -> ptr
+  (. lst head))
+
+(defun prest (lst: ptr) -> ptr
+  (. lst tail))
+
+;; Constructor
+(defun pcons (head: ptr tail: ptr) -> ptr
+  (share (PtrCons head tail)))
+
+;; List constructors
+(defun plist1 (a: ptr) -> ptr
+  (pcons a nil))
+
+(defun plist2 (a: ptr b: ptr) -> ptr
+  (pcons a (pcons b nil)))
+
+(defun plist3 (a: ptr b: ptr c: ptr) -> ptr
+  (pcons a (pcons b (pcons c nil))))
+
+(defun plist4 (a: ptr b: ptr c: ptr d: ptr) -> ptr
+  (pcons a (pcons b (pcons c (pcons d nil)))))
+
+;; Accessors
+(defun psecond (lst: ptr) -> ptr
+  (pfirst (prest lst)))
+
+(defun pthird (lst: ptr) -> ptr
+  (pfirst (prest (prest lst))))
+
+(defun pfourth (lst: ptr) -> ptr
+  (pfirst (prest (prest (prest lst)))))
+
+;; Count
+(defun pcount (lst: ptr) -> i64
+  (if (nil? lst) 0 (+ 1 (pcount (prest lst)))))
+
+;; Reverse
+(defun preverse-acc (lst: ptr acc: ptr) -> ptr
+  (if (nil? lst)
+      acc
+      (preverse-acc (prest lst) (pcons (pfirst lst) acc))))
+
+(defun preverse (lst: ptr) -> ptr
+  (preverse-acc lst nil))
+
+;;; ============================================================
 ;;; MutVector - a mutable, growable vector
 ;;; ============================================================
 
