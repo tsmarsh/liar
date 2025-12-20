@@ -40,20 +40,17 @@
 ;; Print a boxed float (int-part.frac-part)
 (defun print-float (sb: ptr f: ptr) -> ptr
   (let ((int-part (boxed-float-int f))
-        (frac-part (boxed-float-frac f))
-        (scale (boxed-float-scale f)))
-    (if (< int-part 0)
-        (let ((sb (append-int sb int-part))
-              (sb (sb-conj sb 46)))  ;; '.'
-          (print-frac-with-zeros sb frac-part scale))
-        (if (< frac-part 0)
-            (let ((sb (sb-conj sb 45))  ;; '-'
-                  (sb (append-int sb 0))
-                  (sb (sb-conj sb 46)))  ;; '.'
-              (print-frac-with-zeros sb (- 0 frac-part) scale))
-            (let ((sb (append-int sb int-part))
-                  (sb (sb-conj sb 46)))  ;; '.'
-              (print-frac-with-zeros sb frac-part scale))))))
+        (frac (boxed-float-frac f))
+        (scale (boxed-float-scale f))
+        (neg? (if (< int-part 0)
+                  1
+                  (if (< frac 0) 1 0)))
+        (abs-int (if (< int-part 0) (- 0 int-part) int-part))
+        (abs-frac (if (< frac 0) (- 0 frac) frac))
+        (sb (if (= neg? 1) (sb-conj sb 45) sb))  ;; '-'
+        (sb (append-int sb abs-int))
+        (sb (sb-conj sb 46)))  ;; '.'
+    (print-frac-with-zeros sb abs-frac scale)))
 
 ;; Print fractional part with leading zeros (e.g., 3.05 -> frac=5, scale=100)
 (defun print-frac-with-zeros (sb: ptr frac: i64 scale: i64) -> ptr

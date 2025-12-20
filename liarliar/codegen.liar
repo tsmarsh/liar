@@ -540,6 +540,7 @@
       (store-byte (ptr+ buf 15) 0)
       (intern syms buf))))
 
+
 ;; Common lIR symbols
 (defun sym-i64 (s: ptr) -> ptr     (make-sym s 105 54 52 0 0 0 0 0 3))       ;; i64
 (defun sym-i32 (s: ptr) -> ptr     (make-sym s 105 51 50 0 0 0 0 0 3))       ;; i32
@@ -577,8 +578,31 @@
 (defun sym-ashr (s: ptr) -> ptr    (make-sym s 97 115 104 114 0 0 0 0 4))    ;; ashr
 (defun sym-ctpop (s: ptr) -> ptr   (make-sym s 99 116 112 111 112 0 0 0 5))  ;; ctpop
 (defun sym-call (s: ptr) -> ptr    (make-sym s 99 97 108 108 0 0 0 0 4))     ;; call
+(defun sym-tailcall (s: ptr) -> ptr (make-sym s 116 97 105 108 99 97 108 108 8)) ;; tailcall
 (defun sym-indirect-call (s: ptr) -> ptr
   (make-sym-13 s 105 110 100 105 114 101 99 116 45 99 97 108 108)) ;; indirect-call
+(defun sym-indirect-tailcall (s: ptr) -> ptr
+  (let ((buf (heap-array 18)))  ;; 17 + null
+    (do
+      (store-byte buf 105)      ;; i
+      (store-byte (ptr+ buf 1) 110)  ;; n
+      (store-byte (ptr+ buf 2) 100)  ;; d
+      (store-byte (ptr+ buf 3) 105)  ;; i
+      (store-byte (ptr+ buf 4) 114)  ;; r
+      (store-byte (ptr+ buf 5) 101)  ;; e
+      (store-byte (ptr+ buf 6) 99)   ;; c
+      (store-byte (ptr+ buf 7) 116)  ;; t
+      (store-byte (ptr+ buf 8) 45)   ;; -
+      (store-byte (ptr+ buf 9) 116)  ;; t
+      (store-byte (ptr+ buf 10) 97)  ;; a
+      (store-byte (ptr+ buf 11) 105) ;; i
+      (store-byte (ptr+ buf 12) 108) ;; l
+      (store-byte (ptr+ buf 13) 99)  ;; c
+      (store-byte (ptr+ buf 14) 97)  ;; a
+      (store-byte (ptr+ buf 15) 108) ;; l
+      (store-byte (ptr+ buf 16) 108) ;; l
+      (store-byte (ptr+ buf 17) 0)
+      (intern s buf)))) ;; indirect-tailcall
 (defun sym-ret (s: ptr) -> ptr     (make-sym s 114 101 116 0 0 0 0 0 3))     ;; ret
 (defun sym-declare (s: ptr) -> ptr (make-sym s 100 101 99 108 97 114 101 0 7)) ;; declare
 (defun sym-define (s: ptr) -> ptr  (make-sym s 100 101 102 105 110 101 0 0 6)) ;; define
@@ -1351,6 +1375,11 @@
   (let ((at-name (prepend-at syms (symbol-name fn-name))))
     (scons (sym-call syms) (scons at-name args))))
 
+;; Build: (tailcall @fn args...)
+(defun lir-tailcall (syms: ptr fn-name: ptr args: ptr) -> ptr
+  (let ((at-name (prepend-at syms (symbol-name fn-name))))
+    (scons (sym-tailcall syms) (scons at-name args))))
+
 ;; Build: (declare printf i32 (ptr ...))
 (defun lir-declare-printf (syms: ptr) -> ptr
   (let ((params (scons (sym-ptr syms) (scons (sym-ellipsis syms) nil))))
@@ -1360,6 +1389,10 @@
 ;; Build: (indirect-call fn-ptr ret-type args...)
 (defun lir-indirect-call (syms: ptr fn-ptr: ptr ret-ty: ptr args: ptr) -> ptr
   (scons (sym-indirect-call syms) (scons fn-ptr (scons ret-ty args))))
+
+;; Build: (indirect-tailcall fn-ptr ret-type args...)
+(defun lir-indirect-tailcall (syms: ptr fn-ptr: ptr ret-ty: ptr args: ptr) -> ptr
+  (scons (sym-indirect-tailcall syms) (scons fn-ptr (scons ret-ty args))))
 
 ;; Build: (ret val)
 (defun lir-ret (syms: ptr val: ptr) -> ptr
@@ -1458,6 +1491,37 @@
     ((icons? form)      (pcons ctx (box-int 0)))
     ((nil? form)        (pcons ctx (box-int 0)))
     (else               (pcons ctx (box-int 0)))))
+
+;; Promote call expressions to tailcall in tail position.
+(defun promote-tailcall (syms: ptr expr: ptr) -> ptr
+  (if (scons? expr)
+      (let ((head (car expr)))
+        (if (= 1 (sym-eq? head (sym-indirect-call syms)))
+            (scons (sym-indirect-tailcall syms) (cdr expr))
+            expr))
+      expr))
+
+;; Returns (ctx . lir-expr), treating the expression as tail position.
+(defun codegen-expr-tail (ctx: ptr form: ptr) -> ptr
+  (if (ast-list? form)
+      (let ((head (car form)))
+        (if (symbol? head)
+            (let ((base-name (symbol-base-name (cg-syms ctx) head)))
+              (cond
+                ((streq base-name (str-do)) (codegen-do-tail ctx form))
+                ((streq base-name (str-let)) (codegen-let-tail ctx form))
+                (else
+                  (let ((result (codegen-expr ctx form))
+                        (ctx (pcons-head result))
+                        (expr (pcons-tail result))
+                        (expr (promote-tailcall (cg-syms ctx) expr)))
+                    (pcons ctx expr)))))
+            (let ((result (codegen-expr ctx form))
+                  (ctx (pcons-head result))
+                  (expr (pcons-tail result))
+                  (expr (promote-tailcall (cg-syms ctx) expr)))
+              (pcons ctx expr))))
+      (codegen-expr ctx form)))
 
 ;; Integer literal: (i64 N)
 (defun codegen-int (ctx: ptr form: ptr) -> ptr
@@ -2691,6 +2755,8 @@
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
+        (body-v (promote-tailcall syms body-v))
+        (body-v (promote-tailcall syms body-v))
         (blocks (cg-blocks fn-ctx))
         (merge-lbl (cg-merge-label fn-ctx))
         (inferred (lir-expr-ret-type-with-params ctx body-v param-types))
@@ -2940,6 +3006,7 @@
            ((sym-eq? head (sym-getelementptr syms)) (sym-ptr syms))
            ((sym-eq? head (sym-load syms)) (cadr expr))
            ((sym-eq? head (sym-indirect-call syms)) (caddr expr))
+           ((sym-eq? head (sym-indirect-tailcall syms)) (caddr expr))
            ((sym-eq? head (sym-call syms)) (call-ret-type ctx (cadr expr)))
            ((sym-eq? head (sym-fadd syms)) (sym-double syms))
            ((sym-eq? head (sym-fsub syms)) (sym-double syms))
@@ -3173,6 +3240,31 @@
               (syms (cg-syms ctx)))
           (pcons ctx (lir-let1 syms tmp-name val-v field-v))))))
 
+;; Tail-position let destructuring.
+(defun codegen-let-destructure-tail (ctx: ptr pattern: ptr val-form: ptr rest-bindings: ptr body: ptr) -> ptr
+  (let ((struct-name (car pattern))
+        (fields (cdr pattern))
+        (struct-info (cg-lookup-struct ctx struct-name)))
+    (if (nil? struct-info)
+        (codegen-let-body-tail ctx (scons (scons pattern (scons val-form nil)) rest-bindings) body)
+        (let ((val-result (codegen-expr ctx val-form))
+              (ctx (pcons-head val-result))
+              (val-v (pcons-tail val-result))
+              (tmp-result (cg-next-temp-name ctx))
+              (ctx (pcons-head tmp-result))
+              (tmp-name (pcons-tail tmp-result))
+              (env (cg-env ctx))
+              (env (env-define-scons env fields))
+              (ctx (cg-set-env ctx env))
+              (rest-result (codegen-let-body-tail ctx rest-bindings body))
+              (ctx (pcons-head rest-result))
+              (rest-v (pcons-tail rest-result))
+              (field-result (build-field-lets ctx tmp-name fields struct-info rest-v))
+              (ctx (pcons-head field-result))
+              (field-v (pcons-tail field-result))
+              (syms (cg-syms ctx)))
+          (pcons ctx (lir-let1 syms tmp-name val-v field-v))))))
+
 (defun codegen-let-if (ctx: ptr bindings: ptr body: ptr) -> ptr
   (let ((bind-result (codegen-let-bindings ctx bindings nil))
         (ctx (pcons-head bind-result))
@@ -3201,6 +3293,40 @@
             (codegen-let-body ctx bindings body))
         (codegen-let-body ctx bindings body))))
 
+;; Tail-position let body.
+(defun codegen-let-body-tail (ctx: ptr bindings: ptr body: ptr) -> ptr
+  (if (nil? bindings)
+      (codegen-expr-tail ctx body)
+      (let ((binding (car bindings))
+            (name (car binding))
+            (val-form (cadr binding))
+            (rest (cdr bindings)))
+        (if (scons? name)
+            (codegen-let-destructure-tail ctx name val-form rest body)
+            (let ((val-result (codegen-expr ctx val-form))
+                  (ctx (pcons-head val-result))
+                  (val-v (pcons-tail val-result))
+                  (env (cg-env ctx))
+                  (env (env-define-scons env (binding-names binding)))
+                  (ctx (cg-set-env ctx env))
+                  (rest-result (codegen-let-body-tail ctx rest body))
+                  (ctx (pcons-head rest-result))
+                  (rest-v (pcons-tail rest-result))
+                  (syms (cg-syms ctx)))
+              (pcons ctx (lir-let1 syms name val-v rest-v)))))))
+
+(defun codegen-let-tail (ctx: ptr form: ptr) -> ptr
+  (let ((bindings (cadr form))
+        (body (caddr form))
+        (syms (cg-syms ctx)))
+    (if (scons? body)
+        (if (symbol? (car body))
+            (if (streq (symbol-base-name syms (car body)) (str-if))
+                (codegen-let-if ctx bindings body)
+                (codegen-let-body-tail ctx bindings body))
+            (codegen-let-body-tail ctx bindings body))
+        (codegen-let-body-tail ctx bindings body))))
+
 ;; ============================================================
 ;; Do Block
 ;; ============================================================
@@ -3215,6 +3341,19 @@
 
 (defun codegen-do (ctx: ptr form: ptr) -> ptr
   (codegen-do-loop ctx (cdr form) (box-int 0)))
+
+;; Tail-position do: only the last expression is eligible for tailcall.
+(defun codegen-do-loop-tail (ctx: ptr exprs: ptr) -> ptr
+  (if (nil? exprs)
+      (pcons ctx (box-int 0))
+      (if (nil? (cdr exprs))
+          (codegen-expr-tail ctx (car exprs))
+          (let ((result (codegen-expr ctx (car exprs)))
+                (ctx (pcons-head result)))
+            (codegen-do-loop-tail ctx (cdr exprs))))))
+
+(defun codegen-do-tail (ctx: ptr form: ptr) -> ptr
+  (codegen-do-loop-tail ctx (cdr form)))
 
 ;; ============================================================
 ;; Function Call
@@ -3519,6 +3658,7 @@
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
+        (body-v (promote-tailcall syms body-v))
         (ret-ty (infer-defun-ret-type has-ret ret-ty0 fn-ctx body-v))
         (blocks (cg-blocks fn-ctx))
         (merge-lbl (cg-merge-label fn-ctx))

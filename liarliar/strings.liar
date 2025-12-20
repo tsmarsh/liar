@@ -118,19 +118,31 @@
   (let ((len (sb-count sb)))
     (reverse-last-n-loop sb (- len n) (- len 1))))
 
+(defun write-int-digits (buf: ptr idx: i64 n: i64) -> i64
+  (if (= n 0)
+      idx
+      (let ((digit (rem n 10)))
+        (do
+          (store-byte (ptr+ buf idx) (+ 48 digit))
+          (write-int-digits buf (+ idx 1) (/ n 10))))))
+
+(defun append-int-from-buf (sb: ptr buf: ptr idx: i64) -> ptr
+  (if (<= idx 0)
+      sb
+      (let ((idx (- idx 1))
+            (b (load-byte (ptr+ buf idx))))
+        (append-int-from-buf (sb-conj sb b) buf idx))))
+
 (defun append-int (sb: ptr n) -> ptr
   (if (= n 0)
       (sb-conj sb 48)  ;; '0'
-      (if (< n 0)
-          (let ((sb (sb-conj sb 45))  ;; '-'
-                (start-len (sb-count sb))
-                (sb (write-digits-loop sb (- 0 n)))
-                (digits (- (sb-count sb) start-len)))
-            (reverse-last-n sb digits))
-          (let ((start-len (sb-count sb))
-                (sb (write-digits-loop sb n))
-                (digits (- (sb-count sb) start-len)))
-            (reverse-last-n sb digits)))))
+      (let ((neg (< n 0))
+            (n (if (< n 0) (- 0 n) n))
+            (buf (heap-array 32))
+            (digits (write-int-digits buf 0 n))
+            (digits (if (< digits 0) 0 (if (> digits 31) 31 digits)))
+            (sb (if neg (sb-conj sb 45) sb)))
+        (append-int-from-buf sb buf digits))))
 
 ;; --- Finalize ---
 
