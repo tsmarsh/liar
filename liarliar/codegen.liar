@@ -3385,6 +3385,32 @@
 ;; Function Call
 ;; ============================================================
 
+;; Find position of '/' in a string (returns -1 if not found)
+(defun find-slash-pos (s: ptr idx: i64) -> i64
+  (let ((c (load-byte (ptr+ s idx))))
+    (if (= c 0)
+        -1
+        (if (= c 47)  ;; '/'
+            idx
+            (find-slash-pos s (+ idx 1))))))
+
+;; Check if a symbol is a qualified name (contains '/')
+(defun is-qualified-name? (sym: ptr) -> i64
+  (if (symbol? sym)
+      (let ((name (symbol-name sym)))
+        (if (>= (find-slash-pos name 0) 0) 1 0))
+      0))
+
+;; Get the function name part from a qualified name (part after '/')
+;; Returns a new interned symbol
+(defun strip-namespace-prefix (syms: ptr sym: ptr) -> ptr
+  (let ((name (symbol-name sym))
+        (slash-pos (find-slash-pos name 0)))
+    (if (< slash-pos 0)
+        sym  ;; Not qualified, return as-is
+        (let ((fn-name (ptr+ name (+ slash-pos 1))))  ;; Skip past '/'
+          (intern syms fn-name)))))
+
 (defun codegen-args (ctx: ptr args: ptr acc: ptr) -> ptr
   (if (nil? args)
       (pcons ctx acc)
@@ -3404,12 +3430,14 @@
                   ;; Local variable (closure) - indirect call
                   (codegen-indirect-call-expr ctx head args)
                   ;; Function call - may be local or from required module
-                  (let ((args-result (codegen-args ctx args nil))
+                  ;; Strip namespace prefix from qualified names (ns/fn -> fn)
+                  (let ((fn-name (strip-namespace-prefix syms head))
+                        (args-result (codegen-args ctx args nil))
                         (ctx (pcons-head args-result))
                         (args-rev (pcons-tail args-result))
                         (args-v (reverse-scons args-rev))
                         (args-v (scons (lir-null syms) args-v)))
-                    (pcons ctx (lir-call syms head args-v))))
+                    (pcons ctx (lir-call syms fn-name args-v))))
               (codegen-protocol-call ctx head args protocol)))
         (codegen-indirect-call-expr ctx head args))))
 
