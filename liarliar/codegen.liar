@@ -13,7 +13,8 @@
   (:require [liar.core :refer :all]
             [liarliar.symbols :refer :all]
             [liarliar.value :refer :all]
-            [liarliar.env :refer :all]))
+            [liarliar.env :refer :all]
+            [liarliar.strings :refer :all]))
 
 ;; ============================================================
 ;; Codegen Context
@@ -1378,13 +1379,10 @@
 
 (defun prepend-at (syms: ptr name: ptr) -> ptr
   (let ((name-len (strlen name))
-        (new-len (+ name-len 2))  ;; @ + name + null
-        (buf (heap-array new-len)))
-    (do
-      (store-byte buf 64)  ;; '@' = 64
-      (copy-str-loop buf 1 name 0 name-len)
-      (store-byte (ptr+ buf (+ name-len 1)) 0)  ;; null terminator
-      (intern syms buf))))
+        (sb (string-builder-cap (+ name-len 1)))  ;; @ + name
+        (sb (sb-conj sb 64))
+        (sb (append sb name)))
+    (intern syms (to-string sb))))
 
 (defun copy-str-loop (dst: ptr dst-idx: i64 src: ptr src-idx: i64 len: i64) -> i64
   (if (>= src-idx len)
@@ -1451,35 +1449,16 @@
 ;; ============================================================
 
 ;; Helper to write a digit to buffer
-(defun write-digit (buf: ptr idx: i64 n: i64) -> i64
-  (do (store-byte (ptr+ buf idx) (+ 48 n)) (+ idx 1)))
-
-;; Write number to buffer, return new index
-(defun write-number (buf: ptr idx: i64 n: i64) -> i64
-  (if (< n 10)
-      (write-digit buf idx n)
-      (let ((idx2 (write-number buf idx (/ n 10))))
-        (write-digit buf idx2 (- n (* (/ n 10) 10))))))
-
 ;; Generate fresh block label like "then.0", "else.1", "merge.2"
 ;; Returns (ctx . label-symbol)
 (defun cg-fresh-label (ctx: ptr prefix: ptr) -> ptr
   (let ((syms (cg-syms ctx))
         (counter (cg-block-counter ctx))
-        (prefix-len (strlen prefix))
-        (buf (heap-array 20)))  ;; enough for prefix.NNNN
-    (do
-      ;; Copy prefix to buffer
-      (copy-str-loop buf 0 prefix 0 prefix-len)
-      ;; Add dot separator
-      (store-byte (ptr+ buf prefix-len) 46)  ;; '.' = 46
-      ;; Write the counter number
-      (let ((end-idx (write-number buf (+ prefix-len 1) counter)))
-        (do
-          ;; Null terminate
-          (store-byte (ptr+ buf end-idx) 0)
-          ;; Intern as symbol and return with incremented counter
-          (pcons (cg-inc-block-counter ctx) (intern syms buf)))))))
+        (sb (string-builder-cap 20))
+        (sb (append sb prefix))
+        (sb (sb-conj sb 46))
+        (sb (append-int sb counter)))
+    (pcons (cg-inc-block-counter ctx) (intern syms (to-string sb)))))
 
 ;; String constants for label prefixes
 (defun str-then-prefix () -> ptr
@@ -1519,9 +1498,11 @@
 (defun promote-tailcall (syms: ptr expr: ptr) -> ptr
   (if (scons? expr)
       (let ((head (car expr)))
-        (if (= 1 (sym-eq? head (sym-indirect-call syms)))
-            (scons (sym-indirect-tailcall syms) (cdr expr))
-            expr))
+        (if (= 1 (sym-eq? head (sym-call syms)))
+            (scons (sym-tailcall syms) (cdr expr))
+            (if (= 1 (sym-eq? head (sym-indirect-call syms)))
+                (scons (sym-indirect-tailcall syms) (cdr expr))
+                expr)))
       expr))
 
 ;; Returns (ctx . lir-expr), treating the expression as tail position.
@@ -2778,11 +2759,9 @@
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
                                    (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
                                    (cg-closure-counter ctx))))
-        (body-result (codegen-expr fn-ctx body))
+        (body-result (codegen-expr-tail fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
-        (body-v (promote-tailcall syms body-v))
-        (body-v (promote-tailcall syms body-v))
         (blocks (cg-blocks fn-ctx))
         (merge-lbl (cg-merge-label fn-ctx))
         (inferred (lir-expr-ret-type-with-params ctx body-v param-types))
@@ -3655,35 +3634,29 @@
         (append-digit buf idx2 (rem n 10)))))
 
 (defun gensym-lambda (syms: ptr counter: i64) -> ptr
-  (let ((buf (heap-array 20)))
-    (do
-      ;; __lambda_
-      (store-byte buf 95)           ;; _
-      (store-byte (ptr+ buf 1) 95)  ;; _
-      (store-byte (ptr+ buf 2) 108) ;; l
-      (store-byte (ptr+ buf 3) 97)  ;; a
-      (store-byte (ptr+ buf 4) 109) ;; m
-      (store-byte (ptr+ buf 5) 98)  ;; b
-      (store-byte (ptr+ buf 6) 100) ;; d
-      (store-byte (ptr+ buf 7) 97)  ;; a
-      (store-byte (ptr+ buf 8) 95)  ;; _
-      (let ((end (int-to-buf-loop buf 9 counter)))
-        (do (store-byte (ptr+ buf end) 0)
-            (intern syms buf))))))
+  (let ((sb (string-builder-cap 20))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 109))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 95))
+        (sb (append-int sb counter)))
+    (intern syms (to-string sb))))
 
 (defun gensym-temp (syms: ptr counter: i64) -> ptr
-  (let ((buf (heap-array 20)))
-    (do
-      ;; __tmp_
-      (store-byte buf 95)           ;; _
-      (store-byte (ptr+ buf 1) 95)  ;; _
-      (store-byte (ptr+ buf 2) 116) ;; t
-      (store-byte (ptr+ buf 3) 109) ;; m
-      (store-byte (ptr+ buf 4) 112) ;; p
-      (store-byte (ptr+ buf 5) 95)  ;; _
-      (let ((end (int-to-buf-loop buf 6 counter)))
-        (do (store-byte (ptr+ buf end) 0)
-            (intern syms buf))))))
+  (let ((sb (string-builder-cap 20))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 109))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 95))
+        (sb (append-int sb counter)))
+    (intern syms (to-string sb))))
 
 (defun cg-next-closure-name (ctx: ptr) -> ptr
   (let ((counter (cg-closure-counter ctx))
@@ -3725,10 +3698,9 @@
                                    (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
                                    (cg-closure-counter ctx))))
         (fn-ctx (cg-add-fn-name fn-ctx name))
-        (body-result (codegen-expr fn-ctx body))
+        (body-result (codegen-expr-tail fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
-        (body-v (promote-tailcall syms body-v))
         (ret-ty (infer-defun-ret-type has-ret ret-ty0 fn-ctx body-v))
         (blocks (cg-blocks fn-ctx))
         (merge-lbl (cg-merge-label fn-ctx))
@@ -3765,7 +3737,7 @@
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
                                    (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
                                    (cg-closure-counter ctx))))
-        (body-result (codegen-expr fn-ctx body))
+        (body-result (codegen-expr-tail fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
         (blocks (cg-blocks fn-ctx))
