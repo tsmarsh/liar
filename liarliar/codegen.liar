@@ -1827,7 +1827,7 @@
             ((streq base-name (str-extend-protocol-default)) (codegen-extend-protocol-default ctx form))
             ((streq base-name (str-instance?))   (codegen-instance? ctx form))
             ((streq base-name (str-dot))         (codegen-field-access ctx form))
-            (else                      (codegen-call ctx form))))
+            (else                      (codegen-call-or-struct ctx form))))
         (codegen-call ctx form))))
 
 ;; ============================================================
