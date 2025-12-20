@@ -4,6 +4,7 @@
 
 use cucumber::{given, then, when, World};
 use liar_spec::{compile_to_lir, compile_to_lir_liarliar, use_liarliar};
+use lir_core::parser::Parser;
 
 #[derive(Debug, Default, World)]
 pub struct SpecWorld {
@@ -138,6 +139,18 @@ async fn then_output_contains(world: &mut SpecWorld, pattern: String) {
         pattern,
         lir
     );
+}
+
+#[then("the lIR parses")]
+async fn then_lir_parses(world: &mut SpecWorld) {
+    if let Some(ref err) = world.error {
+        panic!("Compilation failed: {}", err);
+    }
+    let lir = world.lir_output.as_ref().expect("No lIR output");
+    let mut parser = Parser::new(lir);
+    parser
+        .parse_items()
+        .unwrap_or_else(|err| panic!("Expected lIR to parse, but got: {}", err));
 }
 
 #[tokio::main]

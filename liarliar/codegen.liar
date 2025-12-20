@@ -59,6 +59,34 @@
 (defun cg-errors (ctx: ptr) -> i64 (. ctx cg-errors))
 (defun cg-closure-counter (ctx: ptr) -> i64 (. ctx cg-closure-counter))
 
+;; Replace the current compile-time environment.
+(defun cg-set-env (ctx: ptr env: ptr) -> ptr
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) env (cg-fns ctx)
+                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
+                     (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
+                     (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                     (cg-closure-counter ctx))))
+
+;; Track local bindings for call-site resolution.
+(defun env-define-pcons (env: ptr names: ptr) -> ptr
+  (if (nil? names)
+      env
+      (do (env-define-sym! env (pcons-head names) 1)
+          (env-define-pcons env (pcons-tail names)))))
+
+(defun env-define-scons (env: ptr names: ptr) -> ptr
+  (if (nil? names)
+      env
+      (do (env-define-sym! env (car names) 1)
+          (env-define-scons env (cdr names)))))
+
+(defun binding-names (binding: ptr) -> ptr
+  (let ((name (car binding)))
+    (if (scons? name)
+        (cdr name)
+        (scons name nil))))
+
 ;; Register a struct (returns updated context with new type_id)
 ;; Entry is stored as (name fields type_id) - a 3-element scons list
 (defun cg-register-struct (ctx: ptr name: ptr fields: ptr) -> ptr
@@ -552,11 +580,13 @@
 (defun sym-indirect-call (s: ptr) -> ptr
   (make-sym-13 s 105 110 100 105 114 101 99 116 45 99 97 108 108)) ;; indirect-call
 (defun sym-ret (s: ptr) -> ptr     (make-sym s 114 101 116 0 0 0 0 0 3))     ;; ret
+(defun sym-declare (s: ptr) -> ptr (make-sym s 100 101 99 108 97 114 101 0 7)) ;; declare
 (defun sym-define (s: ptr) -> ptr  (make-sym s 100 101 102 105 110 101 0 0 6)) ;; define
 (defun sym-block (s: ptr) -> ptr   (make-sym s 98 108 111 99 107 0 0 0 5))   ;; block
 (defun sym-entry (s: ptr) -> ptr   (make-sym s 101 110 116 114 121 0 0 0 5)) ;; entry
 (defun sym-let (s: ptr) -> ptr     (make-sym s 108 101 116 0 0 0 0 0 3))     ;; let
 (defun sym-string (s: ptr) -> ptr  (make-sym s 115 116 114 105 110 103 0 0 6)) ;; string
+(defun sym-ellipsis (s: ptr) -> ptr (make-sym s 46 46 46 0 0 0 0 0 3))       ;; ...
 (defun sym-br (s: ptr) -> ptr      (make-sym s 98 114 0 0 0 0 0 0 2))        ;; br
 (defun sym-phi (s: ptr) -> ptr     (make-sym s 112 104 105 0 0 0 0 0 3))     ;; phi
 (defun sym-array-alloc (s: ptr) -> ptr (make-sym-long s 97 114 114 97 121 45 97 108 108 111 99 0 11)) ;; array-alloc
@@ -1320,6 +1350,12 @@
 (defun lir-call (syms: ptr fn-name: ptr args: ptr) -> ptr
   (let ((at-name (prepend-at syms (symbol-name fn-name))))
     (scons (sym-call syms) (scons at-name args))))
+
+;; Build: (declare printf i32 (ptr ...))
+(defun lir-declare-printf (syms: ptr) -> ptr
+  (let ((params (scons (sym-ptr syms) (scons (sym-ellipsis syms) nil))))
+    (scons (sym-declare syms)
+           (scons (sym-printf syms) (scons (sym-i32 syms) (scons params nil))))))
 
 ;; Build: (indirect-call fn-ptr ret-type args...)
 (defun lir-indirect-call (syms: ptr fn-ptr: ptr ret-ty: ptr args: ptr) -> ptr
@@ -2174,7 +2210,8 @@
         (let ((size-result (codegen-expr ctx size-form))
               (ctx (pcons-head size-result))
               (size-v (pcons-tail size-result)))
-          (pcons ctx (scons (sym-ptr-array-alloc syms) (scons size-v nil)))))))
+          (pcons ctx (scons (sym-heap-array-dyn syms)
+                            (scons (sym-i64 syms) (scons size-v nil))))))))
 
 (defun codegen-ptr-array-get (ctx: ptr form: ptr) -> ptr
   (let ((arr-result (codegen-expr ctx (cadr form)))
@@ -2184,7 +2221,8 @@
         (ctx (pcons-head idx-result))
         (idx-v (pcons-tail idx-result))
         (syms (cg-syms ctx)))
-    (pcons ctx (scons (sym-ptr-array-get syms) (scons arr-v (scons idx-v nil))))))
+    (pcons ctx (scons (sym-ptr-array-get syms)
+                      (scons (box-int 0) (scons arr-v (scons idx-v nil)))))))
 
 (defun codegen-ptr-array-set (ctx: ptr form: ptr) -> ptr
   (let ((arr-result (codegen-expr ctx (cadr form)))
@@ -2197,7 +2235,8 @@
         (ctx (pcons-head val-result))
         (val-v (pcons-tail val-result))
         (syms (cg-syms ctx)))
-    (pcons ctx (scons (sym-ptr-array-set syms) (scons arr-v (scons idx-v (scons val-v nil)))))))
+    (pcons ctx (scons (sym-ptr-array-set syms)
+                      (scons (box-int 0) (scons arr-v (scons idx-v (scons val-v nil))))))))
 
 ;; Byte/pointer operations
 (defun codegen-store-byte (ctx: ptr form: ptr) -> ptr
@@ -3073,6 +3112,9 @@
             (let ((val-result (codegen-expr ctx val-form))
                   (ctx (pcons-head val-result))
                   (val-v (pcons-tail val-result))
+                  (env (cg-env ctx))
+                  (env (env-define-scons env (binding-names binding)))
+                  (ctx (cg-set-env ctx env))
                   (rest-result (codegen-let-body ctx rest body))
                   (ctx (pcons-head rest-result))
                   (rest-v (pcons-tail rest-result))
@@ -3116,6 +3158,9 @@
               (tmp-result (cg-next-temp-name ctx))
               (ctx (pcons-head tmp-result))
               (tmp-name (pcons-tail tmp-result))
+              (env (cg-env ctx))
+              (env (env-define-scons env fields))
+              (ctx (cg-set-env ctx env))
               (rest-result (codegen-let-body ctx rest-bindings body))
               (ctx (pcons-head rest-result))
               (rest-v (pcons-tail rest-result))
@@ -3194,7 +3239,9 @@
                         (args-v (reverse-scons args-rev))
                         (args-v (scons (lir-null syms) args-v)))
                     (pcons ctx (lir-call syms head args-v)))
-                  (codegen-error ctx "Error: undefined function"))
+                  (if (= 1 (env-defined? (cg-env ctx) (symbol-id head)))
+                      (codegen-indirect-call-expr ctx head args)
+                      (codegen-error ctx "Error: undefined function")))
               (codegen-protocol-call ctx head args protocol)))
         (codegen-indirect-call-expr ctx head args))))
 
@@ -3458,10 +3505,14 @@
         (lir-params (scons (lir-env-param syms) lir-params))
         ;; Reset temp and block counters for function body
         (outer-fns (cg-fns ctx))
-        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
+        (param-names (collect-param-names raw-params nil))
+        (fn-env (make-scope (cg-env ctx)))
+        (fn-env (env-define-pcons fn-env param-names))
+        (fn-ctx (share (CodegenCtx 0 syms fn-env outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
                                    (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
                                    (cg-closure-counter ctx))))
+        (fn-ctx (cg-add-fn-name fn-ctx name))
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
@@ -3494,7 +3545,10 @@
         (lir-params (build-lambda-params syms params nil))
         (lir-params (scons (lir-env-param syms) lir-params))
         (outer-fns (cg-fns ctx))
-        (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
+        (param-names (collect-param-names params nil))
+        (fn-env (make-scope (cg-env ctx)))
+        (fn-env (env-define-pcons fn-env param-names))
+        (fn-ctx (share (CodegenCtx 0 syms fn-env outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
                                    (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
                                    (cg-closure-counter ctx))))
@@ -3503,7 +3557,8 @@
         (body-v (pcons-tail body-result))
         (blocks (cg-blocks fn-ctx))
         (merge-lbl (cg-merge-label fn-ctx))
-        (fn-sig (scons fn-name (scons (sym-ptr syms) nil)))
+        (ret-ty (lir-expr-ret-type fn-ctx body-v))
+        (fn-sig (scons fn-name (scons ret-ty nil)))
         (fn-body (build-fn-body syms blocks merge-lbl body-v))
         (fn-def (scons (sym-define syms)
                        (scons fn-sig
@@ -3534,5 +3589,6 @@
         (errors (cg-errors ctx)))
     (if (> errors 0)
         nil
-        ;; Combine struct defs and function defs
-        (append-scons (reverse-scons struct-defs) fn-defs))))
+        ;; Combine struct defs and function defs, prepend needed declares.
+        (let ((module-forms (append-scons (reverse-scons struct-defs) fn-defs)))
+          (scons (lir-declare-printf syms) module-forms)))))

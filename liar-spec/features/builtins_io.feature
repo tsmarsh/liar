@@ -5,8 +5,10 @@ Feature: Builtin I/O Operations
     Given the liar expression (print "hello")
     When I compile to lIR
     Then compilation succeeds
+    And the output contains (declare printf
     And the output contains (call @printf
     And the output contains (string "%s")
+    And the lIR parses
 
   Scenario: Print integer
     Given the liar expression (print 42)
@@ -14,6 +16,7 @@ Feature: Builtin I/O Operations
     Then compilation succeeds
     And the output contains (call @printf
     And the output contains (string "%ld")
+    And the lIR parses
 
   Scenario: Println string
     Given the liar expression (println "hello")
@@ -21,6 +24,7 @@ Feature: Builtin I/O Operations
     Then compilation succeeds
     And the output contains (call @printf
     And the output contains (string "%s\n")
+    And the lIR parses
 
   Scenario: Println integer
     Given the liar expression (println 42)
@@ -28,6 +32,7 @@ Feature: Builtin I/O Operations
     Then compilation succeeds
     And the output contains (call @printf
     And the output contains (string "%ld\n")
+    And the lIR parses
 
   Scenario Outline: I/O builtins require one argument
     Given the liar expression (<op>)

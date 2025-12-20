@@ -58,18 +58,23 @@ Feature: Builtin Array Operations
     When I compile to lIR
     Then compilation succeeds
     And the output contains (ptr-array-alloc 3)
+    And the lIR parses
 
   Scenario: Pointer array get builtin
     Given the liar expression (let ((a (heap-array-ptr 3))) (aget-ptr a 1))
     When I compile to lIR
     Then compilation succeeds
     And the output contains (ptr-array-get
+    And the output contains (ptr-array-get 0
+    And the lIR parses
 
   Scenario: Pointer array set builtin
     Given the liar expression (let ((a (heap-array-ptr 3))) (aset-ptr a 1 42))
     When I compile to lIR
     Then compilation succeeds
     And the output contains (ptr-array-set
+    And the output contains (ptr-array-set 0
+    And the lIR parses
 
   Scenario Outline: Array builtins arity (one argument)
     Given the liar expression (<op>)

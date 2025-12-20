@@ -317,7 +317,7 @@
         ;; Allocate buffer (may be smaller after escape processing)
         (buf (heap-array (+ raw-len 1)))
         (actual-len (copy-string-loop (ptr+ (lexer-src start-lex) 0)
-                                       buf start-pos (+ start-pos raw-len) 0))
+                                       buf start-pos 0 (+ start-pos raw-len)))
         ;; Null-terminate
         (s (store-byte (ptr+ buf actual-len) 0))
         ;; Advance past string content and closing quote

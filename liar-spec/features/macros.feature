@@ -46,3 +46,15 @@ Feature: Macro Compilation
     Then compilation succeeds
     And the output contains (add
     And the output does not contain @add3
+
+  Scenario: Variadic macro with rest args
+    Given the liar code:
+      """
+      (defmacro add-all (... args) `(+ ,@args))
+      (defun test () (add-all 1 2))
+      """
+    When I compile to lIR
+    Then compilation succeeds
+    And the output contains (add
+    And the output does not contain @add-all
+    And the lIR parses

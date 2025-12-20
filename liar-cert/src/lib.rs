@@ -9,6 +9,7 @@ use lir_codegen::jit::JitEngine;
 use lir_core::ast::{ExternDecl, FunctionDef, StructDef};
 use lir_core::parser::{ParseResult, Parser};
 use std::collections::HashMap;
+use std::path::Path;
 
 /// Compile liar source and call a function, returning the result
 pub fn compile_and_call(source: &str, func_name: &str) -> Result<Value, String> {
@@ -286,21 +287,31 @@ pub fn compile_and_call_liarliar(source: &str, func_name: &str) -> Result<Value,
         .write_all(full_source.as_bytes())
         .map_err(|e| format!("Failed to write source file: {}", e))?;
 
-    // Get liarliar path from environment or default
-    let liarliar = std::env::var("LIARLIAR").unwrap_or_else(|_| "/tmp/liarliar".to_string());
-
-    // Check if liarliar exists
-    if !std::path::Path::new(&liarliar).exists() {
-        return Err(format!(
-            "liarliar binary not found at {}. Build it first with:\n\
-             cargo run --release -p liar -- liarliar/main.liar 2>/dev/null > /tmp/liarliar.lir && \
-             ./target/release/lair /tmp/liarliar.lir -o /tmp/liarliar",
-            liarliar
-        ));
+    let mut candidates: Vec<String> = Vec::new();
+    if let Ok(path) = std::env::var("LIARLIAR") {
+        candidates.push(path);
     }
+    candidates.extend(
+        [
+            "target/release/liarliar",
+            "./target/release/liarliar",
+            "../target/release/liarliar",
+            "../../target/release/liarliar",
+            "/tmp/liarliar",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
+
+    let liarliar = candidates
+        .iter()
+        .find(|p| Path::new(p).exists())
+        .ok_or_else(|| {
+            "Could not find liarliar binary. Run `make target/release/liarliar` first.".to_string()
+        })?;
 
     // Run liarliar to compile to lIR
-    let liarliar_output = Command::new(&liarliar)
+    let liarliar_output = Command::new(liarliar)
         .arg(source_file.path())
         .output()
         .map_err(|e| format!("Failed to run liarliar: {}", e))?;

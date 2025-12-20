@@ -116,6 +116,15 @@
         (s8 (store-byte (ptr+ buf 8) 0)))
     buf))
 
+;; "..." = 46 46 46 0
+(defun make-ellipsis-name () -> ptr
+  (let ((buf (heap-array 4))
+        (s0 (store-byte buf 46))
+        (s1 (store-byte (ptr+ buf 1) 46))
+        (s2 (store-byte (ptr+ buf 2) 46))
+        (s3 (store-byte (ptr+ buf 3) 0)))
+    buf))
+
 ;; ============================================================================
 ;; Form Predicates
 ;; ============================================================================
@@ -148,6 +157,10 @@
 ;; Predicate: is this (defmacro ...)?
 (defun defmacro-form? (form: ptr)
   (form-starts-with form (make-defmacro-name)))
+
+;; Predicate: is this "..."?
+(defun ellipsis-sym? (sym: ptr)
+  (symbol-name-eq sym (make-ellipsis-name)))
 
 ;; ============================================================================
 ;; Macro Table Operations
@@ -277,12 +290,17 @@
 (defun build-env (params: ptr args: ptr) -> ptr
   (if (nil? params)
       nil
-      (if (nil? args)
-          nil
-          (let ((param (scons-head params))
-                (arg (scons-head args))
-                (rest-env (build-env (scons-tail params) (scons-tail args))))
-            (pcons (pcons param arg) rest-env)))))
+      (let ((param (scons-head params)))
+        (if (ellipsis-sym? param)
+            (let ((rest-param (scons-head (scons-tail params))))
+              (if (nil? rest-param)
+                  nil
+                  (pcons (pcons rest-param args) nil)))
+            (if (nil? args)
+                nil
+                (let ((arg (scons-head args))
+                      (rest-env (build-env (scons-tail params) (scons-tail args))))
+                  (pcons (pcons param arg) rest-env)))))))
 
 ;; Expand a macro call
 (defun expand-macro (ctx: ptr form: ptr) -> ptr

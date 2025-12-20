@@ -26,3 +26,26 @@ Feature: Function Compilation
     When I compile to lIR
     Then compilation succeeds
     And the output contains (define (annotated i64)
+
+  Scenario: Recursive function call
+    Given the liar code:
+      """
+      (defun fact (n) (if (= n 0) 1 (* n (fact (- n 1)))))
+      (defun test () (fact 5))
+      """
+    When I compile to lIR
+    Then compilation succeeds
+    And the output contains (call @fact
+    And the lIR parses
+
+  Scenario: Function parameter call lowers to indirect-call
+    Given the liar code:
+      """
+      (defun apply1 (f x) (f x))
+      (defun inc (x) (+ x 1))
+      (defun test () (apply1 inc 1))
+      """
+    When I compile to lIR
+    Then compilation succeeds
+    And the output contains (indirect-tailcall
+    And the lIR parses
