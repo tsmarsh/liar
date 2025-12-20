@@ -139,7 +139,9 @@ impl<'ctx> crate::codegen::CodeGen<'ctx> {
             }
 
             Expr::PtrToInt { ty, value } => {
-                let val = self.compile_expr_recursive(value, locals)?.into_pointer_value();
+                let val = self
+                    .compile_expr_recursive(value, locals)?
+                    .into_pointer_value();
                 let int_type = match ty {
                     ScalarType::I8 => self.context.i8_type(),
                     ScalarType::I16 => self.context.i16_type(),

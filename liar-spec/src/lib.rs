@@ -96,7 +96,13 @@ pub fn compile_to_lir_liarliar(source: &str) -> Result<String, String> {
         String::from_utf8(output.stdout).map_err(|e| format!("Invalid UTF-8 output: {}", e))
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("liarliar compilation failed: {}", stderr))
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let details = if stderr.trim().is_empty() {
+            stdout
+        } else {
+            stderr
+        };
+        Err(format!("liarliar compilation failed: {}", details))
     }
 }
 

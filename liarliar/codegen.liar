@@ -35,10 +35,11 @@
    cg-proto-impls: ptr ;; List of protocol impl entries
    cg-proto-defaults: ptr ;; List of protocol default entries
    cg-type-protocols: ptr ;; List of type -> protocol list entries
+   cg-errors: i64      ;; Count of codegen errors
    cg-closure-counter: i64)) ;; Counter for generated lambda names
 
 (defun make-codegen-ctx (syms: ptr) -> ptr
-  (share (CodegenCtx 0 syms (make-global-env) nil 0 nil nil nil 1 nil nil nil nil nil nil 0)))
+  (share (CodegenCtx 0 syms (make-global-env) nil 0 nil nil nil 1 nil nil nil nil nil nil 0 0)))
 
 (defun cg-temp (ctx: ptr) -> i64 (. ctx cg-temp))
 (defun cg-syms (ctx: ptr) -> ptr (. ctx cg-syms))
@@ -55,6 +56,7 @@
 (defun cg-proto-impls (ctx: ptr) -> ptr (. ctx cg-proto-impls))
 (defun cg-proto-defaults (ctx: ptr) -> ptr (. ctx cg-proto-defaults))
 (defun cg-type-protocols (ctx: ptr) -> ptr (. ctx cg-type-protocols))
+(defun cg-errors (ctx: ptr) -> i64 (. ctx cg-errors))
 (defun cg-closure-counter (ctx: ptr) -> i64 (. ctx cg-closure-counter))
 
 ;; Register a struct (returns updated context with new type_id)
@@ -66,7 +68,8 @@
                        (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
                        (scons entry (cg-structs ctx)) (+ type-id 1) (cg-struct-defs ctx)
                        (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                       (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                       (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                       (cg-closure-counter ctx))))
   )
 
 ;; Add defstruct definition to list
@@ -75,7 +78,8 @@
                      (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
                      (cg-structs ctx) (cg-type-id ctx) (scons sdef (cg-struct-defs ctx))
                      (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                     (cg-closure-counter ctx))))
 
 ;; Compare two interned symbols by their IDs
 (defun sym-eq? (a: ptr b: ptr) -> i64
@@ -100,7 +104,7 @@
                          (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                          (pcons name (cg-fn-names ctx)) (cg-proto-methods ctx)
                          (cg-proto-impls ctx) (cg-proto-defaults ctx)
-                         (cg-type-protocols ctx) (cg-closure-counter ctx)))))
+                         (cg-type-protocols ctx) (cg-errors ctx) (cg-closure-counter ctx)))))
 
 ;; Add function definition and register name
 (defun cg-add-fn-def (ctx: ptr name: ptr fn-def: ptr) -> ptr
@@ -111,7 +115,7 @@
                        (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                        (cg-fn-names ctx) (cg-proto-methods ctx)
                        (cg-proto-impls ctx) (cg-proto-defaults ctx)
-                       (cg-type-protocols ctx) (cg-closure-counter ctx)))))
+                       (cg-type-protocols ctx) (cg-errors ctx) (cg-closure-counter ctx)))))
 
 ;; ============================================================
 ;; Protocol Metadata
@@ -146,7 +150,7 @@
                        (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                        (cg-fn-names ctx) (pcons entry (cg-proto-methods ctx))
                        (cg-proto-impls ctx) (cg-proto-defaults ctx)
-                       (cg-type-protocols ctx) (cg-closure-counter ctx)))))
+                       (cg-type-protocols ctx) (cg-errors ctx) (cg-closure-counter ctx)))))
 
 (defun cg-update-proto-method-ret (ctx: ptr method: ptr protocol: ptr ret: ptr) -> ptr
   (let ((entries (cg-proto-methods ctx)))
@@ -159,7 +163,7 @@
                          (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                          (cg-fn-names ctx) (reverse-pcons acc)
                          (cg-proto-impls ctx) (cg-proto-defaults ctx)
-                         (cg-type-protocols ctx) (cg-closure-counter ctx)))
+                         (cg-type-protocols ctx) (cg-errors ctx) (cg-closure-counter ctx)))
       (let ((entry (pcons-head entries))
             (rest (pcons-tail entries)))
         (if (and (= 1 (sym-eq? (proto-method-name entry) method))
@@ -191,7 +195,7 @@
                        (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                        (cg-fn-names ctx) (cg-proto-methods ctx)
                        (pcons entry (cg-proto-impls ctx)) (cg-proto-defaults ctx)
-                       (cg-type-protocols ctx) (cg-closure-counter ctx)))))
+                       (cg-type-protocols ctx) (cg-errors ctx) (cg-closure-counter ctx)))))
 
 ;; Protocol default entry: (target protocol source protocol method fn-name)
 (defun proto-default-entry (target: ptr source: ptr method: ptr fn-name: ptr) -> ptr
@@ -216,7 +220,7 @@
                        (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                        (cg-fn-names ctx) (cg-proto-methods ctx)
                        (cg-proto-impls ctx) (pcons entry (cg-proto-defaults ctx))
-                       (cg-type-protocols ctx) (cg-closure-counter ctx)))))
+                       (cg-type-protocols ctx) (cg-errors ctx) (cg-closure-counter ctx)))))
 
 ;; Type -> protocols entry: (type-name . protocol-list)
 (defun type-proto-entry (type-name: ptr protocols: ptr) -> ptr
@@ -246,7 +250,8 @@
                            (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                            (cg-fn-names ctx) (cg-proto-methods ctx)
                            (cg-proto-impls ctx) (cg-proto-defaults ctx)
-                           (pcons new-entry (reverse-pcons acc)) (cg-closure-counter ctx))))
+                           (pcons new-entry (reverse-pcons acc)) (cg-errors ctx)
+                           (cg-closure-counter ctx))))
       (let ((entry (pcons-head entries))
             (rest (pcons-tail entries)))
         (if (= 1 (sym-eq? (type-proto-name entry) type-name))
@@ -261,7 +266,7 @@
                                  (cg-fn-names ctx) (cg-proto-methods ctx)
                                  (cg-proto-impls ctx) (cg-proto-defaults ctx)
                                  (append-pcons (reverse-pcons acc) (pcons new-entry rest))
-                                 (cg-closure-counter ctx))))
+                                 (cg-errors ctx) (cg-closure-counter ctx))))
             (cg-add-type-protocol-loop ctx rest (pcons entry acc) type-name protocol)))))
 
 (defun find-type-protocols (entries: ptr type-name: ptr) -> ptr
@@ -316,7 +321,8 @@
                      (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
                      (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                      (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                     (cg-closure-counter ctx))))
 
 ;; Update environment
 (defun cg-with-env (ctx: ptr new-env: ptr) -> ptr
@@ -324,7 +330,8 @@
                      (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
                      (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                      (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                     (cg-closure-counter ctx))))
 
 ;; Add function to list
 (defun cg-add-fn (ctx: ptr fn-def: ptr) -> ptr
@@ -333,7 +340,8 @@
                      (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
                      (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                      (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                     (cg-closure-counter ctx))))
 
 ;; Merge function definitions from a nested codegen context.
 (defun cg-merge-fn-defs (ctx: ptr fns: ptr) -> ptr
@@ -351,7 +359,8 @@
                      (+ (cg-block-counter ctx) 1) (cg-blocks ctx) (cg-merge-label ctx)
                      (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                      (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                     (cg-closure-counter ctx))))
 
 ;; Add a block to the accumulated blocks list
 (defun cg-add-block (ctx: ptr block: ptr) -> ptr
@@ -359,7 +368,8 @@
                      (cg-block-counter ctx) (scons block (cg-blocks ctx)) (cg-merge-label ctx)
                      (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                      (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                     (cg-closure-counter ctx))))
 
 ;; Set the merge label for the if expression
 (defun cg-set-merge-label (ctx: ptr label: ptr) -> ptr
@@ -367,14 +377,38 @@
                      (cg-block-counter ctx) (cg-blocks ctx) label
                      (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                      (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                     (cg-closure-counter ctx))))
 
 ;; Reset block state for new function
 (defun cg-reset-blocks (ctx: ptr) -> ptr
   (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
                      0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                      (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                     (cg-closure-counter ctx))))
+
+;; ============================================================
+;; Error Tracking
+;; ============================================================
+
+(defun cg-add-error (ctx: ptr) -> ptr
+  (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
+                     (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
+                     (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
+                     (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
+                     (cg-proto-defaults ctx) (cg-type-protocols ctx)
+                     (+ (cg-errors ctx) 1) (cg-closure-counter ctx))))
+
+(defun cg-merge-errors (ctx: ptr other: ptr) -> ptr
+  (if (= (cg-errors other) 0)
+      ctx
+      (share (CodegenCtx (cg-temp ctx) (cg-syms ctx) (cg-env ctx) (cg-fns ctx)
+                         (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
+                         (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
+                         (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
+                         (cg-proto-defaults ctx) (cg-type-protocols ctx)
+                         (+ (cg-errors ctx) (cg-errors other)) (cg-closure-counter ctx)))))
 
 ;; ============================================================
 ;; Symbol/String Helpers
@@ -435,10 +469,57 @@
       (store-byte (ptr+ buf 13) 0)
       (intern syms buf))))
 
+;; Helper for symbols of exactly 14 chars
+(defun make-sym-14 (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13: i64) -> ptr
+  (let ((buf (heap-array 15)))  ;; 14 + null
+    (do
+      (store-byte buf b0)
+      (store-byte (ptr+ buf 1) b1)
+      (store-byte (ptr+ buf 2) b2)
+      (store-byte (ptr+ buf 3) b3)
+      (store-byte (ptr+ buf 4) b4)
+      (store-byte (ptr+ buf 5) b5)
+      (store-byte (ptr+ buf 6) b6)
+      (store-byte (ptr+ buf 7) b7)
+      (store-byte (ptr+ buf 8) b8)
+      (store-byte (ptr+ buf 9) b9)
+      (store-byte (ptr+ buf 10) b10)
+      (store-byte (ptr+ buf 11) b11)
+      (store-byte (ptr+ buf 12) b12)
+      (store-byte (ptr+ buf 13) b13)
+      (store-byte (ptr+ buf 14) 0)
+      (intern syms buf))))
+
+;; Helper for symbols of exactly 15 chars
+(defun make-sym-15 (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14: i64) -> ptr
+  (let ((buf (heap-array 16)))  ;; 15 + null
+    (do
+      (store-byte buf b0)
+      (store-byte (ptr+ buf 1) b1)
+      (store-byte (ptr+ buf 2) b2)
+      (store-byte (ptr+ buf 3) b3)
+      (store-byte (ptr+ buf 4) b4)
+      (store-byte (ptr+ buf 5) b5)
+      (store-byte (ptr+ buf 6) b6)
+      (store-byte (ptr+ buf 7) b7)
+      (store-byte (ptr+ buf 8) b8)
+      (store-byte (ptr+ buf 9) b9)
+      (store-byte (ptr+ buf 10) b10)
+      (store-byte (ptr+ buf 11) b11)
+      (store-byte (ptr+ buf 12) b12)
+      (store-byte (ptr+ buf 13) b13)
+      (store-byte (ptr+ buf 14) b14)
+      (store-byte (ptr+ buf 15) 0)
+      (intern syms buf))))
+
 ;; Common lIR symbols
 (defun sym-i64 (s: ptr) -> ptr     (make-sym s 105 54 52 0 0 0 0 0 3))       ;; i64
+(defun sym-i32 (s: ptr) -> ptr     (make-sym s 105 51 50 0 0 0 0 0 3))       ;; i32
+(defun sym-i16 (s: ptr) -> ptr     (make-sym s 105 49 54 0 0 0 0 0 3))       ;; i16
+(defun sym-i8 (s: ptr) -> ptr      (make-sym s 105 56 0 0 0 0 0 0 2))        ;; i8
 (defun sym-i1 (s: ptr) -> ptr      (make-sym s 105 49 0 0 0 0 0 0 2))        ;; i1
 (defun sym-ptr (s: ptr) -> ptr     (make-sym s 112 116 114 0 0 0 0 0 3))     ;; ptr
+(defun sym-float (s: ptr) -> ptr   (make-sym s 102 108 111 97 116 0 0 0 5))  ;; float
 (defun sym-double (s: ptr) -> ptr  (make-sym s 100 111 117 98 108 101 0 0 6)) ;; double
 (defun sym-add (s: ptr) -> ptr     (make-sym s 97 100 100 0 0 0 0 0 3))      ;; add
 (defun sym-sub (s: ptr) -> ptr     (make-sym s 115 117 98 0 0 0 0 0 3))      ;; sub
@@ -446,12 +527,27 @@
 (defun sym-sdiv (s: ptr) -> ptr    (make-sym s 115 100 105 118 0 0 0 0 4))   ;; sdiv
 (defun sym-srem (s: ptr) -> ptr    (make-sym s 115 114 101 109 0 0 0 0 4))   ;; srem
 (defun sym-icmp (s: ptr) -> ptr    (make-sym s 105 99 109 112 0 0 0 0 4))    ;; icmp
+(defun sym-fcmp (s: ptr) -> ptr    (make-sym s 102 99 109 112 0 0 0 0 4))    ;; fcmp
 (defun sym-eq (s: ptr) -> ptr      (make-sym s 101 113 0 0 0 0 0 0 2))       ;; eq
+(defun sym-ne (s: ptr) -> ptr      (make-sym s 110 101 0 0 0 0 0 0 2))       ;; ne
 (defun sym-slt (s: ptr) -> ptr     (make-sym s 115 108 116 0 0 0 0 0 3))     ;; slt
 (defun sym-sgt (s: ptr) -> ptr     (make-sym s 115 103 116 0 0 0 0 0 3))     ;; sgt
 (defun sym-sle (s: ptr) -> ptr     (make-sym s 115 108 101 0 0 0 0 0 3))     ;; sle
 (defun sym-sge (s: ptr) -> ptr     (make-sym s 115 103 101 0 0 0 0 0 3))     ;; sge
+(defun sym-oeq (s: ptr) -> ptr     (make-sym s 111 101 113 0 0 0 0 0 3))     ;; oeq
+(defun sym-one (s: ptr) -> ptr     (make-sym s 111 110 101 0 0 0 0 0 3))     ;; one
+(defun sym-olt (s: ptr) -> ptr     (make-sym s 111 108 116 0 0 0 0 0 3))     ;; olt
+(defun sym-ogt (s: ptr) -> ptr     (make-sym s 111 103 116 0 0 0 0 0 3))     ;; ogt
+(defun sym-ole (s: ptr) -> ptr     (make-sym s 111 108 101 0 0 0 0 0 3))     ;; ole
+(defun sym-oge (s: ptr) -> ptr     (make-sym s 111 103 101 0 0 0 0 0 3))     ;; oge
 (defun sym-select (s: ptr) -> ptr  (make-sym s 115 101 108 101 99 116 0 0 6)) ;; select
+(defun sym-and (s: ptr) -> ptr     (make-sym s 97 110 100 0 0 0 0 0 3))      ;; and
+(defun sym-or (s: ptr) -> ptr      (make-sym s 111 114 0 0 0 0 0 0 2))       ;; or
+(defun sym-xor (s: ptr) -> ptr     (make-sym s 120 111 114 0 0 0 0 0 3))     ;; xor
+(defun sym-shl (s: ptr) -> ptr     (make-sym s 115 104 108 0 0 0 0 0 3))     ;; shl
+(defun sym-lshr (s: ptr) -> ptr    (make-sym s 108 115 104 114 0 0 0 0 4))   ;; lshr
+(defun sym-ashr (s: ptr) -> ptr    (make-sym s 97 115 104 114 0 0 0 0 4))    ;; ashr
+(defun sym-ctpop (s: ptr) -> ptr   (make-sym s 99 116 112 111 112 0 0 0 5))  ;; ctpop
 (defun sym-call (s: ptr) -> ptr    (make-sym s 99 97 108 108 0 0 0 0 4))     ;; call
 (defun sym-indirect-call (s: ptr) -> ptr
   (make-sym-13 s 105 110 100 105 114 101 99 116 45 99 97 108 108)) ;; indirect-call
@@ -463,6 +559,16 @@
 (defun sym-string (s: ptr) -> ptr  (make-sym s 115 116 114 105 110 103 0 0 6)) ;; string
 (defun sym-br (s: ptr) -> ptr      (make-sym s 98 114 0 0 0 0 0 0 2))        ;; br
 (defun sym-phi (s: ptr) -> ptr     (make-sym s 112 104 105 0 0 0 0 0 3))     ;; phi
+(defun sym-array-alloc (s: ptr) -> ptr (make-sym-long s 97 114 114 97 121 45 97 108 108 111 99 0 11)) ;; array-alloc
+(defun sym-array-get (s: ptr) -> ptr  (make-sym-long s 97 114 114 97 121 45 103 101 116 0 0 0 9))    ;; array-get
+(defun sym-array-set (s: ptr) -> ptr  (make-sym-long s 97 114 114 97 121 45 115 101 116 0 0 0 9))    ;; array-set
+(defun sym-array-len (s: ptr) -> ptr  (make-sym-long s 97 114 114 97 121 45 108 101 110 0 0 0 9))    ;; array-len
+(defun sym-heap-array (s: ptr) -> ptr (make-sym-long s 104 101 97 112 45 97 114 114 97 121 0 0 10))   ;; heap-array
+(defun sym-heap-array-dyn (s: ptr) -> ptr (make-sym-14 s 104 101 97 112 45 97 114 114 97 121 45 100 121 110)) ;; heap-array-dyn
+(defun sym-array-copy (s: ptr) -> ptr (make-sym-long s 97 114 114 97 121 45 99 111 112 121 0 0 10))  ;; array-copy
+(defun sym-ptr-array-alloc (s: ptr) -> ptr (make-sym-15 s 112 116 114 45 97 114 114 97 121 45 97 108 108 111 99)) ;; ptr-array-alloc
+(defun sym-ptr-array-get (s: ptr) -> ptr (make-sym-13 s 112 116 114 45 97 114 114 97 121 45 103 101 116)) ;; ptr-array-get
+(defun sym-ptr-array-set (s: ptr) -> ptr (make-sym-13 s 112 116 114 45 97 114 114 97 121 45 115 101 116)) ;; ptr-array-set
 
 ;; Float arithmetic lIR symbols
 (defun sym-fadd (s: ptr) -> ptr    (make-sym s 102 97 100 100 0 0 0 0 4))    ;; fadd
@@ -493,6 +599,14 @@
 (defun sym-inbounds (s: ptr) -> ptr (make-sym s 105 110 98 111 117 110 100 115 8)) ;; inbounds
 (defun sym-alloca (s: ptr) -> ptr  (make-sym s 97 108 108 111 99 97 0 0 6))    ;; alloca
 (defun sym-store (s: ptr) -> ptr   (make-sym s 115 116 111 114 101 0 0 0 5))   ;; store
+(defun sym-alloc (s: ptr) -> ptr   (make-sym s 97 108 108 111 99 0 0 0 5))    ;; alloc
+(defun sym-own (s: ptr) -> ptr     (make-sym s 111 119 110 0 0 0 0 0 3))      ;; own
+(defun sym-drop (s: ptr) -> ptr    (make-sym s 100 114 111 112 0 0 0 0 4))    ;; drop
+(defun sym-move (s: ptr) -> ptr    (make-sym s 109 111 118 101 0 0 0 0 4))    ;; move
+(defun sym-rc-alloc (s: ptr) -> ptr (make-sym s 114 99 45 97 108 108 111 99 8)) ;; rc-alloc
+(defun sym-rc-clone (s: ptr) -> ptr (make-sym s 114 99 45 99 108 111 110 101 8)) ;; rc-clone
+(defun sym-rc-drop (s: ptr) -> ptr  (make-sym s 114 99 45 100 114 111 112 0 7))  ;; rc-drop
+(defun sym-printf (s: ptr) -> ptr  (make-sym s 112 114 105 110 116 102 0 0 6)) ;; printf
 
 ;; Liar special forms (for dispatch)
 (defun str-if () -> ptr
@@ -648,6 +762,331 @@
     (do (store-byte b 102) (store-byte (ptr+ b 1) 112) (store-byte (ptr+ b 2) 116)
         (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 117) (store-byte (ptr+ b 5) 110)
         (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 0) b)))
+
+;; Comparison operator strings
+(defun str-eqeq () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 61) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-neq () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 33) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-eq-dot () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 61) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-neq-dot () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 33) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 46)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-lt-dot () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 60) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-gt-dot () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 62) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-lte-dot () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 60) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 46)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-gte-dot () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 62) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 46)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-feq () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-fneq () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 33) (store-byte (ptr+ b 2) 61)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-flt () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 60) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-fgt () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 62) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-flte () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 60) (store-byte (ptr+ b 2) 61)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-fgte () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 102) (store-byte (ptr+ b 1) 62) (store-byte (ptr+ b 2) 61)
+        (store-byte (ptr+ b 3) 0) b)))
+
+;; Boolean/bitwise operator strings
+(defun str-not () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 110) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-and () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 110) (store-byte (ptr+ b 2) 100)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-or () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 111) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-bit-and () -> ptr
+  (let ((b (heap-array 8)))
+    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 97) (store-byte (ptr+ b 5) 110)
+        (store-byte (ptr+ b 6) 100) (store-byte (ptr+ b 7) 0) b)))
+
+(defun str-bit-or () -> ptr
+  (let ((b (heap-array 7)))
+    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 111) (store-byte (ptr+ b 5) 114)
+        (store-byte (ptr+ b 6) 0) b)))
+
+(defun str-bit-xor () -> ptr
+  (let ((b (heap-array 8)))
+    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 120) (store-byte (ptr+ b 5) 111)
+        (store-byte (ptr+ b 6) 114) (store-byte (ptr+ b 7) 0) b)))
+
+(defun str-bit-not () -> ptr
+  (let ((b (heap-array 8)))
+    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 110) (store-byte (ptr+ b 5) 111)
+        (store-byte (ptr+ b 6) 116) (store-byte (ptr+ b 7) 0) b)))
+
+(defun str-bit-shift-left () -> ptr
+  (let ((b (heap-array 15)))
+    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 104)
+        (store-byte (ptr+ b 6) 105) (store-byte (ptr+ b 7) 102) (store-byte (ptr+ b 8) 116)
+        (store-byte (ptr+ b 9) 45) (store-byte (ptr+ b 10) 108) (store-byte (ptr+ b 11) 101)
+        (store-byte (ptr+ b 12) 102) (store-byte (ptr+ b 13) 116) (store-byte (ptr+ b 14) 0) b)))
+
+(defun str-bit-shift-right () -> ptr
+  (let ((b (heap-array 16)))
+    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
+        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 104)
+        (store-byte (ptr+ b 6) 105) (store-byte (ptr+ b 7) 102) (store-byte (ptr+ b 8) 116)
+        (store-byte (ptr+ b 9) 45) (store-byte (ptr+ b 10) 114) (store-byte (ptr+ b 11) 105)
+        (store-byte (ptr+ b 12) 103) (store-byte (ptr+ b 13) 104) (store-byte (ptr+ b 14) 116)
+        (store-byte (ptr+ b 15) 0) b)))
+
+(defun str-arithmetic-shift-right () -> ptr
+  (let ((b (heap-array 23)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 105)
+        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 104) (store-byte (ptr+ b 5) 109)
+        (store-byte (ptr+ b 6) 101) (store-byte (ptr+ b 7) 116) (store-byte (ptr+ b 8) 105)
+        (store-byte (ptr+ b 9) 99) (store-byte (ptr+ b 10) 45) (store-byte (ptr+ b 11) 115)
+        (store-byte (ptr+ b 12) 104) (store-byte (ptr+ b 13) 105) (store-byte (ptr+ b 14) 102)
+        (store-byte (ptr+ b 15) 116) (store-byte (ptr+ b 16) 45) (store-byte (ptr+ b 17) 114)
+        (store-byte (ptr+ b 18) 105) (store-byte (ptr+ b 19) 103) (store-byte (ptr+ b 20) 104)
+        (store-byte (ptr+ b 21) 116) (store-byte (ptr+ b 22) 0) b)))
+
+(defun str-shl () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 115) (store-byte (ptr+ b 1) 104) (store-byte (ptr+ b 2) 108)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-shr () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 115) (store-byte (ptr+ b 1) 104) (store-byte (ptr+ b 2) 114)
+        (store-byte (ptr+ b 3) 0) b)))
+
+(defun str-ashr () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 104)
+        (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-popcount () -> ptr
+  (let ((b (heap-array 9)))
+    (do (store-byte b 112) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 112)
+        (store-byte (ptr+ b 3) 99) (store-byte (ptr+ b 4) 111) (store-byte (ptr+ b 5) 117)
+        (store-byte (ptr+ b 6) 110) (store-byte (ptr+ b 7) 116) (store-byte (ptr+ b 8) 0) b)))
+
+;; Byte/pointer operator strings
+(defun str-store-byte () -> ptr
+  (let ((b (heap-array 11)))
+    (do (store-byte b 115) (store-byte (ptr+ b 1) 116) (store-byte (ptr+ b 2) 111)
+        (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 45)
+        (store-byte (ptr+ b 6) 98) (store-byte (ptr+ b 7) 121) (store-byte (ptr+ b 8) 116)
+        (store-byte (ptr+ b 9) 101) (store-byte (ptr+ b 10) 0) b)))
+
+(defun str-load-byte () -> ptr
+  (let ((b (heap-array 10)))
+    (do (store-byte b 108) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 97)
+        (store-byte (ptr+ b 3) 100) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 98)
+        (store-byte (ptr+ b 6) 121) (store-byte (ptr+ b 7) 116) (store-byte (ptr+ b 8) 101)
+        (store-byte (ptr+ b 9) 0) b)))
+
+(defun str-ptr-plus () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 112) (store-byte (ptr+ b 1) 116) (store-byte (ptr+ b 2) 114)
+        (store-byte (ptr+ b 3) 43) (store-byte (ptr+ b 4) 0) b)))
+
+;; Array operator strings
+(defun str-array () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
+        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 0) b)))
+
+(defun str-make-array () -> ptr
+  (let ((b (heap-array 11)))
+    (do (store-byte b 109) (store-byte (ptr+ b 1) 97) (store-byte (ptr+ b 2) 107)
+        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 97)
+        (store-byte (ptr+ b 6) 114) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 97)
+        (store-byte (ptr+ b 9) 121) (store-byte (ptr+ b 10) 0) b)))
+
+(defun str-array-get () -> ptr
+  (let ((b (heap-array 10)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
+        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 45)
+        (store-byte (ptr+ b 6) 103) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 116)
+        (store-byte (ptr+ b 9) 0) b)))
+
+(defun str-aget () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 103) (store-byte (ptr+ b 2) 101)
+        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-array-set () -> ptr
+  (let ((b (heap-array 10)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
+        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 45)
+        (store-byte (ptr+ b 6) 115) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 116)
+        (store-byte (ptr+ b 9) 0) b)))
+
+(defun str-aset () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 101)
+        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-array-len () -> ptr
+  (let ((b (heap-array 10)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
+        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 45)
+        (store-byte (ptr+ b 6) 108) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 110)
+        (store-byte (ptr+ b 9) 0) b)))
+
+(defun str-alen () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 108) (store-byte (ptr+ b 2) 101)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-heap-array () -> ptr
+  (let ((b (heap-array 11)))
+    (do (store-byte b 104) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 97)
+        (store-byte (ptr+ b 3) 112) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 97)
+        (store-byte (ptr+ b 6) 114) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 97)
+        (store-byte (ptr+ b 9) 121) (store-byte (ptr+ b 10) 0) b)))
+
+(defun str-heap-array-ptr () -> ptr
+  (let ((b (heap-array 15)))
+    (do (store-byte b 104) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 97)
+        (store-byte (ptr+ b 3) 112) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 97)
+        (store-byte (ptr+ b 6) 114) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 97)
+        (store-byte (ptr+ b 9) 121) (store-byte (ptr+ b 10) 45) (store-byte (ptr+ b 11) 112)
+        (store-byte (ptr+ b 12) 116) (store-byte (ptr+ b 13) 114) (store-byte (ptr+ b 14) 0) b)))
+
+(defun str-aget-ptr () -> ptr
+  (let ((b (heap-array 9)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 103) (store-byte (ptr+ b 2) 101)
+        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 112)
+        (store-byte (ptr+ b 6) 116) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 0) b)))
+
+(defun str-aset-ptr () -> ptr
+  (let ((b (heap-array 9)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 101)
+        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 112)
+        (store-byte (ptr+ b 6) 116) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 0) b)))
+
+(defun str-array-copy () -> ptr
+  (let ((b (heap-array 11)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
+        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 45)
+        (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 111) (store-byte (ptr+ b 8) 112)
+        (store-byte (ptr+ b 9) 121) (store-byte (ptr+ b 10) 0) b)))
+
+;; Ownership and I/O operator strings
+(defun str-alloc () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 97) (store-byte (ptr+ b 1) 108) (store-byte (ptr+ b 2) 108)
+        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 99) (store-byte (ptr+ b 5) 0) b)))
+
+(defun str-drop () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 100) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 111)
+        (store-byte (ptr+ b 3) 112) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-move () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 109) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 118)
+        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 0) b)))
+
+(defun str-rc-new () -> ptr
+  (let ((b (heap-array 7)))
+    (do (store-byte b 114) (store-byte (ptr+ b 1) 99) (store-byte (ptr+ b 2) 45)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 119)
+        (store-byte (ptr+ b 6) 0) b)))
+
+(defun str-rc-clone () -> ptr
+  (let ((b (heap-array 9)))
+    (do (store-byte b 114) (store-byte (ptr+ b 1) 99) (store-byte (ptr+ b 2) 45)
+        (store-byte (ptr+ b 3) 99) (store-byte (ptr+ b 4) 108) (store-byte (ptr+ b 5) 111)
+        (store-byte (ptr+ b 6) 110) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 0) b)))
+
+(defun str-rc-drop () -> ptr
+  (let ((b (heap-array 8)))
+    (do (store-byte b 114) (store-byte (ptr+ b 1) 99) (store-byte (ptr+ b 2) 45)
+        (store-byte (ptr+ b 3) 100) (store-byte (ptr+ b 4) 114) (store-byte (ptr+ b 5) 111)
+        (store-byte (ptr+ b 6) 112) (store-byte (ptr+ b 7) 0) b)))
+
+(defun str-clone () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 99) (store-byte (ptr+ b 1) 108) (store-byte (ptr+ b 2) 111)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 0) b)))
+
+(defun str-print () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 112) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 105)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 116) (store-byte (ptr+ b 5) 0) b)))
+
+(defun str-println () -> ptr
+  (let ((b (heap-array 8)))
+    (do (store-byte b 112) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 105)
+        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 116) (store-byte (ptr+ b 5) 108)
+        (store-byte (ptr+ b 6) 110) (store-byte (ptr+ b 7) 0) b)))
+
+;; LiarString helpers for printf format strings
+(defun fmt-percent-s () -> ptr
+  (let ((buf (heap-array 3)))
+    (do (store-byte buf 37) (store-byte (ptr+ buf 1) 115) (store-byte (ptr+ buf 2) 0)
+        (liar-string buf 2))))
+
+(defun fmt-percent-ld () -> ptr
+  (let ((buf (heap-array 4)))
+    (do (store-byte buf 37) (store-byte (ptr+ buf 1) 108) (store-byte (ptr+ buf 2) 100)
+        (store-byte (ptr+ buf 3) 0) (liar-string buf 3))))
+
+(defun fmt-percent-s-nl () -> ptr
+  (let ((buf (heap-array 4)))
+    (do (store-byte buf 37) (store-byte (ptr+ buf 1) 115) (store-byte (ptr+ buf 2) 10)
+        (store-byte (ptr+ buf 3) 0) (liar-string buf 3))))
+
+(defun fmt-percent-ld-nl () -> ptr
+  (let ((buf (heap-array 5)))
+    (do (store-byte buf 37) (store-byte (ptr+ buf 1) 108) (store-byte (ptr+ buf 2) 100)
+        (store-byte (ptr+ buf 3) 10) (store-byte (ptr+ buf 4) 0) (liar-string buf 4))))
 
 ;; Builtin operator strings
 (defun str-nil? () -> ptr
@@ -838,6 +1277,9 @@
 (defun lir-icmp (syms: ptr pred: ptr left: ptr right: ptr) -> ptr
   (scons (sym-icmp syms) (scons pred (scons left (scons right nil)))))
 
+(defun lir-fcmp (syms: ptr pred: ptr left: ptr right: ptr) -> ptr
+  (scons (sym-fcmp syms) (scons pred (scons left (scons right nil)))))
+
 ;; Build: (select cond then else)
 (defun lir-select (syms: ptr cond-v: ptr then-v: ptr else-v: ptr) -> ptr
   (scons (sym-select syms) (scons cond-v (scons then-v (scons else-v nil)))))
@@ -845,6 +1287,10 @@
 ;; Build: (ptr null)
 (defun lir-null (syms: ptr) -> ptr
   (scons (sym-ptr syms) (scons (sym-null syms) nil)))
+
+;; Build: (ptr __env)
+(defun lir-env-param (syms: ptr) -> ptr
+  (scons (sym-ptr syms) (scons (intern syms (str-env)) nil)))
 
 ;; Build: (load type ptr)
 (defun lir-load (syms: ptr ty: ptr ptr-expr: ptr) -> ptr
@@ -1020,48 +1466,358 @@
 ;; List Form Dispatch
 ;; ============================================================
 
+(defun codegen-error (ctx: ptr msg: string) -> ptr
+  (do (println msg) (pcons (cg-add-error ctx) (box-int 0))))
+
 (defun codegen-list (ctx: ptr form: ptr) -> ptr
   (let ((head (car form)))
     (if (symbol? head)
-        (let ((name (symbol-name head))
-              (base-name (symbol-base-name (cg-syms ctx) head)))
+        (let ((base-name (symbol-base-name (cg-syms ctx) head)))
           (cond
             ((streq base-name (str-if))     (codegen-if ctx form))
             ((streq base-name (str-let))    (codegen-let ctx form))
             ((streq base-name (str-defun))  (codegen-defun ctx form))
             ((streq base-name (str-do))     (codegen-do ctx form))
             ((streq base-name (str-fn))     (codegen-fn ctx form))
-            ((streq base-name (str-plus))   (codegen-binop ctx form (sym-add (cg-syms ctx))))
-            ((streq base-name (str-minus))  (codegen-binop ctx form (sym-sub (cg-syms ctx))))
-            ((streq base-name (str-star))   (codegen-binop ctx form (sym-mul (cg-syms ctx))))
-            ((streq base-name (str-slash))  (codegen-binop ctx form (sym-sdiv (cg-syms ctx))))
-            ((streq base-name (str-rem))    (codegen-binop ctx form (sym-srem (cg-syms ctx))))
-            ((streq base-name (str-eq))     (codegen-cmp ctx form (sym-eq (cg-syms ctx))))
-            ((streq base-name (str-lt))     (codegen-cmp ctx form (sym-slt (cg-syms ctx))))
-            ((streq base-name (str-gt))     (codegen-cmp ctx form (sym-sgt (cg-syms ctx))))
-            ((streq base-name (str-lte))    (codegen-cmp ctx form (sym-sle (cg-syms ctx))))
-            ((streq base-name (str-gte))    (codegen-cmp ctx form (sym-sge (cg-syms ctx))))
+            ;; Arithmetic operators
+            ((streq base-name (str-plus))
+             (if (= (scons-length form) 3)
+                 (codegen-binop ctx form (sym-add (cg-syms ctx)))
+                 (codegen-error ctx "Error: + requires exactly 2 arguments")))
+            ((streq base-name (str-minus))
+             (if (= (scons-length form) 3)
+                 (codegen-binop ctx form (sym-sub (cg-syms ctx)))
+                 (codegen-error ctx "Error: - requires exactly 2 arguments")))
+            ((streq base-name (str-star))
+             (if (= (scons-length form) 3)
+                 (codegen-binop ctx form (sym-mul (cg-syms ctx)))
+                 (codegen-error ctx "Error: * requires exactly 2 arguments")))
+            ((streq base-name (str-slash))
+             (if (= (scons-length form) 3)
+                 (codegen-binop ctx form (sym-sdiv (cg-syms ctx)))
+                 (codegen-error ctx "Error: / requires exactly 2 arguments")))
+            ((streq base-name (str-rem))
+             (if (= (scons-length form) 3)
+                 (codegen-binop ctx form (sym-srem (cg-syms ctx)))
+                 (codegen-error ctx "Error: rem requires exactly 2 arguments")))
+            ;; Integer comparisons
+            ((streq base-name (str-eq))
+             (if (= (scons-length form) 3)
+                 (codegen-cmp ctx form (sym-eq (cg-syms ctx)))
+                 (codegen-error ctx "Error: = requires exactly 2 arguments")))
+            ((streq base-name (str-eqeq))
+             (if (= (scons-length form) 3)
+                 (codegen-cmp ctx form (sym-eq (cg-syms ctx)))
+                 (codegen-error ctx "Error: == requires exactly 2 arguments")))
+            ((streq base-name (str-neq))
+             (if (= (scons-length form) 3)
+                 (codegen-cmp ctx form (sym-ne (cg-syms ctx)))
+                 (codegen-error ctx "Error: != requires exactly 2 arguments")))
+            ((streq base-name (str-lt))
+             (if (= (scons-length form) 3)
+                 (codegen-cmp ctx form (sym-slt (cg-syms ctx)))
+                 (codegen-error ctx "Error: < requires exactly 2 arguments")))
+            ((streq base-name (str-gt))
+             (if (= (scons-length form) 3)
+                 (codegen-cmp ctx form (sym-sgt (cg-syms ctx)))
+                 (codegen-error ctx "Error: > requires exactly 2 arguments")))
+            ((streq base-name (str-lte))
+             (if (= (scons-length form) 3)
+                 (codegen-cmp ctx form (sym-sle (cg-syms ctx)))
+                 (codegen-error ctx "Error: <= requires exactly 2 arguments")))
+            ((streq base-name (str-gte))
+             (if (= (scons-length form) 3)
+                 (codegen-cmp ctx form (sym-sge (cg-syms ctx)))
+                 (codegen-error ctx "Error: >= requires exactly 2 arguments")))
+            ;; Float comparisons
+            ((streq base-name (str-eq-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-oeq (cg-syms ctx)))
+                 (codegen-error ctx "Error: =. requires exactly 2 arguments")))
+            ((streq base-name (str-feq))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-oeq (cg-syms ctx)))
+                 (codegen-error ctx "Error: f= requires exactly 2 arguments")))
+            ((streq base-name (str-neq-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-one (cg-syms ctx)))
+                 (codegen-error ctx "Error: !=. requires exactly 2 arguments")))
+            ((streq base-name (str-fneq))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-one (cg-syms ctx)))
+                 (codegen-error ctx "Error: f!= requires exactly 2 arguments")))
+            ((streq base-name (str-lt-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-olt (cg-syms ctx)))
+                 (codegen-error ctx "Error: <. requires exactly 2 arguments")))
+            ((streq base-name (str-flt))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-olt (cg-syms ctx)))
+                 (codegen-error ctx "Error: f< requires exactly 2 arguments")))
+            ((streq base-name (str-gt-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-ogt (cg-syms ctx)))
+                 (codegen-error ctx "Error: >. requires exactly 2 arguments")))
+            ((streq base-name (str-fgt))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-ogt (cg-syms ctx)))
+                 (codegen-error ctx "Error: f> requires exactly 2 arguments")))
+            ((streq base-name (str-lte-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-ole (cg-syms ctx)))
+                 (codegen-error ctx "Error: <=. requires exactly 2 arguments")))
+            ((streq base-name (str-flte))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-ole (cg-syms ctx)))
+                 (codegen-error ctx "Error: f<= requires exactly 2 arguments")))
+            ((streq base-name (str-gte-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-oge (cg-syms ctx)))
+                 (codegen-error ctx "Error: >=. requires exactly 2 arguments")))
+            ((streq base-name (str-fgte))
+             (if (= (scons-length form) 3)
+                 (codegen-fcmp ctx form (sym-oge (cg-syms ctx)))
+                 (codegen-error ctx "Error: f>= requires exactly 2 arguments")))
             ;; Float arithmetic operators
-            ((streq base-name (str-plus-dot))    (codegen-float-binop ctx form (sym-fadd (cg-syms ctx))))
-            ((streq base-name (str-minus-dot))   (codegen-float-binop ctx form (sym-fsub (cg-syms ctx))))
-            ((streq base-name (str-star-dot))    (codegen-float-binop ctx form (sym-fmul (cg-syms ctx))))
-            ((streq base-name (str-slash-dot))   (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx))))
-            ((streq base-name (str-percent-dot)) (codegen-float-binop ctx form (sym-frem (cg-syms ctx))))
-            ((streq base-name (str-fadd))        (codegen-float-binop ctx form (sym-fadd (cg-syms ctx))))
-            ((streq base-name (str-fsub))        (codegen-float-binop ctx form (sym-fsub (cg-syms ctx))))
-            ((streq base-name (str-fmul))        (codegen-float-binop ctx form (sym-fmul (cg-syms ctx))))
-            ((streq base-name (str-fdiv))        (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx))))
-            ((streq base-name (str-frem))        (codegen-float-binop ctx form (sym-frem (cg-syms ctx))))
+            ((streq base-name (str-plus-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-fadd (cg-syms ctx)))
+                 (codegen-error ctx "Error: +. requires exactly 2 arguments")))
+            ((streq base-name (str-minus-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-fsub (cg-syms ctx)))
+                 (codegen-error ctx "Error: -. requires exactly 2 arguments")))
+            ((streq base-name (str-star-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-fmul (cg-syms ctx)))
+                 (codegen-error ctx "Error: *. requires exactly 2 arguments")))
+            ((streq base-name (str-slash-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx)))
+                 (codegen-error ctx "Error: /. requires exactly 2 arguments")))
+            ((streq base-name (str-percent-dot))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-frem (cg-syms ctx)))
+                 (codegen-error ctx "Error: %. requires exactly 2 arguments")))
+            ((streq base-name (str-fadd))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-fadd (cg-syms ctx)))
+                 (codegen-error ctx "Error: fadd requires exactly 2 arguments")))
+            ((streq base-name (str-fsub))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-fsub (cg-syms ctx)))
+                 (codegen-error ctx "Error: fsub requires exactly 2 arguments")))
+            ((streq base-name (str-fmul))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-fmul (cg-syms ctx)))
+                 (codegen-error ctx "Error: fmul requires exactly 2 arguments")))
+            ((streq base-name (str-fdiv))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-fdiv (cg-syms ctx)))
+                 (codegen-error ctx "Error: fdiv requires exactly 2 arguments")))
+            ((streq base-name (str-frem))
+             (if (= (scons-length form) 3)
+                 (codegen-float-binop ctx form (sym-frem (cg-syms ctx)))
+                 (codegen-error ctx "Error: frem requires exactly 2 arguments")))
+            ;; Boolean and bitwise operators
+            ((streq base-name (str-not))
+             (if (= (scons-length form) 2)
+                 (codegen-not ctx form)
+                 (codegen-error ctx "Error: not requires exactly 1 argument")))
+            ((streq base-name (str-and))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-and (cg-syms ctx)))
+                 (codegen-error ctx "Error: and requires exactly 2 arguments")))
+            ((streq base-name (str-or))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-or (cg-syms ctx)))
+                 (codegen-error ctx "Error: or requires exactly 2 arguments")))
+            ((streq base-name (str-bit-and))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-and (cg-syms ctx)))
+                 (codegen-error ctx "Error: bit-and requires exactly 2 arguments")))
+            ((streq base-name (str-bit-or))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-or (cg-syms ctx)))
+                 (codegen-error ctx "Error: bit-or requires exactly 2 arguments")))
+            ((streq base-name (str-bit-xor))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-xor (cg-syms ctx)))
+                 (codegen-error ctx "Error: bit-xor requires exactly 2 arguments")))
+            ((streq base-name (str-bit-not))
+             (if (= (scons-length form) 2)
+                 (let ((arg-result (codegen-expr ctx (cadr form)))
+                       (ctx1 (pcons-head arg-result))
+                       (arg-v (pcons-tail arg-result))
+                       (syms (cg-syms ctx1)))
+                   (pcons ctx1 (lir-binop syms (sym-xor syms) (lir-int syms -1) arg-v)))
+                 (codegen-error ctx "Error: bit-not requires exactly 1 argument")))
+            ((streq base-name (str-bit-shift-left))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-shl (cg-syms ctx)))
+                 (codegen-error ctx "Error: bit-shift-left requires exactly 2 arguments")))
+            ((streq base-name (str-shl))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-shl (cg-syms ctx)))
+                 (codegen-error ctx "Error: shl requires exactly 2 arguments")))
+            ((streq base-name (str-bit-shift-right))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-lshr (cg-syms ctx)))
+                 (codegen-error ctx "Error: bit-shift-right requires exactly 2 arguments")))
+            ((streq base-name (str-shr))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-lshr (cg-syms ctx)))
+                 (codegen-error ctx "Error: shr requires exactly 2 arguments")))
+            ((streq base-name (str-arithmetic-shift-right))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-ashr (cg-syms ctx)))
+                 (codegen-error ctx "Error: arithmetic-shift-right requires exactly 2 arguments")))
+            ((streq base-name (str-ashr))
+             (if (= (scons-length form) 3)
+                 (codegen-binary-op ctx form (sym-ashr (cg-syms ctx)))
+                 (codegen-error ctx "Error: ashr requires exactly 2 arguments")))
+            ((streq base-name (str-popcount))
+             (if (= (scons-length form) 2)
+                 (codegen-unary-op ctx form (sym-ctpop (cg-syms ctx)))
+                 (codegen-error ctx "Error: popcount requires exactly 1 argument")))
             ;; Type conversion operators
-            ((streq base-name (str-trunc))       (codegen-conv ctx form (sym-trunc (cg-syms ctx))))
-            ((streq base-name (str-zext))        (codegen-conv ctx form (sym-zext (cg-syms ctx))))
-            ((streq base-name (str-sext))        (codegen-conv ctx form (sym-sext (cg-syms ctx))))
-            ((streq base-name (str-fptosi))      (codegen-conv ctx form (sym-fptosi (cg-syms ctx))))
-            ((streq base-name (str-fptoui))      (codegen-conv ctx form (sym-fptoui (cg-syms ctx))))
-            ((streq base-name (str-sitofp))      (codegen-conv ctx form (sym-sitofp (cg-syms ctx))))
-            ((streq base-name (str-uitofp))      (codegen-conv ctx form (sym-uitofp (cg-syms ctx))))
-            ((streq base-name (str-fpext))       (codegen-conv ctx form (sym-fpext (cg-syms ctx))))
-            ((streq base-name (str-fptrunc))     (codegen-conv ctx form (sym-fptrunc (cg-syms ctx))))
+            ((streq base-name (str-trunc))       (codegen-conv-checked ctx form (sym-trunc (cg-syms ctx)) "Error: trunc requires exactly 2 arguments"))
+            ((streq base-name (str-zext))        (codegen-conv-checked ctx form (sym-zext (cg-syms ctx)) "Error: zext requires exactly 2 arguments"))
+            ((streq base-name (str-sext))        (codegen-conv-checked ctx form (sym-sext (cg-syms ctx)) "Error: sext requires exactly 2 arguments"))
+            ((streq base-name (str-fptosi))      (codegen-conv-checked ctx form (sym-fptosi (cg-syms ctx)) "Error: fptosi requires exactly 2 arguments"))
+            ((streq base-name (str-fptoui))      (codegen-conv-checked ctx form (sym-fptoui (cg-syms ctx)) "Error: fptoui requires exactly 2 arguments"))
+            ((streq base-name (str-sitofp))      (codegen-conv-checked ctx form (sym-sitofp (cg-syms ctx)) "Error: sitofp requires exactly 2 arguments"))
+            ((streq base-name (str-uitofp))      (codegen-conv-checked ctx form (sym-uitofp (cg-syms ctx)) "Error: uitofp requires exactly 2 arguments"))
+            ((streq base-name (str-fpext))       (codegen-conv-checked ctx form (sym-fpext (cg-syms ctx)) "Error: fpext requires exactly 2 arguments"))
+            ((streq base-name (str-fptrunc))     (codegen-conv-checked ctx form (sym-fptrunc (cg-syms ctx)) "Error: fptrunc requires exactly 2 arguments"))
+            ;; Byte and pointer operators
+            ((streq base-name (str-store-byte))
+             (if (= (scons-length form) 3)
+                 (codegen-store-byte ctx form)
+                 (codegen-error ctx "Error: store-byte requires exactly 2 arguments")))
+            ((streq base-name (str-load-byte))
+             (if (= (scons-length form) 2)
+                 (codegen-load-byte ctx form)
+                 (codegen-error ctx "Error: load-byte requires exactly 1 argument")))
+            ((streq base-name (str-ptr-plus))
+             (if (= (scons-length form) 3)
+                 (codegen-ptr-plus ctx form)
+                 (codegen-error ctx "Error: ptr+ requires exactly 2 arguments")))
+            ;; Array operators
+            ((streq base-name (str-array))
+             (if (= (scons-length form) 2)
+                 (codegen-array-alloc ctx form)
+                 (codegen-error ctx "Error: array requires exactly 1 argument")))
+            ((streq base-name (str-make-array))
+             (if (= (scons-length form) 2)
+                 (codegen-array-alloc ctx form)
+                 (codegen-error ctx "Error: make-array requires exactly 1 argument")))
+            ((streq base-name (str-array-get))
+             (if (= (scons-length form) 3)
+                 (codegen-array-get ctx form)
+                 (codegen-error ctx "Error: array-get requires 2 arguments")))
+            ((streq base-name (str-aget))
+             (if (= (scons-length form) 3)
+                 (codegen-array-get ctx form)
+                 (codegen-error ctx "Error: aget requires 2 arguments")))
+            ((streq base-name (str-array-set))
+             (if (= (scons-length form) 4)
+                 (codegen-array-set ctx form)
+                 (codegen-error ctx "Error: array-set requires 3 arguments")))
+            ((streq base-name (str-aset))
+             (if (= (scons-length form) 4)
+                 (codegen-array-set ctx form)
+                 (codegen-error ctx "Error: aset requires 3 arguments")))
+            ((streq base-name (str-array-len))
+             (if (= (scons-length form) 2)
+                 (codegen-array-len ctx form)
+                 (codegen-error ctx "Error: array-len requires exactly 1 argument")))
+            ((streq base-name (str-alen))
+             (if (= (scons-length form) 2)
+                 (codegen-array-len ctx form)
+                 (codegen-error ctx "Error: alen requires exactly 1 argument")))
+            ((streq base-name (str-heap-array))
+             (if (= (scons-length form) 2)
+                 (codegen-heap-array ctx form)
+                 (codegen-error ctx "Error: heap-array requires exactly 1 argument")))
+            ((streq base-name (str-array-copy))
+             (if (= (scons-length form) 4)
+                 (codegen-array-copy ctx form)
+                 (codegen-error ctx "Error: array-copy requires 3 arguments")))
+            ((streq base-name (str-heap-array-ptr))
+             (if (= (scons-length form) 2)
+                 (codegen-ptr-array-alloc ctx form)
+                 (codegen-error ctx "Error: heap-array-ptr requires exactly 1 argument")))
+            ((streq base-name (str-aget-ptr))
+             (if (= (scons-length form) 3)
+                 (codegen-ptr-array-get ctx form)
+                 (codegen-error ctx "Error: aget-ptr requires 2 arguments")))
+            ((streq base-name (str-aset-ptr))
+             (if (= (scons-length form) 4)
+                 (codegen-ptr-array-set ctx form)
+                 (codegen-error ctx "Error: aset-ptr requires 3 arguments")))
+            ;; Ownership operators
+            ((streq base-name (str-alloc))
+             (if (= (scons-length form) 1)
+                 (pcons ctx (scons (sym-alloc (cg-syms ctx))
+                                   (scons (sym-own (cg-syms ctx)) (scons (sym-i64 (cg-syms ctx)) nil))))
+                 (codegen-error ctx "Error: alloc requires no arguments")))
+            ((streq base-name (str-drop))
+             (if (= (scons-length form) 2)
+                 (codegen-unary-op ctx form (sym-drop (cg-syms ctx)))
+                 (codegen-error ctx "Error: drop requires exactly 1 argument")))
+            ((streq base-name (str-move))
+             (if (= (scons-length form) 2)
+                 (codegen-unary-op ctx form (sym-move (cg-syms ctx)))
+                 (codegen-error ctx "Error: move requires exactly 1 argument")))
+            ((streq base-name (str-rc-new))
+             (if (= (scons-length form) 2)
+                 (let ((arg-result (codegen-expr ctx (cadr form)))
+                       (ctx1 (pcons-head arg-result))
+                       (syms (cg-syms ctx1)))
+                   (pcons ctx1 (scons (sym-rc-alloc syms) (scons (sym-i64 syms) nil))))
+                 (codegen-error ctx "Error: rc-new requires exactly 1 argument")))
+            ((streq base-name (str-rc-clone))
+             (if (= (scons-length form) 2)
+                 (codegen-unary-op ctx form (sym-rc-clone (cg-syms ctx)))
+                 (codegen-error ctx "Error: rc-clone requires exactly 1 argument")))
+            ((streq base-name (str-rc-drop))
+             (if (= (scons-length form) 2)
+                 (codegen-unary-op ctx form (sym-rc-drop (cg-syms ctx)))
+                 (codegen-error ctx "Error: rc-drop requires exactly 1 argument")))
+            ((streq base-name (str-clone))
+             (if (= (scons-length form) 2)
+                 (codegen-unary-op ctx form (sym-rc-clone (cg-syms ctx)))
+                 (codegen-error ctx "Error: clone requires exactly 1 argument")))
+            ((streq base-name (str-share))
+             (if (= (scons-length form) 2)
+                 (codegen-share ctx form)
+                 (codegen-error ctx "Error: share requires exactly 1 argument")))
+            ;; I/O operators
+            ((streq base-name (str-print))
+             (if (= (scons-length form) 2)
+                 (let ((arg-result (codegen-expr ctx (cadr form)))
+                       (ctx1 (pcons-head arg-result))
+                       (arg-v (pcons-tail arg-result))
+                       (arg-ty (lir-expr-ret-type ctx1 arg-v))
+                       (syms (cg-syms ctx1))
+                       (fmt-expr (if (= 1 (sym-eq? arg-ty (sym-ptr syms)))
+                                     (scons (sym-string syms) (scons (fmt-percent-s) nil))
+                                     (scons (sym-string syms) (scons (fmt-percent-ld) nil)))))
+                   (codegen-print-call ctx1 arg-v fmt-expr))
+                 (codegen-error ctx "Error: print requires exactly 1 argument")))
+            ((streq base-name (str-println))
+             (if (= (scons-length form) 2)
+                 (let ((arg-result (codegen-expr ctx (cadr form)))
+                       (ctx1 (pcons-head arg-result))
+                       (arg-v (pcons-tail arg-result))
+                       (arg-ty (lir-expr-ret-type ctx1 arg-v))
+                       (syms (cg-syms ctx1))
+                       (fmt-expr (if (= 1 (sym-eq? arg-ty (sym-ptr syms)))
+                                     (scons (sym-string syms) (scons (fmt-percent-s-nl) nil))
+                                     (scons (sym-string syms) (scons (fmt-percent-ld-nl) nil)))))
+                   (codegen-print-call ctx1 arg-v fmt-expr))
+                 (codegen-error ctx "Error: println requires exactly 1 argument")))
             ;; Builtin predicates
             ((streq base-name (str-nil?))        (codegen-nil? ctx form))
             ;; Struct operations
@@ -1069,10 +1825,9 @@
             ((streq base-name (str-defprotocol)) (codegen-defprotocol ctx form))
             ((streq base-name (str-extend-protocol)) (codegen-extend-protocol ctx form))
             ((streq base-name (str-extend-protocol-default)) (codegen-extend-protocol-default ctx form))
-            ((streq base-name (str-share))       (codegen-share ctx form))
             ((streq base-name (str-instance?))   (codegen-instance? ctx form))
             ((streq base-name (str-dot))         (codegen-field-access ctx form))
-            (else                      (codegen-call-or-struct ctx form))))
+            (else                      (codegen-call ctx form))))
         (codegen-call ctx form))))
 
 ;; ============================================================
@@ -1110,17 +1865,44 @@
         (syms (cg-syms ctx)))
     (pcons ctx (lir-binop syms op left-v right-v))))
 
+;; Resolve conversion type symbol to lIR type (nil if invalid)
+(defun conv-type-sym (syms: ptr type-sym: ptr) -> ptr
+  (if (not (symbol? type-sym))
+      nil
+      (if (= 1 (sym-eq? type-sym (sym-i1 syms)))
+          (sym-i1 syms)
+          (if (= 1 (sym-eq? type-sym (sym-i8 syms)))
+              (sym-i8 syms)
+              (if (= 1 (sym-eq? type-sym (sym-i16 syms)))
+                  (sym-i16 syms)
+                  (if (= 1 (sym-eq? type-sym (sym-i32 syms)))
+                      (sym-i32 syms)
+                      (if (= 1 (sym-eq? type-sym (sym-i64 syms)))
+                          (sym-i64 syms)
+                          (if (= 1 (sym-eq? type-sym (sym-float syms)))
+                              (sym-float syms)
+                              (if (= 1 (sym-eq? type-sym (sym-double syms)))
+                                  (sym-double syms)
+                                  nil)))))))))
+
 ;; Type conversion operations - emit (op target-type value)
-;; Form: (trunc i8 value) or (fptosi i64 value)
-(defun codegen-conv (ctx: ptr form: ptr op: ptr) -> ptr
-  (let ((target-type (cadr form))    ;; e.g., i8, i64, double
-        (value-form (caddr form))
-        (value-result (codegen-expr ctx value-form))
+(defun codegen-conv (ctx: ptr target-type: ptr value-form: ptr op: ptr) -> ptr
+  (let ((value-result (codegen-expr ctx value-form))
         (ctx (pcons-head value-result))
-        (value-v (pcons-tail value-result))
-        (syms (cg-syms ctx)))
-    ;; Emit: (op target-type value)
+        (value-v (pcons-tail value-result)))
     (pcons ctx (scons op (scons target-type (scons value-v nil))))))
+
+(defun codegen-conv-checked (ctx: ptr form: ptr op: ptr err-msg: string) -> ptr
+  (if (not (= (scons-length form) 3))
+      (codegen-error ctx err-msg)
+      (let ((target (cadr form))
+            (syms (cg-syms ctx))
+            (ty (conv-type-sym syms (cadr form))))
+        (if (nil? ty)
+            (if (symbol? target)
+                (codegen-error ctx "undefined variable")
+                (codegen-error ctx "type conversion requires a type name"))
+            (codegen-conv ctx ty (caddr form) op)))))
 
 ;; ============================================================
 ;; Builtin Predicates
@@ -1167,6 +1949,13 @@
         (store-byte (ptr+ b 4) 112) (store-byte (ptr+ b 5) 101) ;; pe
         (store-byte (ptr+ b 6) 95) (store-byte (ptr+ b 7) 105)  ;; _i
         (store-byte (ptr+ b 8) 100) (store-byte (ptr+ b 9) 0) b))) ;; d
+
+;; Helper string for __env
+(defun str-env () -> ptr
+  (let ((b (heap-array 6)))
+    (do (store-byte b 95) (store-byte (ptr+ b 1) 95)   ;; __
+        (store-byte (ptr+ b 2) 101) (store-byte (ptr+ b 3) 110) ;; en
+        (store-byte (ptr+ b 4) 118) (store-byte (ptr+ b 5) 0) b))) ;; v
 
 ;; Helper to build %struct.Name symbol
 (defun make-struct-type-sym (syms: ptr name: ptr) -> ptr
@@ -1246,6 +2035,202 @@
             (v (pcons-tail result)))
         (codegen-args-list ctx (cdr args) (scons v acc)))))
 
+;; Unary op helper: (op arg)
+(defun codegen-unary-op (ctx: ptr form: ptr op: ptr) -> ptr
+  (let ((arg-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head arg-result))
+        (arg-v (pcons-tail arg-result)))
+    (pcons ctx (scons op (scons arg-v nil)))))
+
+;; Binary op helper: (op a b) where op is a symbol (and/or/xor/shifts)
+(defun codegen-binary-op (ctx: ptr form: ptr op: ptr) -> ptr
+  (let ((left-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head left-result))
+        (left-v (pcons-tail left-result))
+        (right-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head right-result))
+        (right-v (pcons-tail right-result)))
+    (pcons ctx (lir-binop (cg-syms ctx) op left-v right-v))))
+
+;; Float comparison helper
+(defun codegen-fcmp (ctx: ptr form: ptr pred: ptr) -> ptr
+  (let ((left-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head left-result))
+        (left-v (pcons-tail left-result))
+        (right-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head right-result))
+        (right-v (pcons-tail right-result)))
+    (pcons ctx (lir-fcmp (cg-syms ctx) pred left-v right-v))))
+
+;; Boolean not: (xor (i1 1) (icmp ne arg (i64 0)))
+(defun codegen-not (ctx: ptr form: ptr) -> ptr
+  (let ((arg-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head arg-result))
+        (arg-v (pcons-tail arg-result))
+        (syms (cg-syms ctx))
+        (arg-ty (lir-expr-ret-type ctx arg-v)))
+    (pcons ctx
+           (lir-binop syms (sym-xor syms) (lir-i1 syms 1)
+                      (if (= 1 (sym-eq? arg-ty (sym-i1 syms)))
+                          arg-v
+                          (lir-icmp syms (sym-ne syms) arg-v (lir-int syms 0)))))))
+
+;; Print/println helper
+(defun codegen-print-call (ctx: ptr arg-v: ptr fmt-expr: ptr) -> ptr
+  (let ((syms (cg-syms ctx))
+        (args (scons fmt-expr (scons arg-v nil))))
+    (pcons ctx (lir-call syms (sym-printf syms) args))))
+
+;; Array operations
+(defun codegen-array-alloc (ctx: ptr form: ptr) -> ptr
+  (let ((size-form (cadr form))
+        (syms (cg-syms ctx)))
+    (if (boxed-int? size-form)
+        (pcons ctx (scons (sym-array-alloc syms)
+                          (scons (sym-i64 syms) (scons (box-int (unbox-int size-form)) nil))))
+        (let ((size-result (codegen-expr ctx size-form))
+              (ctx (pcons-head size-result))
+              (size-v (pcons-tail size-result)))
+          (pcons ctx (scons (sym-array-alloc syms)
+                            (scons (sym-i64 syms) (scons size-v nil))))))))
+
+(defun codegen-array-get (ctx: ptr form: ptr) -> ptr
+  (let ((arr-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head arr-result))
+        (arr-v (pcons-tail arr-result))
+        (idx-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head idx-result))
+        (idx-v (pcons-tail idx-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (scons (sym-array-get syms)
+                      (scons (sym-i64 syms) (scons (box-int 0) (scons arr-v (scons idx-v nil))))))))
+
+(defun codegen-array-set (ctx: ptr form: ptr) -> ptr
+  (let ((arr-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head arr-result))
+        (arr-v (pcons-tail arr-result))
+        (idx-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head idx-result))
+        (idx-v (pcons-tail idx-result))
+        (val-result (codegen-expr ctx (cadddr form)))
+        (ctx (pcons-head val-result))
+        (val-v (pcons-tail val-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (scons (sym-array-set syms)
+                      (scons (sym-i64 syms)
+                             (scons (box-int 0)
+                                    (scons arr-v (scons idx-v (scons val-v nil)))))))))
+
+(defun codegen-array-len (ctx: ptr form: ptr) -> ptr
+  (let ((arr-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head arr-result))
+        (arr-v (pcons-tail arr-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (scons (sym-array-len syms) (scons arr-v nil)))))
+
+(defun codegen-heap-array (ctx: ptr form: ptr) -> ptr
+  (let ((size-form (cadr form))
+        (syms (cg-syms ctx)))
+    (if (boxed-int? size-form)
+        (pcons ctx (scons (sym-heap-array syms)
+                          (scons (sym-i64 syms) (scons (box-int (unbox-int size-form)) nil))))
+        (let ((size-result (codegen-expr ctx size-form))
+              (ctx (pcons-head size-result))
+              (size-v (pcons-tail size-result)))
+          (pcons ctx (scons (sym-heap-array-dyn syms)
+                            (scons (sym-i64 syms) (scons size-v nil))))))))
+
+(defun codegen-array-copy (ctx: ptr form: ptr) -> ptr
+  (let ((size-form (cadr form))
+        (syms (cg-syms ctx)))
+    (if (boxed-int? size-form)
+        (let ((dest-result (codegen-expr ctx (caddr form)))
+              (ctx (pcons-head dest-result))
+              (dest-v (pcons-tail dest-result))
+              (src-result (codegen-expr ctx (cadddr form)))
+              (ctx (pcons-head src-result))
+              (src-v (pcons-tail src-result))
+              (size-v (box-int (unbox-int size-form))))
+          (pcons ctx (scons (sym-array-copy syms)
+                            (scons (sym-i64 syms) (scons size-v (scons dest-v (scons src-v nil)))))))
+        (let ((size-result (codegen-expr ctx size-form))
+              (ctx (pcons-head size-result))
+              (size-v (pcons-tail size-result))
+              (dest-result (codegen-expr ctx (caddr form)))
+              (ctx (pcons-head dest-result))
+              (dest-v (pcons-tail dest-result))
+              (src-result (codegen-expr ctx (cadddr form)))
+              (ctx (pcons-head src-result))
+              (src-v (pcons-tail src-result)))
+          (pcons ctx (scons (sym-array-copy syms)
+                            (scons (sym-i64 syms) (scons size-v (scons dest-v (scons src-v nil))))))))))
+
+(defun codegen-ptr-array-alloc (ctx: ptr form: ptr) -> ptr
+  (let ((size-form (cadr form))
+        (syms (cg-syms ctx)))
+    (if (boxed-int? size-form)
+        (pcons ctx (scons (sym-ptr-array-alloc syms)
+                          (scons (box-int (unbox-int size-form)) nil)))
+        (let ((size-result (codegen-expr ctx size-form))
+              (ctx (pcons-head size-result))
+              (size-v (pcons-tail size-result)))
+          (pcons ctx (scons (sym-ptr-array-alloc syms) (scons size-v nil)))))))
+
+(defun codegen-ptr-array-get (ctx: ptr form: ptr) -> ptr
+  (let ((arr-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head arr-result))
+        (arr-v (pcons-tail arr-result))
+        (idx-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head idx-result))
+        (idx-v (pcons-tail idx-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (scons (sym-ptr-array-get syms) (scons arr-v (scons idx-v nil))))))
+
+(defun codegen-ptr-array-set (ctx: ptr form: ptr) -> ptr
+  (let ((arr-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head arr-result))
+        (arr-v (pcons-tail arr-result))
+        (idx-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head idx-result))
+        (idx-v (pcons-tail idx-result))
+        (val-result (codegen-expr ctx (cadddr form)))
+        (ctx (pcons-head val-result))
+        (val-v (pcons-tail val-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (scons (sym-ptr-array-set syms) (scons arr-v (scons idx-v (scons val-v nil)))))))
+
+;; Byte/pointer operations
+(defun codegen-store-byte (ctx: ptr form: ptr) -> ptr
+  (let ((ptr-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head ptr-result))
+        (ptr-v (pcons-tail ptr-result))
+        (val-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head val-result))
+        (val-v (pcons-tail val-result))
+        (syms (cg-syms ctx))
+        (trunc-v (scons (sym-trunc syms) (scons (sym-i8 syms) (scons val-v nil)))))
+    (pcons ctx (scons (sym-store syms) (scons trunc-v (scons ptr-v nil))))))
+
+(defun codegen-load-byte (ctx: ptr form: ptr) -> ptr
+  (let ((ptr-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head ptr-result))
+        (ptr-v (pcons-tail ptr-result))
+        (syms (cg-syms ctx))
+        (load-v (lir-load syms (sym-i8 syms) ptr-v)))
+    (pcons ctx (scons (sym-zext syms) (scons (sym-i64 syms) (scons load-v nil))))))
+
+(defun codegen-ptr-plus (ctx: ptr form: ptr) -> ptr
+  (let ((ptr-result (codegen-expr ctx (cadr form)))
+        (ctx (pcons-head ptr-result))
+        (ptr-v (pcons-tail ptr-result))
+        (idx-result (codegen-expr ctx (caddr form)))
+        (ctx (pcons-head idx-result))
+        (idx-v (pcons-tail idx-result))
+        (syms (cg-syms ctx)))
+    (pcons ctx (scons (sym-getelementptr syms)
+                      (scons (sym-inbounds syms)
+                             (scons (sym-i8 syms) (scons ptr-v (scons idx-v nil))))))))
+
 ;; Codegen for share: (share (Point 10 20))
 ;; Emits: (heap-struct Point type-id arg1 arg2 ...)
 (defun codegen-share (ctx: ptr form: ptr) -> ptr
@@ -1255,7 +2240,7 @@
               (struct-info (cg-lookup-struct ctx struct-name)))
           (if (nil? struct-info)
               ;; Not a struct constructor - error
-              (pcons ctx (box-int 0))
+              (codegen-error ctx "share requires a struct constructor argument")
               (let ((args (cdr inner))
                     (type-id (struct-entry-type-id struct-info))
                     (syms (cg-syms ctx))
@@ -1267,7 +2252,7 @@
                     (all-vals (scons (lir-int syms type-id) arg-vals)))
                 (pcons ctx (scons (sym-heap-struct syms)
                                  (scons struct-name all-vals))))))
-        (pcons ctx (box-int 0)))))
+        (codegen-error ctx "share requires a struct constructor argument"))))
 
 ;; Find field index in struct fields list (0-indexed)
 (defun find-field-index (fields: ptr field-name: ptr idx: i64) -> i64
@@ -1414,8 +2399,9 @@
               (check-block (lir-block syms check-lbl
                                       (scons (lir-ret syms check-ret) nil)))
               (fn-sig (scons fn-name (scons (sym-i64 syms) nil)))
-              (params (scons (scons (sym-ptr syms) (scons obj-name nil))
-                             (scons (scons (sym-i64 syms) (scons type-name nil)) nil)))
+              (params (scons (lir-env-param syms)
+                             (scons (scons (sym-ptr syms) (scons obj-name nil))
+                                    (scons (scons (sym-i64 syms) (scons type-name nil)) nil))))
               (fn-def (scons (sym-define syms)
                              (scons fn-sig
                                     (scons params
@@ -1440,7 +2426,8 @@
               (obj-v (pcons-tail obj-result))
               (type-id (struct-entry-type-id struct-info))
               (syms (cg-syms ctx))
-              (args (scons obj-v (scons (lir-int syms type-id) nil))))
+              (args (scons (lir-null syms)
+                           (scons obj-v (scons (lir-int syms type-id) nil)))))
           (pcons ctx (lir-call syms fn-name args))))))
 
 ;; ============================================================
@@ -1652,11 +2639,13 @@
 (defun codegen-protocol-method (ctx: ptr fn-name: ptr params: ptr body: ptr ret-ty: ptr) -> ptr
   (let ((syms (cg-syms ctx))
         (lir-params (build-proto-params syms params nil))
+        (lir-params (scons (lir-env-param syms) lir-params))
         (param-types (build-param-type-list syms params nil))
         (outer-fns (cg-fns ctx))
         (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                                   (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                                   (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                                   (cg-closure-counter ctx))))
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
@@ -1670,9 +2659,10 @@
                        (scons fn-sig
                               (scons lir-params fn-body))))
         (inner-fns (fn-defs-since (cg-fns fn-ctx) outer-fns)))
-    (let ((ctx (cg-merge-fn-defs ctx inner-fns)))
+    (let ((ctx (cg-merge-errors ctx fn-ctx)))
+      (let ((ctx (cg-merge-fn-defs ctx inner-fns)))
       (let ((ctx (cg-add-fn-def ctx fn-name fn-def)))
-        (pcons ctx (pcons fn-def inferred))))))
+        (pcons ctx (pcons fn-def inferred)))))))
 
 (defun codegen-extend-protocol-loop (ctx: ptr protocol: ptr protocol-name: ptr type-name: ptr methods: ptr) -> ptr
   (if (nil? methods)
@@ -1814,7 +2804,7 @@
             (type-id (dispatch-entry-type-id entry))
             (fn-name (dispatch-entry-fn entry))
             (cond-v (lir-icmp syms (sym-eq syms) type-id-v (lir-int syms type-id)))
-            (then-v (lir-call syms fn-name args))
+            (then-v (lir-call syms fn-name (scons (lir-null syms) args)))
             (else-result (build-protocol-dispatch ctx rest type-id-v args ret-ty default-expr))
             (ctx (pcons-head else-result))
             (else-v (pcons-tail else-result)))
@@ -1891,6 +2881,20 @@
            ((sym-eq? head (sym-string syms)) (sym-ptr syms))
            ((sym-eq? head (sym-heap-struct syms)) (sym-ptr syms))
            ((sym-eq? head (sym-alloca syms)) (sym-ptr syms))
+           ((sym-eq? head (sym-array-alloc syms)) (sym-ptr syms))
+           ((sym-eq? head (sym-heap-array syms)) (sym-ptr syms))
+           ((sym-eq? head (sym-heap-array-dyn syms)) (sym-ptr syms))
+           ((sym-eq? head (sym-ptr-array-alloc syms)) (sym-ptr syms))
+           ((sym-eq? head (sym-ptr-array-get syms)) (sym-ptr syms))
+           ((sym-eq? head (sym-array-get syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-array-len syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-array-set syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-ptr-array-set syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-rc-alloc syms)) (sym-ptr syms))
+           ((sym-eq? head (sym-rc-clone syms)) (sym-ptr syms))
+           ((sym-eq? head (sym-rc-drop syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-drop syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-move syms)) (sym-i64 syms))
            ((sym-eq? head (sym-getelementptr syms)) (sym-ptr syms))
            ((sym-eq? head (sym-load syms)) (cadr expr))
            ((sym-eq? head (sym-indirect-call syms)) (caddr expr))
@@ -1901,6 +2905,14 @@
            ((sym-eq? head (sym-fdiv syms)) (sym-double syms))
            ((sym-eq? head (sym-frem syms)) (sym-double syms))
            ((sym-eq? head (sym-icmp syms)) (sym-i1 syms))
+           ((sym-eq? head (sym-fcmp syms)) (sym-i1 syms))
+           ((sym-eq? head (sym-and syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-or syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-xor syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-shl syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-lshr syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-ashr syms)) (sym-i64 syms))
+           ((sym-eq? head (sym-ctpop syms)) (sym-i64 syms))
            ((sym-eq? head (sym-trunc syms)) (cadr expr))
            ((sym-eq? head (sym-zext syms)) (cadr expr))
            ((sym-eq? head (sym-sext syms)) (cadr expr))
@@ -2179,9 +3191,10 @@
                   (let ((args-result (codegen-args ctx args nil))
                         (ctx (pcons-head args-result))
                         (args-rev (pcons-tail args-result))
-                        (args-v (reverse-scons args-rev)))
+                        (args-v (reverse-scons args-rev))
+                        (args-v (scons (lir-null syms) args-v)))
                     (pcons ctx (lir-call syms head args-v)))
-                  (codegen-indirect-call ctx head args))
+                  (codegen-error ctx "Error: undefined function"))
               (codegen-protocol-call ctx head args protocol)))
         (codegen-indirect-call-expr ctx head args))))
 
@@ -2218,9 +3231,19 @@
               (sym-ptr syms)
               (if (= 1 (sym-eq? type-sym (sym-double syms)))
                   (sym-double syms)
-                  (if (= 1 (sym-eq? type-sym (sym-i1 syms)))
-                      (sym-i1 syms)
-                      (sym-i64 syms))))
+                  (if (= 1 (sym-eq? type-sym (sym-float syms)))
+                      (sym-float syms)
+                      (if (= 1 (sym-eq? type-sym (sym-i1 syms)))
+                          (sym-i1 syms)
+                          (if (= 1 (sym-eq? type-sym (sym-i8 syms)))
+                              (sym-i8 syms)
+                              (if (= 1 (sym-eq? type-sym (sym-i16 syms)))
+                                  (sym-i16 syms)
+                                  (if (= 1 (sym-eq? type-sym (sym-i32 syms)))
+                                      (sym-i32 syms)
+                                      (if (= 1 (sym-eq? type-sym (sym-string syms)))
+                                          (sym-ptr syms)
+                                          (sym-i64 syms)))))))))
           (sym-i64 syms))))
 
 ;; Extract function body from defun form
@@ -2411,7 +3434,8 @@
                                 (cg-block-counter ctx) (cg-blocks ctx) (cg-merge-label ctx)
                                 (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                                 (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                                (cg-proto-defaults ctx) (cg-type-protocols ctx) (+ counter 1)))))
+                                (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                                (+ counter 1)))))
     (pcons ctx name)))
 
 (defun cg-next-temp-name (ctx: ptr) -> ptr
@@ -2431,11 +3455,13 @@
         (lir-params (transform-params ctx (cg-syms ctx) raw-params nil callable))
         (ret-ty0 (get-defun-return-type (cg-syms ctx) form))
         (syms (cg-syms ctx))
+        (lir-params (scons (lir-env-param syms) lir-params))
         ;; Reset temp and block counters for function body
         (outer-fns (cg-fns ctx))
         (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                                   (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                                   (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                                   (cg-closure-counter ctx))))
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
@@ -2452,9 +3478,10 @@
                               (scons lir-params fn-body))))
         (inner-fns (fn-defs-since (cg-fns fn-ctx) outer-fns)))
     ;; Add nested fns first, then this function.
-    (let ((ctx (cg-merge-fn-defs ctx inner-fns)))
-      (let ((ctx (cg-add-fn-def ctx name fn-def)))
-        (pcons ctx fn-def)))))
+    (let ((ctx (cg-merge-errors ctx fn-ctx)))
+      (let ((ctx (cg-merge-fn-defs ctx inner-fns)))
+        (let ((ctx (cg-add-fn-def ctx name fn-def)))
+          (pcons ctx fn-def))))))
 
 ;; Lambda - stub for now
 (defun codegen-fn (ctx: ptr form: ptr) -> ptr
@@ -2465,10 +3492,12 @@
         (fn-name (pcons-tail name-result))
         (syms (cg-syms ctx))
         (lir-params (build-lambda-params syms params nil))
+        (lir-params (scons (lir-env-param syms) lir-params))
         (outer-fns (cg-fns ctx))
         (fn-ctx (share (CodegenCtx 0 syms (cg-env ctx) outer-fns 0 nil nil (cg-structs ctx) (cg-type-id ctx) (cg-struct-defs ctx)
                                    (cg-fn-names ctx) (cg-proto-methods ctx) (cg-proto-impls ctx)
-                                   (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-closure-counter ctx))))
+                                   (cg-proto-defaults ctx) (cg-type-protocols ctx) (cg-errors ctx)
+                                   (cg-closure-counter ctx))))
         (body-result (codegen-expr fn-ctx body))
         (fn-ctx (pcons-head body-result))
         (body-v (pcons-tail body-result))
@@ -2481,9 +3510,10 @@
                               (scons lir-params fn-body))))
         (fn-ptr (prepend-at syms (symbol-name fn-name)))
         (inner-fns (fn-defs-since (cg-fns fn-ctx) outer-fns)))
-    (let ((ctx (cg-merge-fn-defs ctx inner-fns)))
-      (let ((ctx (cg-add-fn-def ctx fn-name fn-def)))
-        (pcons ctx fn-ptr)))))
+    (let ((ctx (cg-merge-errors ctx fn-ctx)))
+      (let ((ctx (cg-merge-fn-defs ctx inner-fns)))
+        (let ((ctx (cg-add-fn-def ctx fn-name fn-def)))
+          (pcons ctx fn-ptr))))))
 
 ;; ============================================================
 ;; Top-Level
@@ -2500,6 +3530,9 @@
   (let ((ctx (make-codegen-ctx syms))
         (ctx (codegen-toplevel ctx forms))
         (struct-defs (cg-struct-defs ctx))
-        (fn-defs (cg-fns ctx)))
-    ;; Combine struct defs and function defs
-    (append-scons (reverse-scons struct-defs) fn-defs)))
+        (fn-defs (cg-fns ctx))
+        (errors (cg-errors ctx)))
+    (if (> errors 0)
+        nil
+        ;; Combine struct defs and function defs
+        (append-scons (reverse-scons struct-defs) fn-defs))))
