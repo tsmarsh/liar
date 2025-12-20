@@ -120,9 +120,10 @@
 (defun fn-list-has? (lst: ptr name: ptr) -> i64
   (if (nil? lst)
       0
-      (if (= 1 (sym-eq? (pcons-head lst) name))
-          1
-          (fn-list-has? (pcons-tail lst) name))))
+      (let ((entry (pcons-head lst)))
+        (if (= 1 (streq (symbol-name entry) (symbol-name name)))
+            1
+            (fn-list-has? (pcons-tail lst) name)))))
 
 (defun cg-add-fn-name (ctx: ptr name: ptr) -> ptr
   (if (= 1 (fn-list-has? (cg-fn-names ctx) name))
@@ -684,6 +685,24 @@
 (defun str-fn () -> ptr
   (let ((b (heap-array 3)))
     (do (store-byte b 102) (store-byte (ptr+ b 1) 110) (store-byte (ptr+ b 2) 0) b)))
+
+(defun str-tailcall () -> ptr
+  (let ((b (heap-array 9)))
+    (do (store-byte b 116) (store-byte (ptr+ b 1) 97) (store-byte (ptr+ b 2) 105)
+        (store-byte (ptr+ b 3) 108) (store-byte (ptr+ b 4) 99) (store-byte (ptr+ b 5) 97)
+        (store-byte (ptr+ b 6) 108) (store-byte (ptr+ b 7) 108)
+        (store-byte (ptr+ b 8) 0) b)))
+
+(defun str-indirect-tailcall () -> ptr
+  (let ((b (heap-array 18)))
+    (do (store-byte b 105) (store-byte (ptr+ b 1) 110) (store-byte (ptr+ b 2) 100)
+        (store-byte (ptr+ b 3) 105) (store-byte (ptr+ b 4) 114) (store-byte (ptr+ b 5) 101)
+        (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 116)
+        (store-byte (ptr+ b 8) 45)  ;; '-'
+        (store-byte (ptr+ b 9) 116) (store-byte (ptr+ b 10) 97) (store-byte (ptr+ b 11) 105)
+        (store-byte (ptr+ b 12) 108) (store-byte (ptr+ b 13) 99) (store-byte (ptr+ b 14) 97)
+        (store-byte (ptr+ b 15) 108) (store-byte (ptr+ b 16) 108)
+        (store-byte (ptr+ b 17) 0) b)))
 
 (defun str-plus () -> ptr
   (let ((b (heap-array 2))) (do (store-byte b 43) (store-byte (ptr+ b 1) 0) b)))
@@ -3542,7 +3561,7 @@
 ;; Blocks are already in correct order [entry, then, else], just append merge
 (defun build-function-blocks (syms: ptr blocks: ptr merge-lbl: ptr body-v: ptr) -> ptr
   (let ((merge-block (lir-block syms merge-lbl
-                                (scons (lir-ret syms body-v) nil))))
+                                (build-terminator syms body-v))))
     ;; Append merge block to the end
     (append-scons blocks (scons merge-block nil))))
 
@@ -3553,12 +3572,28 @@
       (scons (car lst1) (append-scons (cdr lst1) lst2))))
 
 ;; Helper to build function body based on whether there are blocks
+(defun tailcall-expr? (expr: ptr) -> i64
+  (if (scons? expr)
+      (let ((head (car expr)))
+        (if (symbol? head)
+            (let ((name (symbol-name head)))
+              (if (= 1 (streq name (str-tailcall)))
+                  1
+                  (if (= 1 (streq name (str-indirect-tailcall))) 1 0)))
+            0))
+      0))
+
+(defun build-terminator (syms: ptr body-v: ptr) -> ptr
+  (if (= 1 (tailcall-expr? body-v))
+      (scons body-v nil)
+      (scons (lir-ret syms body-v) nil)))
+
 (defun build-fn-body (syms: ptr blocks: ptr merge-lbl: ptr body-v: ptr) -> ptr
   (if (nil? blocks)
       ;; No branching: simple single-block function
       (scons (scons (sym-block syms)
                     (scons (sym-entry syms)
-                           (scons (lir-ret syms body-v) nil)))
+                           (build-terminator syms body-v)))
              nil)
       ;; Has branching: use accumulated blocks + merge block
       (build-function-blocks syms blocks merge-lbl body-v)))
