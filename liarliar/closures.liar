@@ -15,7 +15,8 @@
 (ns liarliar.closures
   (:require [liarliar.symbols :refer :all]
             [liarliar.env :refer :all]
-            [liarliar.value :refer :all]))
+            [liarliar.value :refer :all]
+            [liarliar.strings :refer :all]))
 
 ;; ============================================================
 ;; Capture Modes (per ADR 005)
@@ -344,50 +345,34 @@
 ;;
 ;; Creates symbols like __closure_0, __closure_1, etc.
 
-(defun append-digit (buf: ptr idx n: i64) -> i64
-  (do (store-byte (ptr+ buf idx) (+ 48 (rem n 10)))
-      (+ idx 1)))
-
-(defun int-to-buf-loop (buf: ptr idx n: i64) -> i64
-  (if (< n 10)
-      (append-digit buf idx n)
-      (let ((idx2 (int-to-buf-loop buf idx (/ n 10))))
-        (append-digit buf idx2 (rem n 10)))))
-
 ;; Generate a unique symbol: __closure_N or __env_N
 (defun gensym-closure (ctx: ptr) -> ptr
-  (let ((buf (heap-array 20))
-        (counter (cctx-counter ctx)))
-    (do
-      ;; __closure_
-      (store-byte buf 95)           ;; _
-      (store-byte (ptr+ buf 1) 95)  ;; _
-      (store-byte (ptr+ buf 2) 99)  ;; c
-      (store-byte (ptr+ buf 3) 108) ;; l
-      (store-byte (ptr+ buf 4) 111) ;; o
-      (store-byte (ptr+ buf 5) 115) ;; s
-      (store-byte (ptr+ buf 6) 117) ;; u
-      (store-byte (ptr+ buf 7) 114) ;; r
-      (store-byte (ptr+ buf 8) 101) ;; e
-      (store-byte (ptr+ buf 9) 95)  ;; _
-      (let ((end (int-to-buf-loop buf 10 counter)))
-        (do (store-byte (ptr+ buf end) 0)
-            (intern (cctx-syms ctx) buf))))))
+  (let ((sb (string-builder-cap 20))
+        (counter (cctx-counter ctx))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 95))
+        (sb (append-int sb counter)))
+    (intern (cctx-syms ctx) (to-string sb))))
 
 (defun gensym-env (ctx: ptr) -> ptr
-  (let ((buf (heap-array 20))
-        (counter (cctx-counter ctx)))
-    (do
-      ;; __env_
-      (store-byte buf 95)           ;; _
-      (store-byte (ptr+ buf 1) 95)  ;; _
-      (store-byte (ptr+ buf 2) 101) ;; e
-      (store-byte (ptr+ buf 3) 110) ;; n
-      (store-byte (ptr+ buf 4) 118) ;; v
-      (store-byte (ptr+ buf 5) 95)  ;; _
-      (let ((end (int-to-buf-loop buf 6 counter)))
-        (do (store-byte (ptr+ buf end) 0)
-            (intern (cctx-syms ctx) buf))))))
+  (let ((sb (string-builder-cap 20))
+        (counter (cctx-counter ctx))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 118))
+        (sb (sb-conj sb 95))
+        (sb (append-int sb counter)))
+    (intern (cctx-syms ctx) (to-string sb))))
 
 ;; ============================================================
 ;; Capture Mode Determination

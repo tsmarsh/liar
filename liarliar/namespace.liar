@@ -10,7 +10,8 @@
   (:require [liar.core :refer :all]
             [liarliar.symbols :refer :all]
             [liarliar.value :refer :all]
-            [liarliar.io :refer :all]))
+            [liarliar.io :refer :all]
+            [liarliar.strings :refer :all]))
 
 ;; ============================================================
 ;; Require Spec
@@ -60,48 +61,44 @@
 
 ;; Check if a symbol is :require
 (defun str-keyword-require () -> ptr
-  (let ((b (heap-array 9)))
-    (do (store-byte b 58)  ;; :
-        (store-byte (ptr+ b 1) 114)  ;; r
-        (store-byte (ptr+ b 2) 101)  ;; e
-        (store-byte (ptr+ b 3) 113)  ;; q
-        (store-byte (ptr+ b 4) 117)  ;; u
-        (store-byte (ptr+ b 5) 105)  ;; i
-        (store-byte (ptr+ b 6) 114)  ;; r
-        (store-byte (ptr+ b 7) 101)  ;; e
-        (store-byte (ptr+ b 8) 0)
-        b)))
+  (let ((sb (string-builder-cap 9))
+        (sb (sb-conj sb 58))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 113))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 ;; Check if a symbol is :refer
 (defun str-keyword-refer () -> ptr
-  (let ((b (heap-array 7)))
-    (do (store-byte b 58)  ;; :
-        (store-byte (ptr+ b 1) 114)  ;; r
-        (store-byte (ptr+ b 2) 101)  ;; e
-        (store-byte (ptr+ b 3) 102)  ;; f
-        (store-byte (ptr+ b 4) 101)  ;; e
-        (store-byte (ptr+ b 5) 114)  ;; r
-        (store-byte (ptr+ b 6) 0)
-        b)))
+  (let ((sb (string-builder-cap 7))
+        (sb (sb-conj sb 58))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 114)))
+    (to-string sb)))
 
 ;; Check if a symbol is :all
 (defun str-keyword-all () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 58)  ;; :
-        (store-byte (ptr+ b 1) 97)   ;; a
-        (store-byte (ptr+ b 2) 108)  ;; l
-        (store-byte (ptr+ b 3) 108)  ;; l
-        (store-byte (ptr+ b 4) 0)
-        b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 58))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 108)))
+    (to-string sb)))
 
 ;; Check if a symbol is :as
 (defun str-keyword-as () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 58)  ;; :
-        (store-byte (ptr+ b 1) 97)   ;; a
-        (store-byte (ptr+ b 2) 115)  ;; s
-        (store-byte (ptr+ b 3) 0)
-        b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 58))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 115)))
+    (to-string sb)))
 
 (defun keyword-require? (sym: ptr) -> i64
   (if (symbol? sym)
@@ -215,8 +212,10 @@
 
 ;; Helper to get str-ns (reuse from codegen would be better, but avoid circular dep)
 (defun str-ns () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 110) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 115)))
+    (to-string sb)))
 
 ;; ============================================================
 ;; Module Resolution
@@ -238,22 +237,16 @@
   (let ((lib-len (strlen-ptr lib-path))
         (name-len (strlen-ptr name)))
     (let ((total (+ lib-len (+ 1 (+ name-len 6)))))  ;; 1 for /, 5 for .liar, 1 for null
-      (let ((buf (heap-array total)))
-        (do
-          ;; Copy lib-path
-          (strcpy-loop buf lib-path 0)
-          ;; Add /
-          (store-byte (ptr+ buf lib-len) 47)
-          ;; Copy name
-          (strcpy-loop (ptr+ buf (+ lib-len 1)) name 0)
-          ;; Add .liar
-          (store-byte (ptr+ buf (+ lib-len (+ 1 name-len))) 46)      ;; .
-          (store-byte (ptr+ buf (+ lib-len (+ 2 name-len))) 108)     ;; l
-          (store-byte (ptr+ buf (+ lib-len (+ 3 name-len))) 105)     ;; i
-          (store-byte (ptr+ buf (+ lib-len (+ 4 name-len))) 97)      ;; a
-          (store-byte (ptr+ buf (+ lib-len (+ 5 name-len))) 114)     ;; r
-          (store-byte (ptr+ buf (+ lib-len (+ 6 name-len))) 0)       ;; null
-          buf)))))
+      (let ((sb (string-builder-cap total))
+            (sb (append sb lib-path))
+            (sb (sb-conj sb 47))
+            (sb (append sb name))
+            (sb (sb-conj sb 46))
+            (sb (sb-conj sb 108))
+            (sb (sb-conj sb 105))
+            (sb (sb-conj sb 97))
+            (sb (sb-conj sb 114)))
+        (to-string sb)))))
 
 (defun strcpy-loop (dst: ptr src: ptr idx: i64) -> i64
   (let ((c (load-byte (ptr+ src idx))))

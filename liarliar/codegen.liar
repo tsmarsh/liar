@@ -446,101 +446,103 @@
 
 ;; Create a symbol from bytes (for lIR keywords)
 ;; Always allocate 9 bytes (8 chars + null), write all, null-terminate at len
+(defun sb-conj-if (sb: ptr len: i64 idx: i64 b: i64) -> ptr
+  (if (> len idx) (sb-conj sb b) sb))
+
+(defun sb-append-range-loop (sb: ptr s: ptr idx: i64 len: i64) -> ptr
+  (if (>= idx len)
+      sb
+      (let ((sb (sb-conj sb (load-byte (ptr+ s idx)))))
+        (sb-append-range-loop sb s (+ idx 1) len))))
+
+(defun sb-append-range (sb: ptr s: ptr len: i64) -> ptr
+  (sb-append-range-loop sb s 0 len))
+
 (defun make-sym (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 len: i64) -> ptr
-  (let ((buf (heap-array 9)))  ;; 8 + null
-    (do
-      (store-byte buf b0)
-      (store-byte (ptr+ buf 1) b1)
-      (store-byte (ptr+ buf 2) b2)
-      (store-byte (ptr+ buf 3) b3)
-      (store-byte (ptr+ buf 4) b4)
-      (store-byte (ptr+ buf 5) b5)
-      (store-byte (ptr+ buf 6) b6)
-      (store-byte (ptr+ buf 7) b7)
-      (store-byte (ptr+ buf len) 0)  ;; null terminate at len
-      (intern syms buf))))
+  (let ((sb (string-builder-cap len))
+        (sb (sb-conj-if sb len 0 b0))
+        (sb (sb-conj-if sb len 1 b1))
+        (sb (sb-conj-if sb len 2 b2))
+        (sb (sb-conj-if sb len 3 b3))
+        (sb (sb-conj-if sb len 4 b4))
+        (sb (sb-conj-if sb len 5 b5))
+        (sb (sb-conj-if sb len 6 b6))
+        (sb (sb-conj-if sb len 7 b7)))
+    (intern syms (to-string sb))))
 
 ;; Helper for symbols up to 12 chars
 (defun make-sym-long (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 len: i64) -> ptr
-  (let ((buf (heap-array 13)))  ;; 12 + null
-    (do
-      (store-byte buf b0)
-      (store-byte (ptr+ buf 1) b1)
-      (store-byte (ptr+ buf 2) b2)
-      (store-byte (ptr+ buf 3) b3)
-      (store-byte (ptr+ buf 4) b4)
-      (store-byte (ptr+ buf 5) b5)
-      (store-byte (ptr+ buf 6) b6)
-      (store-byte (ptr+ buf 7) b7)
-      (store-byte (ptr+ buf 8) b8)
-      (store-byte (ptr+ buf 9) b9)
-      (store-byte (ptr+ buf 10) b10)
-      (store-byte (ptr+ buf 11) b11)
-      (store-byte (ptr+ buf len) 0)
-      (intern syms buf))))
+  (let ((sb (string-builder-cap len))
+        (sb (sb-conj-if sb len 0 b0))
+        (sb (sb-conj-if sb len 1 b1))
+        (sb (sb-conj-if sb len 2 b2))
+        (sb (sb-conj-if sb len 3 b3))
+        (sb (sb-conj-if sb len 4 b4))
+        (sb (sb-conj-if sb len 5 b5))
+        (sb (sb-conj-if sb len 6 b6))
+        (sb (sb-conj-if sb len 7 b7))
+        (sb (sb-conj-if sb len 8 b8))
+        (sb (sb-conj-if sb len 9 b9))
+        (sb (sb-conj-if sb len 10 b10))
+        (sb (sb-conj-if sb len 11 b11)))
+    (intern syms (to-string sb))))
 
 ;; Helper for symbols of exactly 13 chars
 (defun make-sym-13 (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12: i64) -> ptr
-  (let ((buf (heap-array 14)))  ;; 13 + null
-    (do
-      (store-byte buf b0)
-      (store-byte (ptr+ buf 1) b1)
-      (store-byte (ptr+ buf 2) b2)
-      (store-byte (ptr+ buf 3) b3)
-      (store-byte (ptr+ buf 4) b4)
-      (store-byte (ptr+ buf 5) b5)
-      (store-byte (ptr+ buf 6) b6)
-      (store-byte (ptr+ buf 7) b7)
-      (store-byte (ptr+ buf 8) b8)
-      (store-byte (ptr+ buf 9) b9)
-      (store-byte (ptr+ buf 10) b10)
-      (store-byte (ptr+ buf 11) b11)
-      (store-byte (ptr+ buf 12) b12)
-      (store-byte (ptr+ buf 13) 0)
-      (intern syms buf))))
+  (let ((sb (string-builder-cap 13))
+        (sb (sb-conj sb b0))
+        (sb (sb-conj sb b1))
+        (sb (sb-conj sb b2))
+        (sb (sb-conj sb b3))
+        (sb (sb-conj sb b4))
+        (sb (sb-conj sb b5))
+        (sb (sb-conj sb b6))
+        (sb (sb-conj sb b7))
+        (sb (sb-conj sb b8))
+        (sb (sb-conj sb b9))
+        (sb (sb-conj sb b10))
+        (sb (sb-conj sb b11))
+        (sb (sb-conj sb b12)))
+    (intern syms (to-string sb))))
 
 ;; Helper for symbols of exactly 14 chars
 (defun make-sym-14 (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13: i64) -> ptr
-  (let ((buf (heap-array 15)))  ;; 14 + null
-    (do
-      (store-byte buf b0)
-      (store-byte (ptr+ buf 1) b1)
-      (store-byte (ptr+ buf 2) b2)
-      (store-byte (ptr+ buf 3) b3)
-      (store-byte (ptr+ buf 4) b4)
-      (store-byte (ptr+ buf 5) b5)
-      (store-byte (ptr+ buf 6) b6)
-      (store-byte (ptr+ buf 7) b7)
-      (store-byte (ptr+ buf 8) b8)
-      (store-byte (ptr+ buf 9) b9)
-      (store-byte (ptr+ buf 10) b10)
-      (store-byte (ptr+ buf 11) b11)
-      (store-byte (ptr+ buf 12) b12)
-      (store-byte (ptr+ buf 13) b13)
-      (store-byte (ptr+ buf 14) 0)
-      (intern syms buf))))
+  (let ((sb (string-builder-cap 14))
+        (sb (sb-conj sb b0))
+        (sb (sb-conj sb b1))
+        (sb (sb-conj sb b2))
+        (sb (sb-conj sb b3))
+        (sb (sb-conj sb b4))
+        (sb (sb-conj sb b5))
+        (sb (sb-conj sb b6))
+        (sb (sb-conj sb b7))
+        (sb (sb-conj sb b8))
+        (sb (sb-conj sb b9))
+        (sb (sb-conj sb b10))
+        (sb (sb-conj sb b11))
+        (sb (sb-conj sb b12))
+        (sb (sb-conj sb b13)))
+    (intern syms (to-string sb))))
 
 ;; Helper for symbols of exactly 15 chars
 (defun make-sym-15 (syms: ptr b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14: i64) -> ptr
-  (let ((buf (heap-array 16)))  ;; 15 + null
-    (do
-      (store-byte buf b0)
-      (store-byte (ptr+ buf 1) b1)
-      (store-byte (ptr+ buf 2) b2)
-      (store-byte (ptr+ buf 3) b3)
-      (store-byte (ptr+ buf 4) b4)
-      (store-byte (ptr+ buf 5) b5)
-      (store-byte (ptr+ buf 6) b6)
-      (store-byte (ptr+ buf 7) b7)
-      (store-byte (ptr+ buf 8) b8)
-      (store-byte (ptr+ buf 9) b9)
-      (store-byte (ptr+ buf 10) b10)
-      (store-byte (ptr+ buf 11) b11)
-      (store-byte (ptr+ buf 12) b12)
-      (store-byte (ptr+ buf 13) b13)
-      (store-byte (ptr+ buf 14) b14)
-      (store-byte (ptr+ buf 15) 0)
-      (intern syms buf))))
+  (let ((sb (string-builder-cap 15))
+        (sb (sb-conj sb b0))
+        (sb (sb-conj sb b1))
+        (sb (sb-conj sb b2))
+        (sb (sb-conj sb b3))
+        (sb (sb-conj sb b4))
+        (sb (sb-conj sb b5))
+        (sb (sb-conj sb b6))
+        (sb (sb-conj sb b7))
+        (sb (sb-conj sb b8))
+        (sb (sb-conj sb b9))
+        (sb (sb-conj sb b10))
+        (sb (sb-conj sb b11))
+        (sb (sb-conj sb b12))
+        (sb (sb-conj sb b13))
+        (sb (sb-conj sb b14)))
+    (intern syms (to-string sb))))
 
 
 ;; Common lIR symbols
@@ -584,27 +586,25 @@
 (defun sym-indirect-call (s: ptr) -> ptr
   (make-sym-13 s 105 110 100 105 114 101 99 116 45 99 97 108 108)) ;; indirect-call
 (defun sym-indirect-tailcall (s: ptr) -> ptr
-  (let ((buf (heap-array 18)))  ;; 17 + null
-    (do
-      (store-byte buf 105)      ;; i
-      (store-byte (ptr+ buf 1) 110)  ;; n
-      (store-byte (ptr+ buf 2) 100)  ;; d
-      (store-byte (ptr+ buf 3) 105)  ;; i
-      (store-byte (ptr+ buf 4) 114)  ;; r
-      (store-byte (ptr+ buf 5) 101)  ;; e
-      (store-byte (ptr+ buf 6) 99)   ;; c
-      (store-byte (ptr+ buf 7) 116)  ;; t
-      (store-byte (ptr+ buf 8) 45)   ;; -
-      (store-byte (ptr+ buf 9) 116)  ;; t
-      (store-byte (ptr+ buf 10) 97)  ;; a
-      (store-byte (ptr+ buf 11) 105) ;; i
-      (store-byte (ptr+ buf 12) 108) ;; l
-      (store-byte (ptr+ buf 13) 99)  ;; c
-      (store-byte (ptr+ buf 14) 97)  ;; a
-      (store-byte (ptr+ buf 15) 108) ;; l
-      (store-byte (ptr+ buf 16) 108) ;; l
-      (store-byte (ptr+ buf 17) 0)
-      (intern s buf)))) ;; indirect-tailcall
+  (let ((sb (string-builder-cap 17))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 108)))
+    (intern s (to-string sb)))) ;; indirect-tailcall
 (defun sym-ret (s: ptr) -> ptr     (make-sym s 114 101 116 0 0 0 0 0 3))     ;; ret
 (defun sym-declare (s: ptr) -> ptr (make-sym s 100 101 99 108 97 114 101 0 7)) ;; declare
 (defun sym-define (s: ptr) -> ptr  (make-sym s 100 101 102 105 110 101 0 0 6)) ;; define
@@ -666,624 +666,1078 @@
 
 ;; Liar special forms (for dispatch)
 (defun str-if () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 105) (store-byte (ptr+ b 1) 102) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 102)))
+    (to-string sb)))
 
 (defun str-ns () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 110) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 115)))
+    (to-string sb)))
 
 (defun str-let () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 108) (store-byte (ptr+ b 1) 101)
-        (store-byte (ptr+ b 2) 116) (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-defun () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 100) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 102)
-        (store-byte (ptr+ b 3) 117) (store-byte (ptr+ b 4) 110) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 110)))
+    (to-string sb)))
 
 (defun str-do () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 100) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 111)))
+    (to-string sb)))
 
 (defun str-fn () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 110) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 110)))
+    (to-string sb)))
 
 (defun str-tailcall () -> ptr
-  (let ((b (heap-array 9)))
-    (do (store-byte b 116) (store-byte (ptr+ b 1) 97) (store-byte (ptr+ b 2) 105)
-        (store-byte (ptr+ b 3) 108) (store-byte (ptr+ b 4) 99) (store-byte (ptr+ b 5) 97)
-        (store-byte (ptr+ b 6) 108) (store-byte (ptr+ b 7) 108)
-        (store-byte (ptr+ b 8) 0) b)))
+  (let ((sb (string-builder-cap 9))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 108)))
+    (to-string sb)))
 
 (defun str-indirect-tailcall () -> ptr
-  (let ((b (heap-array 18)))
-    (do (store-byte b 105) (store-byte (ptr+ b 1) 110) (store-byte (ptr+ b 2) 100)
-        (store-byte (ptr+ b 3) 105) (store-byte (ptr+ b 4) 114) (store-byte (ptr+ b 5) 101)
-        (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 116)
-        (store-byte (ptr+ b 8) 45)  ;; '-'
-        (store-byte (ptr+ b 9) 116) (store-byte (ptr+ b 10) 97) (store-byte (ptr+ b 11) 105)
-        (store-byte (ptr+ b 12) 108) (store-byte (ptr+ b 13) 99) (store-byte (ptr+ b 14) 97)
-        (store-byte (ptr+ b 15) 108) (store-byte (ptr+ b 16) 108)
-        (store-byte (ptr+ b 17) 0) b)))
+  (let ((sb (string-builder-cap 18))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 108)))
+    (to-string sb)))
 
 (defun str-plus () -> ptr
-  (let ((b (heap-array 2))) (do (store-byte b 43) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 43)))
+    (to-string sb)))
 
 (defun str-minus () -> ptr
-  (let ((b (heap-array 2))) (do (store-byte b 45) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 45)))
+    (to-string sb)))
 
 (defun str-star () -> ptr
-  (let ((b (heap-array 2))) (do (store-byte b 42) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 42)))
+    (to-string sb)))
 
 (defun str-slash () -> ptr
-  (let ((b (heap-array 2))) (do (store-byte b 47) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 47)))
+    (to-string sb)))
 
 (defun str-rem () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 114) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 109)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 109)))
+    (to-string sb)))
 
 (defun str-eq () -> ptr
-  (let ((b (heap-array 2))) (do (store-byte b 61) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 61)))
+    (to-string sb)))
 
 (defun str-lt () -> ptr
-  (let ((b (heap-array 2))) (do (store-byte b 60) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 60)))
+    (to-string sb)))
 
 (defun str-gt () -> ptr
-  (let ((b (heap-array 2))) (do (store-byte b 62) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 62)))
+    (to-string sb)))
 
 (defun str-lte () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 60) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 60))
+        (sb (sb-conj sb 61)))
+    (to-string sb)))
 
 (defun str-gte () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 62) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 62))
+        (sb (sb-conj sb 61)))
+    (to-string sb)))
 
 ;; Float operator strings (+., -., *., /., %.)
 (defun str-plus-dot () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 43) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 43))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-minus-dot () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 45) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-star-dot () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 42) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 42))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-slash-dot () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 47) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 47))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-percent-dot () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 37) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 37))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 ;; Named float operator strings (fadd, fsub, fmul, fdiv, frem)
 (defun str-fadd () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 97) (store-byte (ptr+ b 2) 100)
-        (store-byte (ptr+ b 3) 100) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 100)))
+    (to-string sb)))
 
 (defun str-fsub () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 117)
-        (store-byte (ptr+ b 3) 98) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 98)))
+    (to-string sb)))
 
 (defun str-fmul () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 109) (store-byte (ptr+ b 2) 117)
-        (store-byte (ptr+ b 3) 108) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 109))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 108)))
+    (to-string sb)))
 
 (defun str-fdiv () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 100) (store-byte (ptr+ b 2) 105)
-        (store-byte (ptr+ b 3) 118) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 118)))
+    (to-string sb)))
 
 (defun str-frem () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 101)
-        (store-byte (ptr+ b 3) 109) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 109)))
+    (to-string sb)))
 
 ;; Type conversion operator strings
 (defun str-trunc () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 116) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 117)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 99) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 99)))
+    (to-string sb)))
 
 (defun str-zext () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 122) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 120)
-        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 122))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 120))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-sext () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 115) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 120)
-        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 120))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-fptosi () -> ptr
-  (let ((b (heap-array 7)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 112) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 105)
-        (store-byte (ptr+ b 6) 0) b)))
+  (let ((sb (string-builder-cap 7))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 105)))
+    (to-string sb)))
 
 (defun str-fptoui () -> ptr
-  (let ((b (heap-array 7)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 112) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 117) (store-byte (ptr+ b 5) 105)
-        (store-byte (ptr+ b 6) 0) b)))
+  (let ((sb (string-builder-cap 7))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 105)))
+    (to-string sb)))
 
 (defun str-sitofp () -> ptr
-  (let ((b (heap-array 7)))
-    (do (store-byte b 115) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 102) (store-byte (ptr+ b 5) 112)
-        (store-byte (ptr+ b 6) 0) b)))
+  (let ((sb (string-builder-cap 7))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 112)))
+    (to-string sb)))
 
 (defun str-uitofp () -> ptr
-  (let ((b (heap-array 7)))
-    (do (store-byte b 117) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 102) (store-byte (ptr+ b 5) 112)
-        (store-byte (ptr+ b 6) 0) b)))
+  (let ((sb (string-builder-cap 7))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 112)))
+    (to-string sb)))
 
 (defun str-fpext () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 112) (store-byte (ptr+ b 2) 101)
-        (store-byte (ptr+ b 3) 120) (store-byte (ptr+ b 4) 116) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 120))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-fptrunc () -> ptr
-  (let ((b (heap-array 8)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 112) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 117) (store-byte (ptr+ b 5) 110)
-        (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 0) b)))
+  (let ((sb (string-builder-cap 8))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 99)))
+    (to-string sb)))
 
 ;; Comparison operator strings
 (defun str-eqeq () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 61) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 61))
+        (sb (sb-conj sb 61)))
+    (to-string sb)))
 
 (defun str-neq () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 33) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 33))
+        (sb (sb-conj sb 61)))
+    (to-string sb)))
 
 (defun str-eq-dot () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 61) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 61))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-neq-dot () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 33) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 46)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 33))
+        (sb (sb-conj sb 61))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-lt-dot () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 60) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 60))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-gt-dot () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 62) (store-byte (ptr+ b 1) 46) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 62))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-lte-dot () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 60) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 46)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 60))
+        (sb (sb-conj sb 61))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-gte-dot () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 62) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 46)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 62))
+        (sb (sb-conj sb 61))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-feq () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 61) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 61)))
+    (to-string sb)))
 
 (defun str-fneq () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 33) (store-byte (ptr+ b 2) 61)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 33))
+        (sb (sb-conj sb 61)))
+    (to-string sb)))
 
 (defun str-flt () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 60) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 60)))
+    (to-string sb)))
 
 (defun str-fgt () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 62) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 62)))
+    (to-string sb)))
 
 (defun str-flte () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 60) (store-byte (ptr+ b 2) 61)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 60))
+        (sb (sb-conj sb 61)))
+    (to-string sb)))
 
 (defun str-fgte () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 62) (store-byte (ptr+ b 2) 61)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 62))
+        (sb (sb-conj sb 61)))
+    (to-string sb)))
 
 ;; Boolean/bitwise operator strings
 (defun str-not () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 110) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-and () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 110) (store-byte (ptr+ b 2) 100)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 100)))
+    (to-string sb)))
 
 (defun str-or () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 111) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 114)))
+    (to-string sb)))
 
 (defun str-bit-and () -> ptr
-  (let ((b (heap-array 8)))
-    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 97) (store-byte (ptr+ b 5) 110)
-        (store-byte (ptr+ b 6) 100) (store-byte (ptr+ b 7) 0) b)))
+  (let ((sb (string-builder-cap 8))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 100)))
+    (to-string sb)))
 
 (defun str-bit-or () -> ptr
-  (let ((b (heap-array 7)))
-    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 111) (store-byte (ptr+ b 5) 114)
-        (store-byte (ptr+ b 6) 0) b)))
+  (let ((sb (string-builder-cap 7))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 114)))
+    (to-string sb)))
 
 (defun str-bit-xor () -> ptr
-  (let ((b (heap-array 8)))
-    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 120) (store-byte (ptr+ b 5) 111)
-        (store-byte (ptr+ b 6) 114) (store-byte (ptr+ b 7) 0) b)))
+  (let ((sb (string-builder-cap 8))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 120))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 114)))
+    (to-string sb)))
 
 (defun str-bit-not () -> ptr
-  (let ((b (heap-array 8)))
-    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 110) (store-byte (ptr+ b 5) 111)
-        (store-byte (ptr+ b 6) 116) (store-byte (ptr+ b 7) 0) b)))
+  (let ((sb (string-builder-cap 8))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-bit-shift-left () -> ptr
-  (let ((b (heap-array 15)))
-    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 104)
-        (store-byte (ptr+ b 6) 105) (store-byte (ptr+ b 7) 102) (store-byte (ptr+ b 8) 116)
-        (store-byte (ptr+ b 9) 45) (store-byte (ptr+ b 10) 108) (store-byte (ptr+ b 11) 101)
-        (store-byte (ptr+ b 12) 102) (store-byte (ptr+ b 13) 116) (store-byte (ptr+ b 14) 0) b)))
+  (let ((sb (string-builder-cap 15))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-bit-shift-right () -> ptr
-  (let ((b (heap-array 16)))
-    (do (store-byte b 98) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 45) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 104)
-        (store-byte (ptr+ b 6) 105) (store-byte (ptr+ b 7) 102) (store-byte (ptr+ b 8) 116)
-        (store-byte (ptr+ b 9) 45) (store-byte (ptr+ b 10) 114) (store-byte (ptr+ b 11) 105)
-        (store-byte (ptr+ b 12) 103) (store-byte (ptr+ b 13) 104) (store-byte (ptr+ b 14) 116)
-        (store-byte (ptr+ b 15) 0) b)))
+  (let ((sb (string-builder-cap 16))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 103))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-arithmetic-shift-right () -> ptr
-  (let ((b (heap-array 23)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 105)
-        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 104) (store-byte (ptr+ b 5) 109)
-        (store-byte (ptr+ b 6) 101) (store-byte (ptr+ b 7) 116) (store-byte (ptr+ b 8) 105)
-        (store-byte (ptr+ b 9) 99) (store-byte (ptr+ b 10) 45) (store-byte (ptr+ b 11) 115)
-        (store-byte (ptr+ b 12) 104) (store-byte (ptr+ b 13) 105) (store-byte (ptr+ b 14) 102)
-        (store-byte (ptr+ b 15) 116) (store-byte (ptr+ b 16) 45) (store-byte (ptr+ b 17) 114)
-        (store-byte (ptr+ b 18) 105) (store-byte (ptr+ b 19) 103) (store-byte (ptr+ b 20) 104)
-        (store-byte (ptr+ b 21) 116) (store-byte (ptr+ b 22) 0) b)))
+  (let ((sb (string-builder-cap 23))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 109))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 103))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-shl () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 115) (store-byte (ptr+ b 1) 104) (store-byte (ptr+ b 2) 108)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 108)))
+    (to-string sb)))
 
 (defun str-shr () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 115) (store-byte (ptr+ b 1) 104) (store-byte (ptr+ b 2) 114)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 114)))
+    (to-string sb)))
 
 (defun str-ashr () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 104)
-        (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 114)))
+    (to-string sb)))
 
 (defun str-popcount () -> ptr
-  (let ((b (heap-array 9)))
-    (do (store-byte b 112) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 112)
-        (store-byte (ptr+ b 3) 99) (store-byte (ptr+ b 4) 111) (store-byte (ptr+ b 5) 117)
-        (store-byte (ptr+ b 6) 110) (store-byte (ptr+ b 7) 116) (store-byte (ptr+ b 8) 0) b)))
+  (let ((sb (string-builder-cap 9))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 ;; Byte/pointer operator strings
 (defun str-store-byte () -> ptr
-  (let ((b (heap-array 11)))
-    (do (store-byte b 115) (store-byte (ptr+ b 1) 116) (store-byte (ptr+ b 2) 111)
-        (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 45)
-        (store-byte (ptr+ b 6) 98) (store-byte (ptr+ b 7) 121) (store-byte (ptr+ b 8) 116)
-        (store-byte (ptr+ b 9) 101) (store-byte (ptr+ b 10) 0) b)))
+  (let ((sb (string-builder-cap 11))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 121))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 (defun str-load-byte () -> ptr
-  (let ((b (heap-array 10)))
-    (do (store-byte b 108) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 97)
-        (store-byte (ptr+ b 3) 100) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 98)
-        (store-byte (ptr+ b 6) 121) (store-byte (ptr+ b 7) 116) (store-byte (ptr+ b 8) 101)
-        (store-byte (ptr+ b 9) 0) b)))
+  (let ((sb (string-builder-cap 10))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 121))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 (defun str-ptr-plus () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 112) (store-byte (ptr+ b 1) 116) (store-byte (ptr+ b 2) 114)
-        (store-byte (ptr+ b 3) 43) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 43)))
+    (to-string sb)))
 
 ;; Array operator strings
 (defun str-array () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
-        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 121)))
+    (to-string sb)))
 
 (defun str-make-array () -> ptr
-  (let ((b (heap-array 11)))
-    (do (store-byte b 109) (store-byte (ptr+ b 1) 97) (store-byte (ptr+ b 2) 107)
-        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 97)
-        (store-byte (ptr+ b 6) 114) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 97)
-        (store-byte (ptr+ b 9) 121) (store-byte (ptr+ b 10) 0) b)))
+  (let ((sb (string-builder-cap 11))
+        (sb (sb-conj sb 109))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 107))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 121)))
+    (to-string sb)))
 
 (defun str-array-get () -> ptr
-  (let ((b (heap-array 10)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
-        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 45)
-        (store-byte (ptr+ b 6) 103) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 116)
-        (store-byte (ptr+ b 9) 0) b)))
+  (let ((sb (string-builder-cap 10))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 121))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 103))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-aget () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 103) (store-byte (ptr+ b 2) 101)
-        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 103))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-array-set () -> ptr
-  (let ((b (heap-array 10)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
-        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 45)
-        (store-byte (ptr+ b 6) 115) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 116)
-        (store-byte (ptr+ b 9) 0) b)))
+  (let ((sb (string-builder-cap 10))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 121))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-aset () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 101)
-        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-array-len () -> ptr
-  (let ((b (heap-array 10)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
-        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 45)
-        (store-byte (ptr+ b 6) 108) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 110)
-        (store-byte (ptr+ b 9) 0) b)))
+  (let ((sb (string-builder-cap 10))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 121))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 110)))
+    (to-string sb)))
 
 (defun str-alen () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 108) (store-byte (ptr+ b 2) 101)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 110)))
+    (to-string sb)))
 
 (defun str-heap-array () -> ptr
-  (let ((b (heap-array 11)))
-    (do (store-byte b 104) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 97)
-        (store-byte (ptr+ b 3) 112) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 97)
-        (store-byte (ptr+ b 6) 114) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 97)
-        (store-byte (ptr+ b 9) 121) (store-byte (ptr+ b 10) 0) b)))
+  (let ((sb (string-builder-cap 11))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 121)))
+    (to-string sb)))
 
 (defun str-heap-array-ptr () -> ptr
-  (let ((b (heap-array 15)))
-    (do (store-byte b 104) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 97)
-        (store-byte (ptr+ b 3) 112) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 97)
-        (store-byte (ptr+ b 6) 114) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 97)
-        (store-byte (ptr+ b 9) 121) (store-byte (ptr+ b 10) 45) (store-byte (ptr+ b 11) 112)
-        (store-byte (ptr+ b 12) 116) (store-byte (ptr+ b 13) 114) (store-byte (ptr+ b 14) 0) b)))
+  (let ((sb (string-builder-cap 15))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 121))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 114)))
+    (to-string sb)))
 
 (defun str-aget-ptr () -> ptr
-  (let ((b (heap-array 9)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 103) (store-byte (ptr+ b 2) 101)
-        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 112)
-        (store-byte (ptr+ b 6) 116) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 0) b)))
+  (let ((sb (string-builder-cap 9))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 103))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 114)))
+    (to-string sb)))
 
 (defun str-aset-ptr () -> ptr
-  (let ((b (heap-array 9)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 101)
-        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 112)
-        (store-byte (ptr+ b 6) 116) (store-byte (ptr+ b 7) 114) (store-byte (ptr+ b 8) 0) b)))
+  (let ((sb (string-builder-cap 9))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 114)))
+    (to-string sb)))
 
 (defun str-array-copy () -> ptr
-  (let ((b (heap-array 11)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 114)
-        (store-byte (ptr+ b 3) 97) (store-byte (ptr+ b 4) 121) (store-byte (ptr+ b 5) 45)
-        (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 111) (store-byte (ptr+ b 8) 112)
-        (store-byte (ptr+ b 9) 121) (store-byte (ptr+ b 10) 0) b)))
+  (let ((sb (string-builder-cap 11))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 121))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 121)))
+    (to-string sb)))
 
 ;; Ownership and I/O operator strings
 (defun str-alloc () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 97) (store-byte (ptr+ b 1) 108) (store-byte (ptr+ b 2) 108)
-        (store-byte (ptr+ b 3) 111) (store-byte (ptr+ b 4) 99) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 99)))
+    (to-string sb)))
 
 (defun str-drop () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 100) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 111)
-        (store-byte (ptr+ b 3) 112) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 112)))
+    (to-string sb)))
 
 (defun str-move () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 109) (store-byte (ptr+ b 1) 111) (store-byte (ptr+ b 2) 118)
-        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 109))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 118))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 (defun str-rc-new () -> ptr
-  (let ((b (heap-array 7)))
-    (do (store-byte b 114) (store-byte (ptr+ b 1) 99) (store-byte (ptr+ b 2) 45)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 119)
-        (store-byte (ptr+ b 6) 0) b)))
+  (let ((sb (string-builder-cap 7))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 119)))
+    (to-string sb)))
 
 (defun str-rc-clone () -> ptr
-  (let ((b (heap-array 9)))
-    (do (store-byte b 114) (store-byte (ptr+ b 1) 99) (store-byte (ptr+ b 2) 45)
-        (store-byte (ptr+ b 3) 99) (store-byte (ptr+ b 4) 108) (store-byte (ptr+ b 5) 111)
-        (store-byte (ptr+ b 6) 110) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 0) b)))
+  (let ((sb (string-builder-cap 9))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 (defun str-rc-drop () -> ptr
-  (let ((b (heap-array 8)))
-    (do (store-byte b 114) (store-byte (ptr+ b 1) 99) (store-byte (ptr+ b 2) 45)
-        (store-byte (ptr+ b 3) 100) (store-byte (ptr+ b 4) 114) (store-byte (ptr+ b 5) 111)
-        (store-byte (ptr+ b 6) 112) (store-byte (ptr+ b 7) 0) b)))
+  (let ((sb (string-builder-cap 8))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 112)))
+    (to-string sb)))
 
 (defun str-clone () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 99) (store-byte (ptr+ b 1) 108) (store-byte (ptr+ b 2) 111)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 (defun str-print () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 112) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 105)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 116) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-println () -> ptr
-  (let ((b (heap-array 8)))
-    (do (store-byte b 112) (store-byte (ptr+ b 1) 114) (store-byte (ptr+ b 2) 105)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 116) (store-byte (ptr+ b 5) 108)
-        (store-byte (ptr+ b 6) 110) (store-byte (ptr+ b 7) 0) b)))
+  (let ((sb (string-builder-cap 8))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 110)))
+    (to-string sb)))
 
 ;; LiarString helpers for printf format strings
 (defun fmt-percent-s () -> ptr
-  (let ((buf (heap-array 3)))
-    (do (store-byte buf 37) (store-byte (ptr+ buf 1) 115) (store-byte (ptr+ buf 2) 0)
-        (liar-string buf 2))))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 37))
+        (sb (sb-conj sb 115))
+        (len (sb-count sb)))
+    (liar-string (to-string sb) len)))
 
 (defun fmt-percent-ld () -> ptr
-  (let ((buf (heap-array 4)))
-    (do (store-byte buf 37) (store-byte (ptr+ buf 1) 108) (store-byte (ptr+ buf 2) 100)
-        (store-byte (ptr+ buf 3) 0) (liar-string buf 3))))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 37))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 100))
+        (len (sb-count sb)))
+    (liar-string (to-string sb) len)))
 
 (defun fmt-percent-s-nl () -> ptr
-  (let ((buf (heap-array 4)))
-    (do (store-byte buf 37) (store-byte (ptr+ buf 1) 115) (store-byte (ptr+ buf 2) 10)
-        (store-byte (ptr+ buf 3) 0) (liar-string buf 3))))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 37))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 10))
+        (len (sb-count sb)))
+    (liar-string (to-string sb) len)))
 
 (defun fmt-percent-ld-nl () -> ptr
-  (let ((buf (heap-array 5)))
-    (do (store-byte buf 37) (store-byte (ptr+ buf 1) 108) (store-byte (ptr+ buf 2) 100)
-        (store-byte (ptr+ buf 3) 10) (store-byte (ptr+ buf 4) 0) (liar-string buf 4))))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 37))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 10))
+        (len (sb-count sb)))
+    (liar-string (to-string sb) len)))
 
 ;; Builtin operator strings
 (defun str-nil? () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 110) (store-byte (ptr+ b 1) 105) (store-byte (ptr+ b 2) 108)
-        (store-byte (ptr+ b 3) 63) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 63)))
+    (to-string sb)))
 
 (defun str-nil () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 110) (store-byte (ptr+ b 1) 105)
-        (store-byte (ptr+ b 2) 108) (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 108)))
+    (to-string sb)))
 
 (defun str-true () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 116) (store-byte (ptr+ b 1) 114)
-        (store-byte (ptr+ b 2) 117) (store-byte (ptr+ b 3) 101)
-        (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 (defun str-false () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 102) (store-byte (ptr+ b 1) 97)
-        (store-byte (ptr+ b 2) 108) (store-byte (ptr+ b 3) 115)
-        (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 (defun str-colon () -> ptr
-  (let ((b (heap-array 2)))
-    (do (store-byte b 58) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 58)))
+    (to-string sb)))
 
 (defun str-self () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 115) (store-byte (ptr+ b 1) 101)
-        (store-byte (ptr+ b 2) 108) (store-byte (ptr+ b 3) 102)
-        (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 102)))
+    (to-string sb)))
 
 (defun str-defstruct () -> ptr
-  (let ((b (heap-array 10)))
-    (do (store-byte b 100) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 102)
-        (store-byte (ptr+ b 3) 115) (store-byte (ptr+ b 4) 116) (store-byte (ptr+ b 5) 114)
-        (store-byte (ptr+ b 6) 117) (store-byte (ptr+ b 7) 99) (store-byte (ptr+ b 8) 116)
-        (store-byte (ptr+ b 9) 0) b)))
+  (let ((sb (string-builder-cap 10))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-defprotocol () -> ptr
-  (let ((b (heap-array 12)))
-    (do (store-byte b 100) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 102)
-        (store-byte (ptr+ b 3) 112) (store-byte (ptr+ b 4) 114) (store-byte (ptr+ b 5) 111)
-        (store-byte (ptr+ b 6) 116) (store-byte (ptr+ b 7) 111) (store-byte (ptr+ b 8) 99)
-        (store-byte (ptr+ b 9) 111) (store-byte (ptr+ b 10) 108) (store-byte (ptr+ b 11) 0) b)))
+  (let ((sb (string-builder-cap 12))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 108)))
+    (to-string sb)))
 
 (defun str-extend-protocol () -> ptr
-  (let ((b (heap-array 16)))
-    (do (store-byte b 101) (store-byte (ptr+ b 1) 120) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 110) (store-byte (ptr+ b 5) 100)
-        (store-byte (ptr+ b 6) 45) (store-byte (ptr+ b 7) 112) (store-byte (ptr+ b 8) 114)
-        (store-byte (ptr+ b 9) 111) (store-byte (ptr+ b 10) 116) (store-byte (ptr+ b 11) 111)
-        (store-byte (ptr+ b 12) 99) (store-byte (ptr+ b 13) 111) (store-byte (ptr+ b 14) 108)
-        (store-byte (ptr+ b 15) 0) b)))
+  (let ((sb (string-builder-cap 16))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 120))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 108)))
+    (to-string sb)))
 
 (defun str-extend-protocol-default () -> ptr
-  (let ((b (heap-array 24)))
-    (do (store-byte b 101) (store-byte (ptr+ b 1) 120) (store-byte (ptr+ b 2) 116)
-        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 110) (store-byte (ptr+ b 5) 100)
-        (store-byte (ptr+ b 6) 45) (store-byte (ptr+ b 7) 112) (store-byte (ptr+ b 8) 114)
-        (store-byte (ptr+ b 9) 111) (store-byte (ptr+ b 10) 116) (store-byte (ptr+ b 11) 111)
-        (store-byte (ptr+ b 12) 99) (store-byte (ptr+ b 13) 111) (store-byte (ptr+ b 14) 108)
-        (store-byte (ptr+ b 15) 45) (store-byte (ptr+ b 16) 100) (store-byte (ptr+ b 17) 101)
-        (store-byte (ptr+ b 18) 102) (store-byte (ptr+ b 19) 97) (store-byte (ptr+ b 20) 117)
-        (store-byte (ptr+ b 21) 108) (store-byte (ptr+ b 22) 116) (store-byte (ptr+ b 23) 0) b)))
+  (let ((sb (string-builder-cap 24))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 120))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 100))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 102))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 116)))
+    (to-string sb)))
 
 (defun str-share () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 115) (store-byte (ptr+ b 1) 104) (store-byte (ptr+ b 2) 97)
-        (store-byte (ptr+ b 3) 114) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 (defun str-instance? () -> ptr
-  (let ((b (heap-array 10)))
-    (do (store-byte b 105) (store-byte (ptr+ b 1) 110) (store-byte (ptr+ b 2) 115)
-        (store-byte (ptr+ b 3) 116) (store-byte (ptr+ b 4) 97) (store-byte (ptr+ b 5) 110)
-        (store-byte (ptr+ b 6) 99) (store-byte (ptr+ b 7) 101) (store-byte (ptr+ b 8) 63)
-        (store-byte (ptr+ b 9) 0) b)))
+  (let ((sb (string-builder-cap 10))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 63)))
+    (to-string sb)))
 
 (defun str-instance-check () -> ptr
-  (let ((b (heap-array 17)))
-    (do (store-byte b 95) (store-byte (ptr+ b 1) 95) (store-byte (ptr+ b 2) 105)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 116)
-        (store-byte (ptr+ b 6) 97) (store-byte (ptr+ b 7) 110) (store-byte (ptr+ b 8) 99)
-        (store-byte (ptr+ b 9) 101) (store-byte (ptr+ b 10) 95) (store-byte (ptr+ b 11) 99)
-        (store-byte (ptr+ b 12) 104) (store-byte (ptr+ b 13) 101) (store-byte (ptr+ b 14) 99)
-        (store-byte (ptr+ b 15) 107) (store-byte (ptr+ b 16) 0) b)))
+  (let ((sb (string-builder-cap 17))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 107)))
+    (to-string sb)))
 
 (defun str-instance-obj () -> ptr
-  (let ((b (heap-array 4)))
-    (do (store-byte b 111) (store-byte (ptr+ b 1) 98) (store-byte (ptr+ b 2) 106)
-        (store-byte (ptr+ b 3) 0) b)))
+  (let ((sb (string-builder-cap 4))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 98))
+        (sb (sb-conj sb 106)))
+    (to-string sb)))
 
 (defun str-instance-type-id () -> ptr
-  (let ((b (heap-array 8)))
-    (do (store-byte b 116) (store-byte (ptr+ b 1) 121) (store-byte (ptr+ b 2) 112)
-        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 45) (store-byte (ptr+ b 5) 105)
-        (store-byte (ptr+ b 6) 100) (store-byte (ptr+ b 7) 0) b)))
+  (let ((sb (string-builder-cap 8))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 121))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 45))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 100)))
+    (to-string sb)))
 
 (defun str-instance-null () -> ptr
-  (let ((b (heap-array 15)))
-    (do (store-byte b 95) (store-byte (ptr+ b 1) 95) (store-byte (ptr+ b 2) 105)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 116)
-        (store-byte (ptr+ b 6) 97) (store-byte (ptr+ b 7) 110) (store-byte (ptr+ b 8) 99)
-        (store-byte (ptr+ b 9) 101) (store-byte (ptr+ b 10) 95) (store-byte (ptr+ b 11) 110)
-        (store-byte (ptr+ b 12) 117) (store-byte (ptr+ b 13) 108) (store-byte (ptr+ b 14) 0) b)))
+  (let ((sb (string-builder-cap 15))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 108)))
+    (to-string sb)))
 
 (defun str-instance-check-lbl () -> ptr
-  (let ((b (heap-array 17)))
-    (do (store-byte b 95) (store-byte (ptr+ b 1) 95) (store-byte (ptr+ b 2) 105)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 115) (store-byte (ptr+ b 5) 116)
-        (store-byte (ptr+ b 6) 97) (store-byte (ptr+ b 7) 110) (store-byte (ptr+ b 8) 99)
-        (store-byte (ptr+ b 9) 101) (store-byte (ptr+ b 10) 95) (store-byte (ptr+ b 11) 99)
-        (store-byte (ptr+ b 12) 104) (store-byte (ptr+ b 13) 101) (store-byte (ptr+ b 14) 99)
-        (store-byte (ptr+ b 15) 107) (store-byte (ptr+ b 16) 0) b)))
+  (let ((sb (string-builder-cap 17))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 97))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 107)))
+    (to-string sb)))
 
 (defun str-dot () -> ptr
-  (let ((b (heap-array 2))) (do (store-byte b 46) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 ;; ============================================================
 ;; AST Predicates
@@ -1317,11 +1771,9 @@
     (if (<= slash 0)
         name
         (let ((base-len (- len (+ slash 1)))
-              (buf (heap-array (+ base-len 1))))
-          (do
-            (copy-str-loop buf 0 (ptr+ name (+ slash 1)) 0 base-len)
-            (store-byte (ptr+ buf base-len) 0)
-            buf)))))
+              (sb (string-builder-cap (+ base-len 1)))
+              (sb (sb-append-range sb (ptr+ name (+ slash 1)) base-len)))
+          (to-string sb)))))
 
 ;; Check if symbol name matches a string, returning i64 1/0
 (defun symbol-name-match? (sym: ptr name: ptr) -> i64
@@ -1383,13 +1835,6 @@
         (sb (sb-conj sb 64))
         (sb (append sb name)))
     (intern syms (to-string sb))))
-
-(defun copy-str-loop (dst: ptr dst-idx: i64 src: ptr src-idx: i64 len: i64) -> i64
-  (if (>= src-idx len)
-      0
-      (do
-        (store-byte (ptr+ dst dst-idx) (load-byte (ptr+ src src-idx)))
-        (copy-str-loop dst (+ dst-idx 1) src (+ src-idx 1) len))))
 
 ;; Build: (call @fn args...)
 (defun lir-call (syms: ptr fn-name: ptr args: ptr) -> ptr
@@ -1462,19 +1907,29 @@
 
 ;; String constants for label prefixes
 (defun str-then-prefix () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 116) (store-byte (ptr+ b 1) 104) (store-byte (ptr+ b 2) 101)
-        (store-byte (ptr+ b 3) 110) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 104))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 110)))
+    (to-string sb)))
 
 (defun str-else-prefix () -> ptr
-  (let ((b (heap-array 5)))
-    (do (store-byte b 101) (store-byte (ptr+ b 1) 108) (store-byte (ptr+ b 2) 115)
-        (store-byte (ptr+ b 3) 101) (store-byte (ptr+ b 4) 0) b)))
+  (let ((sb (string-builder-cap 5))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 108))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 (defun str-merge-prefix () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 109) (store-byte (ptr+ b 1) 101) (store-byte (ptr+ b 2) 114)
-        (store-byte (ptr+ b 3) 103) (store-byte (ptr+ b 4) 101) (store-byte (ptr+ b 5) 0) b)))
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 109))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 103))
+        (sb (sb-conj sb 101)))
+    (to-string sb)))
 
 ;; ============================================================
 ;; Expression Codegen
@@ -2053,38 +2508,44 @@
 
 ;; Helper string for __type_id
 (defun str-type-id () -> ptr
-  (let ((b (heap-array 10)))
-    (do (store-byte b 95) (store-byte (ptr+ b 1) 95)   ;; __
-        (store-byte (ptr+ b 2) 116) (store-byte (ptr+ b 3) 121) ;; ty
-        (store-byte (ptr+ b 4) 112) (store-byte (ptr+ b 5) 101) ;; pe
-        (store-byte (ptr+ b 6) 95) (store-byte (ptr+ b 7) 105)  ;; _i
-        (store-byte (ptr+ b 8) 100) (store-byte (ptr+ b 9) 0) b))) ;; d
+  (let ((sb (string-builder-cap 10))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 121))
+        (sb (sb-conj sb 112))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 105))
+        (sb (sb-conj sb 100)))
+    (to-string sb)))
 
 ;; Helper string for __env
 (defun str-env () -> ptr
-  (let ((b (heap-array 6)))
-    (do (store-byte b 95) (store-byte (ptr+ b 1) 95)   ;; __
-        (store-byte (ptr+ b 2) 101) (store-byte (ptr+ b 3) 110) ;; en
-        (store-byte (ptr+ b 4) 118) (store-byte (ptr+ b 5) 0) b))) ;; v
+  (let ((sb (string-builder-cap 6))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 101))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 118)))
+    (to-string sb)))
 
 ;; Helper to build %struct.Name symbol
 (defun make-struct-type-sym (syms: ptr name: ptr) -> ptr
   (let ((name-str (symbol-name name))
         (name-len (strlen name-str))
         (buf-len (+ 9 name-len))  ;; "%struct." + name + null
-        (buf (heap-array buf-len)))
-    (do
-      (store-byte buf 37)           ;; %
-      (store-byte (ptr+ buf 1) 115) ;; s
-      (store-byte (ptr+ buf 2) 116) ;; t
-      (store-byte (ptr+ buf 3) 114) ;; r
-      (store-byte (ptr+ buf 4) 117) ;; u
-      (store-byte (ptr+ buf 5) 99)  ;; c
-      (store-byte (ptr+ buf 6) 116) ;; t
-      (store-byte (ptr+ buf 7) 46)  ;; .
-      (copy-str-loop buf 8 name-str 0 name-len)
-      (store-byte (ptr+ buf (+ 8 name-len)) 0)
-      (intern syms buf))))
+        (sb (string-builder-cap buf-len))
+        (sb (sb-conj sb 37))
+        (sb (sb-conj sb 115))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 114))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 99))
+        (sb (sb-conj sb 116))
+        (sb (sb-conj sb 46))
+        (sb (append sb name-str)))
+    (intern syms (to-string sb))))
 
 ;; Parse defstruct field types (x: i64 y: i64) -> (i64 i64)
 (defun parse-struct-fields (lst: ptr acc: ptr) -> ptr
@@ -2561,16 +3022,12 @@
         (len (strlen name))
         (idx (find-char (symbol-name protocol) 0 60)))  ;; '<'
     (if (< idx 0)
-        (let ((buf (heap-array (+ len 1))))
-          (do
-            (copy-str-loop buf 0 name 0 len)
-            (store-byte (ptr+ buf len) 0)
-            (intern syms buf)))
-        (let ((buf (heap-array (+ idx 1))))
-          (do
-            (copy-str-loop buf 0 name 0 idx)
-            (store-byte (ptr+ buf idx) 0)
-            (intern syms buf))))))
+        (let ((sb (string-builder-cap (+ len 1)))
+              (sb (sb-append-range sb name len)))
+          (intern syms (to-string sb)))
+        (let ((sb (string-builder-cap (+ idx 1)))
+              (sb (sb-append-range sb name idx)))
+          (intern syms (to-string sb))))))
 
 ;; Check for ASCII alnum or underscore
 (defun is-alnum-or-underscore? (b: i64) -> i64
@@ -2583,18 +3040,16 @@
               (if (= b 95) 1 0)))))
 
 ;; Sanitize type-arg substring into an identifier-safe suffix
-(defun sanitize-args-loop (src: ptr idx: i64 len: i64 dst: ptr out-idx: i64 last-us: i64) -> ptr
+(defun sanitize-args-loop (src: ptr idx: i64 len: i64 sb: ptr last-us: i64) -> ptr
   (if (>= idx len)
-      (pcons (box-int out-idx) (box-int last-us))
+      sb
       (let ((b (load-byte (ptr+ src idx)))
             (use (if (= 1 (is-alnum-or-underscore? b)) b 95))
             (is-us (if (= use 95) 1 0))
             (skip (if (and (= is-us 1) (= last-us 1)) 1 0)))
         (if (= skip 1)
-            (sanitize-args-loop src (+ idx 1) len dst out-idx last-us)
-            (do
-              (store-byte (ptr+ dst out-idx) use)
-              (sanitize-args-loop src (+ idx 1) len dst (+ out-idx 1) is-us))))))
+            (sanitize-args-loop src (+ idx 1) len sb is-us)
+            (sanitize-args-loop src (+ idx 1) len (sb-conj sb use) is-us)))))
 
 ;; Mangle protocol name with generic args for stable symbol names
 (defun protocol-mangled (syms: ptr protocol: ptr) -> ptr
@@ -2608,15 +3063,11 @@
           (if (< gt 0)
               (protocol-base syms protocol)
               (let ((args-len (- gt args-start))
-                    (buf (heap-array (+ (+ base-len 1) (+ args-len 1)))))
-                (do
-                  (copy-str-loop buf 0 name 0 base-len)
-                  (store-byte (ptr+ buf base-len) 95) ;; _
-                  (let ((result (sanitize-args-loop (ptr+ name args-start) 0 args-len buf (+ base-len 1) 1))
-                        (out-idx (unbox-int (pcons-head result))))
-                    (do
-                      (store-byte (ptr+ buf out-idx) 0)
-                      (intern syms buf))))))))))
+                    (sb (string-builder-cap (+ (+ base-len 1) (+ args-len 1))))
+                    (sb (sb-append-range sb name base-len))
+                    (sb (sb-conj sb 95))
+                    (sb (sanitize-args-loop (ptr+ name args-start) 0 args-len sb 1)))
+                (intern syms (to-string sb))))))))
 
 (defun method-return-sym (lst: ptr) -> ptr
   (if (nil? lst)
@@ -2663,17 +3114,16 @@
         (tlen (strlen tname))
         (mlen (strlen mname))
         (total (add4 plen tlen mlen 5))  ;; "__" + "_" + "__" = 5
-        (buf (heap-array (+ total 1))))
-    (do
-      (store-byte buf 95) (store-byte (ptr+ buf 1) 95)  ;; __
-      (copy-str-loop buf 2 pname 0 plen)
-      (store-byte (ptr+ buf (+ 2 plen)) 95)             ;; _
-      (copy-str-loop buf (add3 3 plen 0) tname 0 tlen)
-      (store-byte (ptr+ buf (add3 3 plen tlen)) 95)        ;; _
-      (store-byte (ptr+ buf (add3 4 plen tlen)) 95)        ;; _
-      (copy-str-loop buf (add3 5 plen tlen) mname 0 mlen)
-      (store-byte (ptr+ buf total) 0)
-      (intern syms buf))))
+        (sb (string-builder-cap (+ total 1)))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (append sb pname))
+        (sb (sb-conj sb 95))
+        (sb (append sb tname))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (append sb mname)))
+    (intern syms (to-string sb))))
 
 ;; Build function name for protocol default: __Target_Source__method
 (defun make-default-fn-name (syms: ptr target: ptr source: ptr method: ptr) -> ptr
@@ -2684,17 +3134,16 @@
         (slen (strlen sname))
         (mlen (strlen mname))
         (total (add4 tlen slen mlen 5))
-        (buf (heap-array (+ total 1))))
-    (do
-      (store-byte buf 95) (store-byte (ptr+ buf 1) 95)
-      (copy-str-loop buf 2 tname 0 tlen)
-      (store-byte (ptr+ buf (+ 2 tlen)) 95)
-      (copy-str-loop buf (add3 3 tlen 0) sname 0 slen)
-      (store-byte (ptr+ buf (add3 3 tlen slen)) 95)
-      (store-byte (ptr+ buf (add3 4 tlen slen)) 95)
-      (copy-str-loop buf (add3 5 tlen slen) mname 0 mlen)
-      (store-byte (ptr+ buf total) 0)
-      (intern syms buf))))
+        (sb (string-builder-cap (+ total 1)))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (append sb tname))
+        (sb (sb-conj sb 95))
+        (sb (append sb sname))
+        (sb (sb-conj sb 95))
+        (sb (sb-conj sb 95))
+        (sb (append sb mname)))
+    (intern syms (to-string sb))))
 
 ;; Build protocol method params list (self -> ptr, others -> i64)
 (defun build-proto-params (syms: ptr params: ptr acc: ptr) -> ptr

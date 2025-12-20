@@ -103,22 +103,28 @@
 ;; ============================================================
 
 (defun str-empty-list () -> ptr
-  (let ((b (heap-array 3)))
-    (do (store-byte b 40) (store-byte (ptr+ b 1) 41)
-        (store-byte (ptr+ b 2) 0) b)))
+  (let ((sb (string-builder-cap 3))
+        (sb (sb-conj sb 40))
+        (sb (sb-conj sb 41)))
+    (to-string sb)))
 
 (defun str-dot () -> ptr
-  (let ((b (heap-array 2)))
-    (do (store-byte b 46) (store-byte (ptr+ b 1) 0) b)))
+  (let ((sb (string-builder-cap 2))
+        (sb (sb-conj sb 46)))
+    (to-string sb)))
 
 (defun str-unknown () -> ptr
-  (let ((b (heap-array 10)))
-    (do (store-byte b 60)  ;; <
-        (store-byte (ptr+ b 1) 117) (store-byte (ptr+ b 2) 110)
-        (store-byte (ptr+ b 3) 107) (store-byte (ptr+ b 4) 110)
-        (store-byte (ptr+ b 5) 111) (store-byte (ptr+ b 6) 119)
-        (store-byte (ptr+ b 7) 110) (store-byte (ptr+ b 8) 62)  ;; >
-        (store-byte (ptr+ b 9) 0) b)))
+  (let ((sb (string-builder-cap 10))
+        (sb (sb-conj sb 60))
+        (sb (sb-conj sb 117))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 107))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 111))
+        (sb (sb-conj sb 119))
+        (sb (sb-conj sb 110))
+        (sb (sb-conj sb 62)))
+    (to-string sb)))
 
 ;; ============================================================
 ;; Main Print Dispatcher
