@@ -442,8 +442,8 @@ pub fn generate_protocol_call(
 }
 
 /// Generate runtime protocol dispatch based on type_id
-/// Loads type_id from field 0 of receiver, dispatches via nested selects
-/// Handles nil receiver gracefully by returning default value
+/// Uses br/phi to avoid evaluating non-selected implementations.
+/// Handles nil receiver gracefully by returning default value.
 fn generate_runtime_dispatch(
     ctx: &mut CodegenContext,
     expr: &Spanned<Expr>,
@@ -499,7 +499,6 @@ fn generate_runtime_dispatch(
     // If mixed types, we must coerce to ptr (the wider type)
     let use_ptr_type = has_ptr_return;
 
-    // Build dispatch chain: nested selects for each implementation
     // Default depends on return type to satisfy LLVM type requirements
     let default_val: lir::Expr = if use_ptr_type {
         lir::Expr::NullPtr
@@ -510,9 +509,66 @@ fn generate_runtime_dispatch(
         }
     };
 
-    let mut dispatch_expr = default_val.clone();
+    // Build control-flow dispatch with br/phi to avoid eager evaluation
+    let null_label = ctx.fresh_block("proto_null");
+    let dispatch_label = ctx.fresh_block("proto_dispatch");
+    let merge_label = ctx.fresh_block("proto_merge");
 
-    for (type_name, type_id, impl_fn_name) in impls.iter().rev() {
+    let null_val_var = ctx.fresh_var("proto_null_val");
+    let default_val_var = ctx.fresh_var("proto_default_val");
+    let result_var = ctx.fresh_var("proto_result");
+
+    let null_check = lir::Expr::ICmp {
+        pred: lir::ICmpPred::Eq,
+        lhs: Box::new(lir::Expr::LocalRef(receiver_var.clone())),
+        rhs: Box::new(lir::Expr::NullPtr),
+    };
+
+    // End current block: bind receiver and branch on null
+    ctx.end_block(lir::Expr::Let {
+        bindings: vec![(receiver_var.clone(), Box::new(receiver))],
+        body: vec![lir::Expr::Br(lir::BranchTarget::Conditional {
+            cond: Box::new(null_check),
+            true_label: null_label.clone(),
+            false_label: dispatch_label.clone(),
+        })],
+    });
+
+    // Null block: return default
+    ctx.start_block(&null_label);
+    let null_final_block = ctx.current_block().to_string();
+    ctx.end_block(lir::Expr::Let {
+        bindings: vec![(null_val_var.clone(), Box::new(default_val.clone()))],
+        body: vec![lir::Expr::Br(lir::BranchTarget::Unconditional(
+            merge_label.clone(),
+        ))],
+    });
+
+    // Dispatch entry: load type_id and jump to first check
+    let first_check_label = ctx.fresh_block("proto_check");
+    ctx.start_block(&dispatch_label);
+    ctx.end_block(lir::Expr::Let {
+        bindings: vec![(type_id_var.clone(), Box::new(load_type_id))],
+        body: vec![lir::Expr::Br(lir::BranchTarget::Unconditional(
+            first_check_label.clone(),
+        ))],
+    });
+
+    // Build check/call blocks for each implementation
+    let mut incoming = Vec::new();
+    let mut next_label = first_check_label;
+
+    for (idx, (_type_name, type_id, impl_fn_name)) in impls.iter().enumerate() {
+        let check_label = next_label.clone();
+        let call_label = ctx.fresh_block("proto_call");
+        let fallthrough_label = if idx + 1 == impls.len() {
+            ctx.fresh_block("proto_default")
+        } else {
+            ctx.fresh_block("proto_check")
+        };
+
+        // Check block: compare type_id and branch
+        ctx.start_block(&check_label);
         let cond = lir::Expr::ICmp {
             pred: lir::ICmpPred::Eq,
             lhs: Box::new(lir::Expr::LocalRef(type_id_var.clone())),
@@ -521,62 +577,81 @@ fn generate_runtime_dispatch(
                 value: *type_id as i128,
             }),
         };
+        ctx.end_block(lir::Expr::Br(lir::BranchTarget::Conditional {
+            cond: Box::new(cond),
+            true_label: call_label.clone(),
+            false_label: fallthrough_label.clone(),
+        }));
 
-        // Build args with bound receiver
+        // Call block: invoke impl and branch to merge
+        ctx.start_block(&call_label);
+        let call_val_var = ctx.fresh_var("proto_val");
         let mut bound_args = call_args.clone();
         bound_args[0] = lir::Expr::LocalRef(receiver_var.clone());
-
         let impl_call = lir::Expr::Call {
             name: impl_fn_name.clone(),
             args: bound_args,
         };
-
-        // If we're using ptr type but this impl returns i64, coerce via inttoptr
         let impl_returns_i64 = matches!(
             ctx.lookup_func_return_type(impl_fn_name),
             Some(lir::ReturnType::Scalar(lir::ScalarType::I64)) | None
         );
-        let coerced_call = if use_ptr_type && impl_returns_i64 {
+        let call_expr = if use_ptr_type && impl_returns_i64 {
             lir::Expr::IntToPtr {
                 value: Box::new(impl_call),
             }
         } else {
             impl_call
         };
+        let call_final_block = ctx.current_block().to_string();
+        ctx.end_block(lir::Expr::Let {
+            bindings: vec![(call_val_var.clone(), Box::new(call_expr))],
+            body: vec![lir::Expr::Br(lir::BranchTarget::Unconditional(
+                merge_label.clone(),
+            ))],
+        });
+        incoming.push((call_final_block, call_val_var));
 
-        dispatch_expr = lir::Expr::Select {
-            cond: Box::new(cond),
-            true_val: Box::new(coerced_call),
-            false_val: Box::new(dispatch_expr),
-        };
-
-        let _ = type_name;
-        let _ = has_i64_return; // Suppress unused warning
+        next_label = fallthrough_label;
     }
 
-    // Null check: if receiver is null, return default without loading type_id
-    let null_check = lir::Expr::ICmp {
-        pred: lir::ICmpPred::Eq,
-        lhs: Box::new(lir::Expr::LocalRef(receiver_var.clone())),
-        rhs: Box::new(lir::Expr::NullPtr),
-    };
+    // Default block: return default value if no match
+    ctx.start_block(&next_label);
+    let default_final_block = ctx.current_block().to_string();
+    ctx.end_block(lir::Expr::Let {
+        bindings: vec![(default_val_var.clone(), Box::new(default_val.clone()))],
+        body: vec![lir::Expr::Br(lir::BranchTarget::Unconditional(
+            merge_label.clone(),
+        ))],
+    });
 
-    let dispatch_with_type_id = lir::Expr::Let {
-        bindings: vec![(type_id_var, Box::new(load_type_id))],
-        body: vec![dispatch_expr],
+    // Merge block: phi selects result
+    ctx.start_block(&merge_label);
+    let phi_type = if use_ptr_type {
+        lir::ParamType::Ptr
+    } else {
+        lir::ParamType::Scalar(lir::ScalarType::I64)
     };
-
-    let null_safe_dispatch = lir::Expr::Select {
-        cond: Box::new(null_check),
-        true_val: Box::new(default_val),
-        false_val: Box::new(dispatch_with_type_id),
+    let mut phi_incoming = Vec::new();
+    phi_incoming.push((
+        null_final_block,
+        Box::new(lir::Expr::LocalRef(null_val_var)),
+    ));
+    for (block, var) in incoming {
+        phi_incoming.push((block, Box::new(lir::Expr::LocalRef(var))));
+    }
+    phi_incoming.push((
+        default_final_block,
+        Box::new(lir::Expr::LocalRef(default_val_var)),
+    ));
+    let phi_expr = lir::Expr::Phi {
+        ty: phi_type,
+        incoming: phi_incoming,
     };
+    ctx.add_pending_phi(result_var.clone(), phi_expr);
 
-    // Wrap in let to bind receiver
-    Ok(lir::Expr::Let {
-        bindings: vec![(receiver_var, Box::new(receiver))],
-        body: vec![null_safe_dispatch],
-    })
+    let _ = has_i64_return; // Suppress unused warning
+    Ok(lir::Expr::LocalRef(result_var))
 }
 
 /// Infer the struct type of an expression (for protocol dispatch)

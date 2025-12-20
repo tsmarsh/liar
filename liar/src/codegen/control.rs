@@ -237,20 +237,25 @@ fn generate_cleanup(bindings_needing_cleanup: &[String]) -> lir::Expr {
 /// Check if an expression will generate multi-block code (if expression, instance?, etc.)
 /// This recursively checks all subexpressions because any multiblock code generation
 /// within a let body means bindings must be emitted before the branches.
-fn will_generate_multiblock(expr: &Expr) -> bool {
+fn will_generate_multiblock(ctx: &CodegenContext, expr: &Expr) -> bool {
     match expr {
         Expr::If(_, _, _) => true,
         Expr::Instance(_, _) => true,
-        Expr::Let(_, body) | Expr::Plet(_, body) => will_generate_multiblock(&body.node),
-        Expr::Do(exprs) => exprs.iter().any(|e| will_generate_multiblock(&e.node)),
+        Expr::Let(_, body) | Expr::Plet(_, body) => will_generate_multiblock(ctx, &body.node),
+        Expr::Do(exprs) => exprs.iter().any(|e| will_generate_multiblock(ctx, &e.node)),
         Expr::Call(func, args) => {
-            will_generate_multiblock(&func.node)
-                || args.iter().any(|a| will_generate_multiblock(&a.node))
+            if let Expr::Var(name) = &func.node {
+                if ctx.is_protocol_method(&name.name).is_some() {
+                    return true;
+                }
+            }
+            will_generate_multiblock(ctx, &func.node)
+                || args.iter().any(|a| will_generate_multiblock(ctx, &a.node))
         }
-        Expr::Field(obj, _) => will_generate_multiblock(&obj.node),
-        Expr::Set(_, value) => will_generate_multiblock(&value.node),
+        Expr::Field(obj, _) => will_generate_multiblock(ctx, &obj.node),
+        Expr::Set(_, value) => will_generate_multiblock(ctx, &value.node),
         Expr::Ref(inner) | Expr::RefMut(inner) | Expr::Deref(inner) => {
-            will_generate_multiblock(&inner.node)
+            will_generate_multiblock(ctx, &inner.node)
         }
         _ => false,
     }
@@ -281,10 +286,10 @@ pub fn generate_let(
     // Check if body OR any binding value will create multi-block code (if expression)
     // If so, we need to emit bindings BEFORE branches are generated
     // This is critical when a binding value contains an if that uses an earlier binding
-    let body_is_multiblock = will_generate_multiblock(&body.node);
+    let body_is_multiblock = will_generate_multiblock(ctx, &body.node);
     let any_binding_multiblock = bindings
         .iter()
-        .any(|b| will_generate_multiblock(&b.value.node));
+        .any(|b| will_generate_multiblock(ctx, &b.value.node));
 
     if body_is_multiblock || any_binding_multiblock {
         // Multi-block code path: bindings need to be emitted carefully

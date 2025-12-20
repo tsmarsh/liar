@@ -273,6 +273,30 @@ fn test_extend_protocol() {
 }
 
 #[test]
+fn test_protocol_dispatch_uses_br_phi() {
+    let lir = compile(
+        r#"
+        (defprotocol P
+          (f [self]))
+        (defstruct A (x: i64))
+        (defstruct B (x: i64))
+        (extend-protocol P A
+          (f [self] 1))
+        (extend-protocol P B
+          (f [self] 2))
+        (defun call (x) (f x))
+        "#,
+    );
+    assert!(lir.contains("(block proto_"), "expected protocol blocks");
+    assert!(lir.contains("(br "), "expected conditional branch");
+    assert!(lir.contains("(phi "), "expected phi node");
+    assert!(
+        !lir.contains("(select "),
+        "protocol dispatch should avoid select"
+    );
+}
+
+#[test]
 fn test_iter() {
     let lir = compile("(defun make-iter (v) (iter v))");
     assert!(lir.contains("define"));
