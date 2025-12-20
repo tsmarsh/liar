@@ -5,13 +5,15 @@
 
 (ns liarliar.main
   (:require [liar.core :as core]
+            [liar.seq :refer [pcons pfirst prest]]
             [liarliar.io :as io]
             [liarliar.symbols :as sym]
             [liarliar.value :as val]
             [liarliar.reader :as reader]
             [liarliar.expand :as expand]
             [liarliar.codegen :as codegen]
-            [liarliar.printer :as printer]))
+            [liarliar.printer :as printer]
+            [liarliar.namespace :as nsp]))
 
 ;; ============================================================
 ;; FFI for string length
@@ -36,16 +38,96 @@
 ;; Compilation Pipeline
 ;; ============================================================
 
+;; Get require specs from forms if first form is (ns ...)
+(defun extract-requires (forms: ptr) -> ptr
+  (if (nil? forms)
+      nil
+      (let ((first-form (val/pcons-head forms)))
+        (if (= 0 (nsp/ns-form? first-form))
+            nil
+            (let ((parsed-ns (nsp/parse-ns-form first-form)))
+              (if (nil? parsed-ns)
+                  nil
+                  (nsp/parsed-ns-requires parsed-ns)))))))
+
+;; Load a single module, returning its compiled lIR
+;; Returns (new-loader-state . lir-forms) or (loader-state . nil) if already loaded
+(defun load-module (loader: ptr mod-name: ptr syms: ptr) -> ptr
+  (let ((name-str (if (sym/symbol? mod-name) (sym/symbol-name mod-name) mod-name)))
+    (if (= 1 (nsp/loader-is-loaded? loader name-str))
+        ;; Already loaded, return unchanged loader and nil
+        (pcons loader nil)
+        ;; Load the module
+        (let ((lib-path (nsp/loader-lib-path loader))
+              (mod-path (nsp/namespace-to-path mod-name lib-path))
+              (src (io/slurp mod-path)))
+          (if (nil? src)
+              ;; File not found, just skip (will be a runtime/link error)
+              (pcons (nsp/loader-mark-loaded loader name-str) nil)
+              (let ((len (strlen src))
+                    (forms (reader/read-all src len syms)))
+                (if (nil? forms)
+                    (pcons (nsp/loader-mark-loaded loader name-str) nil)
+                    ;; Successfully read, now load its dependencies first
+                    (let ((mod-requires (extract-requires forms))
+                          (loader1 (nsp/loader-mark-loaded loader name-str))
+                          (deps-result (load-requires loader1 mod-requires syms))
+                          (loader2 (val/pcons-head deps-result))
+                          (deps-lir (val/pcons-tail deps-result)))
+                      ;; Now compile this module
+                      (let ((expand-result (expand/expand-toplevel syms forms)))
+                        (if (nil? expand-result)
+                            (pcons loader2 deps-lir)
+                            (let ((expanded (val/pcons-tail expand-result))
+                                  (mod-lir (codegen/codegen-module expanded syms))
+                                  (combined-lir (append-lir deps-lir mod-lir)))
+                              (pcons loader2 combined-lir))))))))))))
+
+;; Load multiple requires, returning (loader . lir)
+(defun load-requires (loader: ptr requires: ptr syms: ptr) -> ptr
+  (load-requires-loop loader requires syms nil))
+
+(defun load-requires-loop (loader: ptr requires: ptr syms: ptr acc-lir: ptr) -> ptr
+  (if (nil? requires)
+      (pcons loader acc-lir)
+      (let ((req (val/pcons-head requires))
+            (mod-name (nsp/req-mod-name req))
+            (result (load-module loader mod-name syms))
+            (new-loader (val/pcons-head result))
+            (mod-lir (val/pcons-tail result))
+            (new-acc (append-lir acc-lir mod-lir)))
+        (load-requires-loop new-loader (val/pcons-tail requires) syms new-acc))))
+
+;; Append two lIR form lists
+(defun append-lir (a: ptr b: ptr) -> ptr
+  (if (nil? a)
+      b
+      (if (nil? b)
+          a
+          (append-lir-loop a b))))
+
+(defun append-lir-loop (a: ptr b: ptr) -> ptr
+  (if (nil? (val/pcons-tail a))
+      (pcons (val/pcons-head a) b)
+      (pcons (val/pcons-head a) (append-lir-loop (val/pcons-tail a) b))))
+
 (defun compile-source (src: ptr len: i64 syms: ptr) -> ptr
   (let ((forms (reader/read-all src len syms)))
     (if (nil? forms)
         (do (println "Error: Failed to parse source") nil)
-        (let ((expand-result (expand/expand-toplevel syms forms)))
-          (if (nil? expand-result)
-              (do (println "Error: Failed to expand macros") nil)
-              (let ((expanded (val/pcons-tail expand-result))
-                    (result (codegen/codegen-module expanded syms)))
-                result))))))
+        ;; Load dependencies first
+        (let ((requires (extract-requires forms))
+              (loader (nsp/make-loader-state "lib"))
+              (deps-result (load-requires loader requires syms))
+              (deps-lir (val/pcons-tail deps-result)))
+          ;; Now compile main module
+          (let ((expand-result (expand/expand-toplevel syms forms)))
+            (if (nil? expand-result)
+                (do (println "Error: Failed to expand macros") nil)
+                (let ((expanded (val/pcons-tail expand-result))
+                      (result (codegen/codegen-module expanded syms))
+                      (combined (append-lir deps-lir result)))
+                  combined)))))))
 
 (defun print-lir (forms: ptr) -> i64
   (let ((output (printer/forms-to-string forms)))

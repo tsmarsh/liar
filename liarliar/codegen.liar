@@ -668,6 +668,10 @@
   (let ((b (heap-array 3)))
     (do (store-byte b 105) (store-byte (ptr+ b 1) 102) (store-byte (ptr+ b 2) 0) b)))
 
+(defun str-ns () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 110) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 0) b)))
+
 (defun str-let () -> ptr
   (let ((b (heap-array 4)))
     (do (store-byte b 108) (store-byte (ptr+ b 1) 101)
@@ -1598,6 +1602,9 @@
             ((streq base-name (str-defun))  (codegen-defun ctx form))
             ((streq base-name (str-do))     (codegen-do ctx form))
             ((streq base-name (str-fn))     (codegen-fn ctx form))
+            ;; Namespace declaration - skip for now (no-op)
+            ;; TODO: Implement proper :require handling
+            ((streq base-name (str-ns))     (pcons ctx (box-int 0)))
             ;; Arithmetic operators
             ((streq base-name (str-plus))
              (if (= (scons-length form) 3)
@@ -3393,16 +3400,16 @@
     (if (symbol? head)
         (let ((protocol (find-protocol-for-method (cg-proto-methods ctx) head)))
           (if (nil? protocol)
-              (if (= 1 (fn-list-has? (cg-fn-names ctx) head))
+              (if (= 1 (env-defined? (cg-env ctx) (symbol-id head)))
+                  ;; Local variable (closure) - indirect call
+                  (codegen-indirect-call-expr ctx head args)
+                  ;; Function call - may be local or from required module
                   (let ((args-result (codegen-args ctx args nil))
                         (ctx (pcons-head args-result))
                         (args-rev (pcons-tail args-result))
                         (args-v (reverse-scons args-rev))
                         (args-v (scons (lir-null syms) args-v)))
-                    (pcons ctx (lir-call syms head args-v)))
-                  (if (= 1 (env-defined? (cg-env ctx) (symbol-id head)))
-                      (codegen-indirect-call-expr ctx head args)
-                      (codegen-error ctx "Error: undefined function")))
+                    (pcons ctx (lir-call syms head args-v))))
               (codegen-protocol-call ctx head args protocol)))
         (codegen-indirect-call-expr ctx head args))))
 

@@ -1,0 +1,316 @@
+;; namespace.liar - Namespace and module loading for liarliar
+;;
+;; Handles:
+;;   - Parsing (ns name (:require ...)) forms
+;;   - Module file resolution
+;;   - Loading and caching modules
+;;   - Symbol visibility across namespaces
+
+(ns liarliar.namespace
+  (:require [liar.core :refer :all]
+            [liarliar.symbols :refer :all]
+            [liarliar.value :refer :all]
+            [liarliar.io :refer :all]))
+
+;; ============================================================
+;; Require Spec
+;; ============================================================
+
+;; A require specification from (:require [mod :refer [...] :as alias])
+;; - mod-name: symbol for module name (e.g., liar.core)
+;; - refer-all: 1 if :refer :all, 0 otherwise
+;; - refer-list: list of symbols to refer (nil if :refer :all or none)
+;; - alias: symbol for :as alias (nil if none)
+
+(defstruct RequireSpec
+  (req-mod-name: ptr
+   req-refer-all: i64
+   req-refer-list: ptr
+   req-alias: ptr))
+
+(defun make-require-spec (mod-name: ptr refer-all: i64 refer-list: ptr alias: ptr) -> ptr
+  (share (RequireSpec mod-name refer-all refer-list alias)))
+
+(defun req-mod-name (r: ptr) -> ptr (. r req-mod-name))
+(defun req-refer-all? (r: ptr) -> i64 (. r req-refer-all))
+(defun req-refer-list (r: ptr) -> ptr (. r req-refer-list))
+(defun req-alias (r: ptr) -> ptr (. r req-alias))
+
+;; ============================================================
+;; Parsed Namespace
+;; ============================================================
+
+;; A parsed namespace declaration
+;; - ns-name: symbol for namespace name
+;; - ns-requires: list of RequireSpec
+
+(defstruct ParsedNs
+  (ns-name: ptr
+   ns-requires: ptr))
+
+(defun make-parsed-ns (name: ptr requires: ptr) -> ptr
+  (share (ParsedNs name requires)))
+
+(defun parsed-ns-name (pns: ptr) -> ptr (. pns ns-name))
+(defun parsed-ns-requires (pns: ptr) -> ptr (. pns ns-requires))
+
+;; ============================================================
+;; Keyword Helpers
+;; ============================================================
+
+;; Check if a symbol is :require
+(defun str-keyword-require () -> ptr
+  (let ((b (heap-array 9)))
+    (do (store-byte b 58)  ;; :
+        (store-byte (ptr+ b 1) 114)  ;; r
+        (store-byte (ptr+ b 2) 101)  ;; e
+        (store-byte (ptr+ b 3) 113)  ;; q
+        (store-byte (ptr+ b 4) 117)  ;; u
+        (store-byte (ptr+ b 5) 105)  ;; i
+        (store-byte (ptr+ b 6) 114)  ;; r
+        (store-byte (ptr+ b 7) 101)  ;; e
+        (store-byte (ptr+ b 8) 0)
+        b)))
+
+;; Check if a symbol is :refer
+(defun str-keyword-refer () -> ptr
+  (let ((b (heap-array 7)))
+    (do (store-byte b 58)  ;; :
+        (store-byte (ptr+ b 1) 114)  ;; r
+        (store-byte (ptr+ b 2) 101)  ;; e
+        (store-byte (ptr+ b 3) 102)  ;; f
+        (store-byte (ptr+ b 4) 101)  ;; e
+        (store-byte (ptr+ b 5) 114)  ;; r
+        (store-byte (ptr+ b 6) 0)
+        b)))
+
+;; Check if a symbol is :all
+(defun str-keyword-all () -> ptr
+  (let ((b (heap-array 5)))
+    (do (store-byte b 58)  ;; :
+        (store-byte (ptr+ b 1) 97)   ;; a
+        (store-byte (ptr+ b 2) 108)  ;; l
+        (store-byte (ptr+ b 3) 108)  ;; l
+        (store-byte (ptr+ b 4) 0)
+        b)))
+
+;; Check if a symbol is :as
+(defun str-keyword-as () -> ptr
+  (let ((b (heap-array 4)))
+    (do (store-byte b 58)  ;; :
+        (store-byte (ptr+ b 1) 97)   ;; a
+        (store-byte (ptr+ b 2) 115)  ;; s
+        (store-byte (ptr+ b 3) 0)
+        b)))
+
+(defun keyword-require? (sym: ptr) -> i64
+  (if (symbol? sym)
+      (streq (symbol-name sym) (str-keyword-require))
+      0))
+
+(defun keyword-refer? (sym: ptr) -> i64
+  (if (symbol? sym)
+      (streq (symbol-name sym) (str-keyword-refer))
+      0))
+
+(defun keyword-all? (sym: ptr) -> i64
+  (if (symbol? sym)
+      (streq (symbol-name sym) (str-keyword-all))
+      0))
+
+(defun keyword-as? (sym: ptr) -> i64
+  (if (symbol? sym)
+      (streq (symbol-name sym) (str-keyword-as))
+      0))
+
+;; ============================================================
+;; Parse Require Spec
+;; ============================================================
+
+;; Parse options after module name: :refer :all, :refer [...], :as alias
+;; Returns (refer-all, refer-list, alias)
+(defun parse-require-options-loop (opts: ptr refer-all: i64 refer-list: ptr alias: ptr) -> ptr
+  (if (nil? opts)
+      (pcons (box-int refer-all) (pcons refer-list (pcons alias nil)))
+      (let ((opt (car opts))
+            (rest (cdr opts)))
+        (cond
+          ((keyword-refer? opt)
+           (if (nil? rest)
+               (pcons (box-int refer-all) (pcons refer-list (pcons alias nil)))
+               (let ((arg (car rest)))
+                 (if (keyword-all? arg)
+                     (parse-require-options-loop (cdr rest) 1 nil alias)
+                     (if (scons? arg)
+                         (parse-require-options-loop (cdr rest) 0 arg alias)
+                         (parse-require-options-loop (cdr rest) refer-all refer-list alias))))))
+          ((keyword-as? opt)
+           (if (nil? rest)
+               (pcons (box-int refer-all) (pcons refer-list (pcons alias nil)))
+               (parse-require-options-loop (cdr rest) refer-all refer-list (car rest))))
+          (else
+           (parse-require-options-loop rest refer-all refer-list alias))))))
+
+(defun parse-require-options (opts: ptr) -> ptr
+  (parse-require-options-loop opts 0 nil nil))
+
+;; Parse a single require spec: [module-name :refer :all] or [module-name :as m]
+(defun parse-require-spec (spec: ptr) -> ptr
+  (if (not (scons? spec))
+      nil
+      (let ((mod-name (car spec))
+            (opts (cdr spec))
+            (parsed (parse-require-options opts))
+            (refer-all (unbox-int (car parsed)))
+            (refer-list (cadr parsed))
+            (alias (caddr parsed)))
+        (make-require-spec mod-name refer-all refer-list alias))))
+
+;; Parse all require specs from (:require [...] [...] ...)
+(defun parse-require-specs-loop (specs: ptr acc: ptr) -> ptr
+  (if (nil? specs)
+      (preverse acc)
+      (let ((spec (parse-require-spec (car specs))))
+        (if (nil? spec)
+            (parse-require-specs-loop (cdr specs) acc)
+            (parse-require-specs-loop (cdr specs) (pcons spec acc))))))
+
+(defun parse-require-specs (require-form: ptr) -> ptr
+  ;; require-form is (:require [...] [...] ...)
+  ;; Skip the :require keyword
+  (parse-require-specs-loop (cdr require-form) nil))
+
+;; ============================================================
+;; Parse NS Form
+;; ============================================================
+
+;; Find the (:require ...) clause in ns body
+(defun find-require-clause (clauses: ptr) -> ptr
+  (if (nil? clauses)
+      nil
+      (let ((clause (car clauses)))
+        (if (scons? clause)
+            (if (keyword-require? (car clause))
+                clause
+                (find-require-clause (cdr clauses)))
+            (find-require-clause (cdr clauses))))))
+
+;; Parse (ns name (:require ...)) form
+;; Returns ParsedNs or nil if not an ns form
+(defun parse-ns-form (form: ptr) -> ptr
+  (if (not (scons? form))
+      nil
+      (let ((head (car form)))
+        (if (not (symbol? head))
+            nil
+            (if (= 0 (streq (symbol-name head) (str-ns)))
+                nil
+                (let ((name (cadr form))
+                      (body (cddr form))
+                      (require-clause (find-require-clause body))
+                      (requires (if (nil? require-clause)
+                                    nil
+                                    (parse-require-specs require-clause))))
+                  (make-parsed-ns name requires)))))))
+
+;; Helper to get str-ns (reuse from codegen would be better, but avoid circular dep)
+(defun str-ns () -> ptr
+  (let ((b (heap-array 3)))
+    (do (store-byte b 110) (store-byte (ptr+ b 1) 115) (store-byte (ptr+ b 2) 0) b)))
+
+;; ============================================================
+;; Module Resolution
+;; ============================================================
+
+;; Convert namespace name to file path
+;; liar.core -> lib/liar.core.liar (flat) or lib/liar/core.liar (hierarchical)
+;; For now, just append .liar
+
+;; Get string name from symbol or return as-is
+(defun ns-name-to-string (ns-name: ptr) -> ptr
+  (if (symbol? ns-name) (symbol-name ns-name) ns-name))
+
+(defun namespace-to-path (ns-name: ptr lib-path: ptr) -> ptr
+  ;; ns-name is a symbol, get its string name
+  (namespace-to-path-with-name (ns-name-to-string ns-name) lib-path))
+
+(defun namespace-to-path-with-name (name: ptr lib-path: ptr) -> ptr
+  (let ((lib-len (strlen-ptr lib-path))
+        (name-len (strlen-ptr name)))
+    (let ((total (+ lib-len (+ 1 (+ name-len 6)))))  ;; 1 for /, 5 for .liar, 1 for null
+      (let ((buf (heap-array total)))
+        (do
+          ;; Copy lib-path
+          (strcpy-loop buf lib-path 0)
+          ;; Add /
+          (store-byte (ptr+ buf lib-len) 47)
+          ;; Copy name
+          (strcpy-loop (ptr+ buf (+ lib-len 1)) name 0)
+          ;; Add .liar
+          (store-byte (ptr+ buf (+ lib-len (+ 1 name-len))) 46)      ;; .
+          (store-byte (ptr+ buf (+ lib-len (+ 2 name-len))) 108)     ;; l
+          (store-byte (ptr+ buf (+ lib-len (+ 3 name-len))) 105)     ;; i
+          (store-byte (ptr+ buf (+ lib-len (+ 4 name-len))) 97)      ;; a
+          (store-byte (ptr+ buf (+ lib-len (+ 5 name-len))) 114)     ;; r
+          (store-byte (ptr+ buf (+ lib-len (+ 6 name-len))) 0)       ;; null
+          buf)))))
+
+(defun strcpy-loop (dst: ptr src: ptr idx: i64) -> i64
+  (let ((c (load-byte (ptr+ src idx))))
+    (if (= c 0)
+        idx
+        (do
+          (store-byte (ptr+ dst idx) c)
+          (strcpy-loop dst src (+ idx 1))))))
+
+(defun strlen-ptr (s: ptr) -> i64
+  (strlen-loop s 0))
+
+(defun strlen-loop (s: ptr idx) -> i64
+  (if (= (load-byte (ptr+ s idx)) 0)
+      idx
+      (strlen-loop s (+ idx 1))))
+
+;; ============================================================
+;; Module Loader State
+;; ============================================================
+
+;; Tracks which modules have been loaded to avoid duplicates
+;; Uses a simple list of symbol names for now
+(defstruct LoaderState
+  (loader-lib-path: ptr       ;; Path to lib directory
+   loader-loaded: ptr))       ;; List of loaded module names (as strings)
+
+(defun make-loader-state (lib-path: ptr) -> ptr
+  (share (LoaderState lib-path nil)))
+
+(defun loader-lib-path (ls: ptr) -> ptr (. ls loader-lib-path))
+(defun loader-loaded (ls: ptr) -> ptr (. ls loader-loaded))
+
+(defun loader-is-loaded? (ls: ptr name: ptr) -> i64
+  (loader-is-loaded-loop (loader-loaded ls) name))
+
+(defun loader-is-loaded-loop (loaded: ptr name: ptr) -> i64
+  (if (nil? loaded)
+      0
+      (if (= 1 (streq (car loaded) name))
+          1
+          (loader-is-loaded-loop (cdr loaded) name))))
+
+(defun loader-mark-loaded (ls: ptr name: ptr) -> ptr
+  (let ((old-loaded (loader-loaded ls))
+        (new-loaded (pcons name old-loaded)))
+    (share (LoaderState (loader-lib-path ls) new-loaded))))
+
+;; ============================================================
+;; Check for ns form
+;; ============================================================
+
+;; Check if a form is an ns form (first element is ns symbol)
+(defun ns-form? (form: ptr) -> i64
+  (if (not (scons? form))
+      0
+      (let ((head (car form)))
+        (if (not (symbol? head))
+            0
+            (streq (symbol-name head) (str-ns))))))
