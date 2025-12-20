@@ -13,10 +13,10 @@
 ;; Output Helpers
 ;; ============================================================
 
-(defun emit-newline (sb: ptr) -> ptr (conj sb 10))
-(defun emit-space (sb: ptr) -> ptr (conj sb 32))
-(defun emit-lparen (sb: ptr) -> ptr (conj sb 40))
-(defun emit-rparen (sb: ptr) -> ptr (conj sb 41))
+(defun emit-newline (sb: ptr) -> ptr (sb-conj sb 10))
+(defun emit-space (sb: ptr) -> ptr (sb-conj sb 32))
+(defun emit-lparen (sb: ptr) -> ptr (sb-conj sb 40))
+(defun emit-rparen (sb: ptr) -> ptr (sb-conj sb 41))
 
 ;; ============================================================
 ;; Print Atoms
@@ -26,7 +26,7 @@
   (let ((c (load-byte (ptr+ name idx))))
     (if (= c 0)
         sb
-        (print-symbol-name-loop (conj sb c) name (+ idx 1)))))
+        (print-symbol-name-loop (sb-conj sb c) name (+ idx 1)))))
 
 (defun print-symbol (sb: ptr sym: ptr) -> ptr
   (print-symbol-name-loop sb (symbol-name sym) 0))
@@ -44,15 +44,15 @@
         (scale (boxed-float-scale f)))
     (if (< int-part 0)
         (let ((sb (append-int sb int-part))
-              (sb (conj sb 46)))  ;; '.'
+              (sb (sb-conj sb 46)))  ;; '.'
           (print-frac-with-zeros sb frac-part scale))
         (if (< frac-part 0)
-            (let ((sb (conj sb 45))  ;; '-'
+            (let ((sb (sb-conj sb 45))  ;; '-'
                   (sb (append-int sb 0))
-                  (sb (conj sb 46)))  ;; '.'
+                  (sb (sb-conj sb 46)))  ;; '.'
               (print-frac-with-zeros sb (- 0 frac-part) scale))
             (let ((sb (append-int sb int-part))
-                  (sb (conj sb 46)))  ;; '.'
+                  (sb (sb-conj sb 46)))  ;; '.'
               (print-frac-with-zeros sb frac-part scale))))))
 
 ;; Print fractional part with leading zeros (e.g., 3.05 -> frac=5, scale=100)
@@ -65,7 +65,7 @@
   (if (<= scale 1)
       (append-int sb frac)
       (if (< frac scale)
-          (print-frac-zeros-loop (conj sb 48) frac (/ scale 10))  ;; '0' = 48
+          (print-frac-zeros-loop (sb-conj sb 48) frac (/ scale 10))  ;; '0' = 48
           (append-int sb frac))))
 
 ;; Print a string (with quotes and escape handling)
@@ -74,16 +74,16 @@
       sb
       (let ((c (load-byte (ptr+ data idx)))
             (sb (if (= c 10)  ;; newline -> \n
-                    (conj (conj sb 92) 110)
+                    (sb-conj (sb-conj sb 92) 110)
                     (if (= c 34)  ;; quote -> \"
-                        (conj (conj sb 92) 34)
-                        (conj sb c)))))
+                        (sb-conj (sb-conj sb 92) 34)
+                        (sb-conj sb c)))))
         (print-string-loop sb data (+ idx 1) len))))
 
 (defun print-liar-string (sb: ptr s: ptr) -> ptr
-  (let ((sb (conj sb 34))  ;; opening quote
+  (let ((sb (sb-conj sb 34))  ;; opening quote
         (sb (print-string-loop sb (liar-string-data s) 0 (liar-string-len s))))
-    (conj sb 34)))  ;; closing quote
+    (sb-conj sb 34)))  ;; closing quote
 
 ;; ============================================================
 ;; Print Lists

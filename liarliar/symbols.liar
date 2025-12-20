@@ -5,10 +5,11 @@
 ;;
 ;; Architecture:
 ;;   - Symbol struct holds the interned id and a pointer to the name string
-;;   - A symbol table (ptr array) maps ids to names
-;;   - Interning uses linear scan (sufficient for bootstrap)
+;;   - StringMap provides O(1) lookup by name -> Symbol
+;;   - Counter tracks next symbol id for new symbols
 
-(ns liarliar.symbols)
+(ns liarliar.symbols
+  (:require [liar.stringmap :refer [string-map sm-get sm-assoc streq]]))
 
 ;; --- Symbol struct ---
 
@@ -24,87 +25,48 @@
   (instance? x Symbol))
 
 
-;; --- Symbol table (global state) ---
-;; Simple design: fixed-size array with linear growth
-;; Table layout in data array: [count, cap, name0, name1, name2, ...]
-;; Uses same pattern as MutVector for mutable count/cap
+;; --- Symbol table using StringMap ---
+;; Uses StringMap for O(1) average-case lookup instead of O(n) linear scan.
+;; Stores: mutable pointer to map, next-id counter
+;; Both are stored in a data array: [map-ptr, next-id]
 
 (defstruct SymbolTable (sym-tab-data: ptr))
 
-;; Create a new symbol table with initial capacity
+;; Create a new symbol table
+;; The capacity parameter is ignored (StringMap handles sizing internally)
 (defun make-symbol-table (cap) -> ptr
-  (let ((data (heap-array-ptr (+ cap 2)))  ;; +2 for count and cap slots
-        (s0 (aset data 0 0))               ;; count = 0
-        (s1 (aset data 1 cap)))            ;; cap
+  (let ((data (heap-array-ptr 2))
+        (s0 (aset-ptr data 0 (string-map)))  ;; map pointer
+        (s1 (aset data 1 0)))                ;; next id starts at 0
     (share (SymbolTable data))))
 
-(defun sym-table-data (t: ptr) -> ptr
-  (. t sym-tab-data))
-
-(defun sym-table-cap (t: ptr) -> i64
+(defun sym-table-count (t: ptr) -> i64
   (aget (. t sym-tab-data) 1))
 
-(defun sym-table-count (t: ptr) -> i64
-  (aget (. t sym-tab-data) 0))
+;; Get current map from mutable slot
+(defun sym-table-map (t: ptr) -> ptr
+  (aget-ptr (. t sym-tab-data) 0))
 
-
-;; --- String comparison ---
-;; Compare two null-terminated strings byte by byte
-;; Note: predicate functions don't specify return type - compiler infers bool (i1)
-
-(defun streq-loop (a: ptr b: ptr idx)
-  (let ((ca (load-byte (ptr+ a idx)))
-        (cb (load-byte (ptr+ b idx))))
-    (if (= ca cb)
-        (if (= ca 0)
-            true  ;; both ended, equal
-            (streq-loop a b (+ idx 1)))
-        false)))  ;; different byte, not equal
-
-(defun streq (a: ptr b: ptr)
-  (streq-loop a b 0))
+;; Update map in mutable slot
+(defun sym-table-set-map! (t: ptr m: ptr) -> i64
+  (aset-ptr (. t sym-tab-data) 0 m))
 
 
 ;; --- Interning ---
 
-;; Search for a string in the table, return its id or -1 if not found
-;; idx is the logical symbol index (0-based), data index is idx + 2
-(defun find-symbol-loop (data: ptr name count idx) -> i64
-  (if (>= idx count)
-      -1  ;; not found
-      (let ((stored-name (aget-ptr data (+ idx 2))))  ;; +2 to skip count,cap
-        (if (streq stored-name name)
-            idx  ;; found at this logical index
-            (find-symbol-loop data name count (+ idx 1))))))
-
-(defun find-symbol (table: ptr name) -> i64
-  (let ((data (sym-table-data table))
-        (count (sym-table-count table)))
-    (find-symbol-loop data name count 0)))
-
-;; Add a symbol to the table (does not check for duplicates)
-;; Returns the new symbol's id
-(defun add-symbol (table: ptr name) -> i64
-  (let ((data (sym-table-data table))
-        (count (sym-table-count table))
-        (s1 (aset-ptr data (+ count 2) name))  ;; store at count+2 (skip count,cap)
-        (s2 (aset data 0 (+ count 1))))        ;; increment count
-    count))  ;; return the id (old count)
-
-;; Intern a symbol: return existing id or create new
+;; Intern a symbol: return existing or create new
 ;; Returns a Symbol struct pointer
 (defun intern (table: ptr name) -> ptr
-  (let ((existing (find-symbol table name)))
-    (if (>= existing 0)
-        ;; Found - return symbol with existing id
-        (share (Symbol existing name))
-        ;; Not found - add and return new symbol
-        (let ((new-id (add-symbol table name)))
-          (share (Symbol new-id name))))))
-
-
-;; --- Common symbols (predefined for efficiency) ---
-;; These could be pre-interned during reader initialization
-
-;; Built-in symbol names as string literals
-;; Note: The reader will intern these on first use
+  (let ((m (sym-table-map table))
+        (existing (sm-get m name)))
+    (if (nil? existing)
+        ;; Not found - create new symbol and update map
+        (let ((data (. table sym-tab-data))
+              (new-id (aget data 1))
+              (sym (share (Symbol new-id name)))
+              (new-map (sm-assoc m name sym))
+              (s1 (sym-table-set-map! table new-map))
+              (s2 (aset data 1 (+ new-id 1))))
+          sym)
+        ;; Found - return existing symbol
+        existing)))

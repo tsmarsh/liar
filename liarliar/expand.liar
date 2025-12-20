@@ -34,10 +34,11 @@
 ;; ============================================================================
 
 ;; Check if a symbol has a given name (null-terminated string)
-(defun symbol-name-eq (sym: ptr name: ptr)
+;; Returns i64: 1 if equal, 0 otherwise (matches streq return type)
+(defun symbol-name-eq (sym: ptr name: ptr) -> i64
   (if (symbol? sym)
       (streq (symbol-name sym) name)
-      false))
+      0))
 
 ;; Build well-known symbol names as byte arrays
 ;; "quote" = 113 117 111 116 101 0
@@ -130,13 +131,14 @@
 ;; ============================================================================
 
 ;; Check if form is a list starting with a symbol matching the given name
-(defun form-starts-with (form: ptr name: ptr)
+;; Returns i64: 1 if matches, 0 otherwise
+(defun form-starts-with (form: ptr name: ptr) -> i64
   (if (nil? form)
-      false
+      0
       (if (scons? form)
           (let ((head (scons-head form)))
             (symbol-name-eq head name))
-          false)))
+          0)))
 
 ;; Predicate: is this (quote ...)?
 (defun quote-form? (form: ptr)

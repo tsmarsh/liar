@@ -1,17 +1,14 @@
 ;; value.liar - Typed cons cells for homogeneous and heterogeneous lists
 ;;
-;; Architecture: Monomorphized typed collections instead of generic tagged pointers.
-;; Each value type gets its own cons cell type for type-safe lists.
+;; Uses stdlib PtrCons for S-expressions and heterogeneous lists.
+;; Keeps ICons for integer-only lists (more efficient, no boxing).
 ;;
 ;; Type prefixes:
 ;;   i  - i64 (integers)
-;;   p  - ptr (pointers to any struct)
-;;   s  - ptr (S-expressions specifically)
-;;
-;; Note: Float cons (FCons) deferred until struct field type support is verified.
-;; Note: Field names are prefixed to avoid ambiguity (icons-hd vs pcons-hd).
+;;   p/s - ptr (pointers, S-expressions) - now uses stdlib PtrCons
 
-(ns liarliar.value)
+(ns liarliar.value
+  (:require [liar.seq :refer [pcons pfirst prest pcount preverse PtrCons]]))
 
 ;; --- Integer cons (for homogeneous integer lists) ---
 ;; [1 2 3] → (icons 1 (icons 2 (icons 3 nil)))
@@ -31,54 +28,41 @@
   (instance? x ICons))
 
 
-;; --- Pointer cons (for heterogeneous pointer lists) ---
-;; General-purpose list of any struct pointers
-;; [(Box 1) (Box 2)] → (pcons box1 (pcons box2 nil))
-
-(defstruct PCons (pcons-hd: ptr pcons-tl: ptr))
-
-(defun pcons (h: ptr pcons-tl: ptr) -> ptr
-  (share (PCons h pcons-tl)))
+;; --- Pointer cons (uses stdlib PtrCons) ---
+;; pcons, pfirst, prest imported from liar.seq
 
 (defun pcons-head (c: ptr) -> ptr
-  (. c pcons-hd))
+  (pfirst c))
 
 (defun pcons-tail (c: ptr) -> ptr
-  (. c pcons-tl))
+  (prest c))
 
 (defun pcons? (x: ptr)
-  (instance? x PCons))
+  (instance? x PtrCons))
 
 
-;; --- S-expression cons (for parsed source code) ---
-;; Separate type from PCons so instance? can distinguish AST from data.
-;; Includes source location for error messages.
+;; --- S-expression cons (uses stdlib PtrCons) ---
+;; SCons is now an alias for PtrCons. Source locations were unused.
 ;;
 ;; (defun foo (x) (+ x 1))
 ;; → (scons sym-defun (scons sym-foo (scons (scons sym-x nil) (scons ...))))
 
-(defstruct SCons (scons-hd: ptr scons-tl: ptr scons-line: i64 scons-col: i64))
-
 (defun scons (h: ptr scons-tl: ptr) -> ptr
-  (share (SCons h scons-tl 0 0)))
+  (pcons h scons-tl))
 
+;; scons-loc ignores location for now (PtrCons doesn't store it)
+;; TODO: Add LocPtrCons to stdlib if source locations are needed
 (defun scons-loc (h: ptr scons-tl: ptr line col) -> ptr
-  (share (SCons h scons-tl line col)))
+  (pcons h scons-tl))
 
 (defun scons-head (c: ptr) -> ptr
-  (. c scons-hd))
+  (pfirst c))
 
 (defun scons-tail (c: ptr) -> ptr
-  (. c scons-tl))
-
-(defun scons-line (c: ptr) -> i64
-  (. c scons-line))
-
-(defun scons-col (c: ptr) -> i64
-  (. c scons-col))
+  (prest c))
 
 (defun scons? (x: ptr)
-  (instance? x SCons))
+  (instance? x PtrCons))
 
 
 ;; --- Boxed primitives for uniform treatment ---
@@ -150,34 +134,29 @@
 
 
 ;; --- Standard list accessors ---
-;; Safe car/cdr that return nil for nil/non-cons input
+;; car/cdr work on PtrCons (the underlying type for scons)
 
 (defun car (lst: ptr) -> ptr
-  (if (scons? lst) (scons-head lst) nil))
+  (pfirst lst))
 
 (defun cdr (lst: ptr) -> ptr
-  (if (scons? lst) (scons-tail lst) nil))
+  (prest lst))
 
 (defun cadr (lst: ptr) -> ptr
-  (car (cdr lst)))
+  (pfirst (prest lst)))
 
 (defun caddr (lst: ptr) -> ptr
-  (car (cdr (cdr lst))))
+  (pfirst (prest (prest lst))))
 
 (defun cadddr (lst: ptr) -> ptr
-  (car (cdr (cdr (cdr lst)))))
+  (pfirst (prest (prest (prest lst)))))
 
 (defun cddr (lst: ptr) -> ptr
-  (cdr (cdr lst)))
+  (prest (prest lst)))
 
 (defun cdddr (lst: ptr) -> ptr
-  (cdr (cdr (cdr lst))))
+  (prest (prest (prest lst))))
 
-;; Reverse an SCons list
-(defun reverse-scons-acc (lst: ptr acc: ptr) -> ptr
-  (if (nil? lst)
-      acc
-      (reverse-scons-acc (cdr lst) (scons (car lst) acc))))
-
+;; Reverse an SCons list (uses stdlib preverse)
 (defun reverse-scons (lst: ptr) -> ptr
-  (reverse-scons-acc lst nil))
+  (preverse lst))

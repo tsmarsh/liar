@@ -220,14 +220,15 @@
 ;;; can't currently handle heterogeneous return types. Use direct accessors.
 ;;; ============================================================
 
-(defstruct PtrCons (head: ptr tail: ptr))
+;; Note: Fields named phead/ptail to avoid collision with Cons.head/tail
+(defstruct PtrCons (phead: ptr ptail: ptr))
 
 ;; Direct accessors (not protocol methods)
 (defun pfirst (lst: ptr) -> ptr
-  (. lst head))
+  (. lst phead))
 
 (defun prest (lst: ptr) -> ptr
-  (. lst tail))
+  (. lst ptail))
 
 ;; Constructor
 (defun pcons (head: ptr tail: ptr) -> ptr

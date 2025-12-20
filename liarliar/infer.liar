@@ -297,10 +297,10 @@
 
 ;; Get car/cdr of SCons
 (defun scar (x: ptr) -> ptr
-  (. x scons-hd))
+  (scons-head x))
 
 (defun scdr (x: ptr) -> ptr
-  (. x scons-tl))
+  (scons-tail x))
 
 ;; Get second element
 (defun scadr (x: ptr) -> ptr

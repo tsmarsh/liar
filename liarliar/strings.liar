@@ -7,18 +7,6 @@
 
 (ns liarliar.strings)
 
-;; Protocol for Collection (only conj needed)
-(defprotocol Countable
-  (count [self]))
-
-(defprotocol Collection
-  (conj [self x]))
-
-;; --- External declarations ---
-
-(extern malloc ptr (i64))
-(extern memcpy ptr (ptr ptr i64))
-
 ;; --- StringBuilder struct ---
 
 (defstruct StringBuilder (sb-data: ptr))
@@ -71,20 +59,21 @@
         sb
         (sb-grow sb needed))))
 
-;; --- Protocol implementations ---
+;; --- Direct conj (no protocol dispatch overhead) ---
+;; Direct function for appending a byte to StringBuilder.
+;; More efficient than protocol dispatch for tight loops.
 
-(extend-protocol Countable StringBuilder
-  (count [self]
-    (sb-get-len (. self sb-data))))
-
-(extend-protocol Collection StringBuilder
-  (conj [self x]
-    (let ((sb (sb-ensure-cap self 1))
-          (data (. sb sb-data))
-          (len (sb-get-len data))
-          (s1 (store-byte (ptr+ (sb-byte-ptr data) len) x))
-          (s2 (sb-set-len! data (+ len 1))))
+(defun sb-conj (sb: ptr x) -> ptr
+  (let ((sb (sb-ensure-cap sb 1))
+        (data (. sb sb-data))
+        (len (sb-get-len data)))
+    (do
+      (store-byte (ptr+ (sb-byte-ptr data) len) x)
+      (sb-set-len! data (+ len 1))
       sb)))
+
+(defun sb-count (sb: ptr) -> i64
+  (sb-get-len (. sb sb-data)))
 
 ;; --- String operations ---
 
@@ -99,7 +88,7 @@
 (defun sb-append-loop (sb: ptr s: ptr i len) -> ptr
   (if (>= i len)
       sb
-      (let ((sb (conj sb (load-byte (ptr+ s i)))))
+      (let ((sb (sb-conj sb (load-byte (ptr+ s i)))))
         (sb-append-loop sb s (+ i 1) len))))
 
 (defun append (sb: ptr s: ptr) -> ptr
@@ -112,7 +101,7 @@
   (if (= n 0)
       sb
       (let ((digit (rem n 10))
-            (sb (conj sb (+ 48 digit))))  ;; '0' = 48
+            (sb (sb-conj sb (+ 48 digit))))  ;; '0' = 48
         (write-digits-loop sb (/ n 10)))))
 
 (defun reverse-last-n-loop (sb: ptr start end) -> ptr
@@ -126,21 +115,21 @@
         (reverse-last-n-loop sb (+ start 1) (- end 1)))))
 
 (defun reverse-last-n (sb: ptr n) -> ptr
-  (let ((len (count sb)))
+  (let ((len (sb-count sb)))
     (reverse-last-n-loop sb (- len n) (- len 1))))
 
 (defun append-int (sb: ptr n) -> ptr
   (if (= n 0)
-      (conj sb 48)  ;; '0'
+      (sb-conj sb 48)  ;; '0'
       (if (< n 0)
-          (let ((sb (conj sb 45))  ;; '-'
-                (start-len (count sb))
+          (let ((sb (sb-conj sb 45))  ;; '-'
+                (start-len (sb-count sb))
                 (sb (write-digits-loop sb (- 0 n)))
-                (digits (- (count sb) start-len)))
+                (digits (- (sb-count sb) start-len)))
             (reverse-last-n sb digits))
-          (let ((start-len (count sb))
+          (let ((start-len (sb-count sb))
                 (sb (write-digits-loop sb n))
-                (digits (- (count sb) start-len)))
+                (digits (- (sb-count sb) start-len)))
             (reverse-last-n sb digits)))))
 
 ;; --- Finalize ---
