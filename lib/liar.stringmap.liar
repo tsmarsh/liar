@@ -1,5 +1,5 @@
 (ns liar.stringmap
-  (:require [liar.core :refer :all]
+  (:require [liar.prelude :refer :all]
             [liar.seq :refer :all]))
 
 ;; StringMap - Hash table with string keys

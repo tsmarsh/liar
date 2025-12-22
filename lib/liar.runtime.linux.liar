@@ -1,5 +1,5 @@
 (ns liar.runtime.linux
-  (:require [liar.core :refer :all]
+  (:require [liar.prelude :refer :all]
             [liar.runtime.core :refer :all]))
 
 ;; liar Runtime - Linux Reactor (epoll)

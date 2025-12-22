@@ -60,7 +60,7 @@ liar is a working compiler (117 passing liar-cert scenarios):
 - Async I/O with reactor-based event loop
 
 **Standard Library (`lib/`):**
-- `liar.core.liar` — Core functions (inc, dec, min, max, etc.) and threading macros
+- `liar.prelude.liar` — Core functions (inc, dec, min, max, etc.) and threading macros
 - `liar.seq.liar` — Protocols (Seq, Countable, Indexable) and cons-based lists
 - `liar.vector.liar` — Persistent vectors (32-way trie)
 - `liar.hashmap.liar` — Persistent hash maps (HAMT)

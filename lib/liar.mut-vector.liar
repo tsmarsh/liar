@@ -1,5 +1,5 @@
 (ns liar.mut-vector
-  (:require [liar.core :refer :all]
+  (:require [liar.prelude :refer :all]
             [liar.seq :refer :all]))
 
 ;; liar Mutable Vector Library

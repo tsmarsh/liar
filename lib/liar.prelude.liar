@@ -1,0 +1,181 @@
+(ns liar.prelude)
+
+;; liar Standard Library
+;;
+;; Core functions and utilities
+;; Builtins (+, -, *, /, etc.) are auto-imported from Rust runtime
+
+;; Core
+
+(defun identity (x) x)
+
+;; Arithmetic
+
+(defun inc (x) (+ x 1))
+
+(defun dec (x) (- x 1))
+
+(defun square (x) (* x x))
+
+(defun abs (x) (if (< x 0) (- 0 x) x))
+
+(defun neg (x) (- 0 x))
+
+(defun min (a b) (if (< a b) a b))
+
+(defun max (a b) (if (> a b) a b))
+
+(defun cube (x) (* x (* x x)))
+
+(defun sign (x) (if (< x 0) -1 (if (> x 0) 1 0)))
+
+(defun clamp (x lo hi) (max lo (min x hi)))
+
+;; Predicates
+
+(defun zerop (x) (= x 0))
+
+(defun posp (x) (> x 0))
+
+(defun negp (x) (< x 0))
+
+(defun evenp (x) (= 0 (rem x 2)))
+
+(defun oddp (x) (= 1 (rem x 2)))
+
+(defun divisible (d n) (= 0 (rem n d)))
+
+(defun in-range (x lo hi) (if (<= lo x) (<= x hi) false))
+
+;; Math
+
+(defun gcd (a b) (if (= b 0) a (gcd b (rem a b))))
+
+(defun lcm (a b) (/ (* a b) (gcd a b)))
+
+(defun factorial (n) (if (<= n 1) 1 (* n (factorial (- n 1)))))
+
+(defun fib (n) (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))
+
+(defun pow (base exp) (if (= exp 0) 1 (* base (pow base (- exp 1)))))
+
+(defun sum-to (n) (if (<= n 0) 0 (+ n (sum-to (- n 1)))))
+
+;; Fast (O(1) or O(log n)) versions
+
+;; Sum of 1..n using closed-form formula: n*(n+1)/2
+(defun sum-to-fast (n) (/ (* n (+ n 1)) 2))
+
+;; Fibonacci using tail recursion - O(n)
+(defun fib-iter (n a b)
+  (if (= n 0) a (fib-iter (- n 1) b (+ a b))))
+
+(defun fib-fast (n) (fib-iter n 0 1))
+
+;; Fast exponentiation by squaring - O(log n)
+(defun pow-fast (base exp)
+  (if (= exp 0)
+      1
+      (if (evenp exp)
+          (let ((half (pow-fast base (/ exp 2))))
+            (* half half))
+          (* base (pow-fast base (- exp 1))))))
+
+;; Higher-order functions
+
+;; Returns a function that always returns v, ignoring its argument
+(defun constantly (v)
+  (fn (x) v))
+
+;; Returns composition of two functions: (comp f g) returns fn that does (f (g x))
+(defun comp (f g)
+  (fn (x) (f (g x))))
+
+;; Returns a function with arguments flipped: (flip f) returns (fn (a b) (f b a))
+(defun flip (f)
+  (fn (a b) (f b a)))
+
+;; Returns a function that negates the result of predicate f
+;; Works with predicates returning i64 (0 = false, non-zero = true)
+(defun complement (f)
+  (fn (x) (if (= 0 (f x)) 1 0)))
+
+;; Composition of three functions: (f (g (h x)))
+(defun comp3 (f g h)
+  (fn (x) (f (g (h x)))))
+
+;; Variadic composition macro
+(defmacro comp* (... fns)
+  (if (nil? fns)
+      `identity
+      (if (nil? (rest fns))
+          (first fns)
+          `(fn (x) (,(first fns) ((comp* ,@(rest fns)) x))))))
+
+;;; ============================================================
+;;; Threading Macros
+;;; ============================================================
+
+;; Thread-first: insert x as first argument of each form
+;; (thread-first x (f a) (g b)) => (g (f x a) b)
+;; (thread-first x f g) => (g (f x))
+;; Note: Uses list? (macro-time check) not cons? (runtime check)
+;; Named thread-first to avoid conflict with -> (Arrow token for return types)
+(defmacro thread-first (x ... forms)
+  (if (nil? forms)
+      x
+      (let ((form (first forms))
+            (more (rest forms)))
+        (if (nil? more)
+            ;; Last form
+            (if (list? form)
+                `(,(first form) ,x ,@(rest form))
+                `(,form ,x))
+            ;; More forms: recurse
+            (if (list? form)
+                `(thread-first (,(first form) ,x ,@(rest form)) ,@more)
+                `(thread-first (,form ,x) ,@more))))))
+
+;; Thread-last: insert x as last argument of each form
+;; (thread-last x (f a) (g b)) => (g b (f a x))
+;; (thread-last x f g) => (g (f x))
+;; Note: Uses list? (macro-time check) not cons? (runtime check)
+;; Named thread-last to avoid conflict with ->> token
+(defmacro thread-last (x ... forms)
+  (if (nil? forms)
+      x
+      (let ((form (first forms))
+            (more (rest forms)))
+        (if (nil? more)
+            ;; Last form
+            (if (list? form)
+                `(,@form ,x)
+                `(,form ,x))
+            ;; More forms: recurse
+            (if (list? form)
+                `(thread-last (,@form ,x) ,@more)
+                `(thread-last (,form ,x) ,@more))))))
+
+;; cons? - runtime check if value is a Cons cell (requires Cons struct from liar.seq)
+;; Returns 1 if x is a Cons, 0 otherwise
+(defmacro cons? (x)
+  `(instance? ,x Cons))
+
+;; cond - multi-branch conditional
+;; (cond
+;;   (test1 body1)
+;;   (test2 body2)
+;;   (else default))
+;; Expands to nested ifs. Last clause should be (else x) or (true x) as default.
+(defmacro cond (... clauses)
+  (if (nil? clauses)
+      nil
+      (let ((clause (first clauses))
+            (more (rest clauses))
+            (test (first clause))
+            (body (first (rest clause))))
+        (if (nil? more)
+            ;; Last clause is the default - just return body
+            ;; (Convention: use (else x) or (true x) for clarity)
+            body
+            `(if ,test ,body (cond ,@more))))))

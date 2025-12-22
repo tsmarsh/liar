@@ -17,7 +17,7 @@ Quick check: can liarliar compile stdlib modules and can lair consume the emitte
    - `cons` in `vec-to-list` (`lib/liar.vector.liar`).
 
 2. **Missing globals in lIR**
-   - `undefined global or function: __lambda_0` when compiling `/tmp/liar.core.lir` and `/tmp/liar.seq.lir`.
+   - `undefined global or function: __lambda_0` when compiling `/tmp/liar.prelude.lir` and `/tmp/liar.seq.lir`.
    - Indicates a closure/function reference emitted without a matching definition.
 
 3. **Unexpected tokens in lIR output**

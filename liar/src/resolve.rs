@@ -79,8 +79,8 @@ impl NamespaceContext {
             current: "user".to_string(),
             aliases: HashMap::new(),
             referred: HashMap::new(),
-            // Auto-import liar.core
-            refer_all: vec!["liar.core".to_string()],
+            // Auto-import liar.prelude
+            refer_all: vec!["liar.prelude".to_string()],
         }
     }
 

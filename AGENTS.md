@@ -20,7 +20,7 @@
 - Keep files small and focused: prefer splitting if a file exceeds ~500 lines or a function exceeds ~50 lines.
 - Avoid hidden globals and thread-locals in compiler passes; pass context explicitly.
 - Keep lIR crates generic: no liar-specific terminology in `lir-*` crates.
-- Lisp library files in `lib/` use namespaced filenames like `liar.core.liar`; run `make lint` before changes land.
+- Lisp library files in `lib/` use namespaced filenames like `liar.prelude.liar`; run `make lint` before changes land.
 
 ## Testing Guidelines
 - Unit tests live near code (`#[cfg(test)]` modules).

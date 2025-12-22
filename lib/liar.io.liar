@@ -1,5 +1,5 @@
 (ns liar.io
-  (:require [liar.core :refer :all]
+  (:require [liar.prelude :refer :all]
             [liar.runtime :refer :all]))
 
 ;; liar Async I/O Library

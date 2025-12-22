@@ -4,7 +4,7 @@
 ;; Compiles liar source to lIR output.
 
 (ns liarliar.main
-  (:require [liar.core :as core]
+  (:require [liar.prelude :as core]
             [liar.seq :refer [pcons pfirst prest]]
             [liarliar.io :as io]
             [liarliar.symbols :as sym]

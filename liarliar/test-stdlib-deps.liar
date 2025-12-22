@@ -14,7 +14,7 @@
 ;; 3. HashMap protocol dispatch (get/assoc) crashes - use hm-get/hm-assoc
 
 (ns liarliar.test-stdlib-deps
-  (:require [liar.core :refer :all]
+  (:require [liar.prelude :refer :all]
             [liar.seq :refer :all]
             [liar.hashmap :refer :all]))
 
@@ -59,11 +59,11 @@
                   (+ f1 (+ f2 (+ f3 f4))))))))))))
 
 ;; ============================================================
-;; Core Tests (liar.core)
+;; Prelude Tests (liar.prelude)
 ;; ============================================================
 
 ;; Test inc from core
-(defun test-core-inc () -> i64
+(defun test-prelude-inc () -> i64
   (assert-eq-int (inc (inc (inc 1))) 4 "inc chain"))
 
 ;; ============================================================
@@ -82,12 +82,12 @@
           (let ((hashmap-fails (test-hashmap-int-keys)))
             (do (if (= hashmap-fails 0) (println "  hashmap: OK") 0)
                 (println "")
-                (println "Testing liar.core...")
-                (let ((core-fails (test-core-inc)))
-                  (do (if (= core-fails 0) (println "  core: OK") 0)
-                      (println "")
-                      (let ((total (+ seq-fails (+ hashmap-fails core-fails))))
-                        (do (if (= total 0)
-                                (println "All tests passed!")
+    (println "Testing liar.prelude...")
+    (let ((prelude-fails (test-prelude-inc)))
+      (do (if (= prelude-fails 0) (println "  prelude: OK") 0)
+          (println "")
+          (let ((total (+ seq-fails (+ hashmap-fails prelude-fails))))
+            (do (if (= total 0)
+                    (println "All tests passed!")
                                 (println "Some tests FAILED"))
                             total))))))))))

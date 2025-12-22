@@ -25,19 +25,22 @@ pub fn compile_and_call_with_stdlib(
     // Build full source with optional stdlib
     let full_source = if with_stdlib {
         let lib_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../lib");
-        let core_path = format!("{}/liar.core.liar", lib_path);
+        let prelude_path = format!("{}/liar.prelude.liar", lib_path);
         let seq_path = format!("{}/liar.seq.liar", lib_path);
 
         let mut combined = String::new();
 
-        // Load core library (no dependencies)
-        if let Ok(core) = std::fs::read_to_string(&core_path) {
+        // Load prelude library (no dependencies)
+        if let Ok(prelude) = std::fs::read_to_string(&prelude_path) {
             // Strip namespace declaration for embedding
-            let stripped = strip_namespace(&core);
+            let stripped = strip_namespace(&prelude);
             combined.push_str(&stripped);
             combined.push('\n');
         } else {
-            return Err(format!("Failed to read core library from {}", core_path));
+            return Err(format!(
+                "Failed to read prelude library from {}",
+                prelude_path
+            ));
         }
 
         // Load seq library (depends on core)

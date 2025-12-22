@@ -7,7 +7,7 @@
 ;;   - Symbol visibility across namespaces
 
 (ns liarliar.namespace
-  (:require [liar.core :refer :all]
+  (:require [liar.prelude :refer :all]
             [liarliar.symbols :refer :all]
             [liarliar.value :refer :all]
             [liarliar.io :refer :all]
@@ -18,7 +18,7 @@
 ;; ============================================================
 
 ;; A require specification from (:require [mod :refer [...] :as alias])
-;; - mod-name: symbol for module name (e.g., liar.core)
+;; - mod-name: symbol for module name (e.g., liar.prelude)
 ;; - refer-all: 1 if :refer :all, 0 otherwise
 ;; - refer-list: list of symbols to refer (nil if :refer :all or none)
 ;; - alias: symbol for :as alias (nil if none)
@@ -222,7 +222,7 @@
 ;; ============================================================
 
 ;; Convert namespace name to file path
-;; liar.core -> lib/liar.core.liar (flat) or lib/liar/core.liar (hierarchical)
+;; liar.prelude -> lib/liar.prelude.liar (flat) or lib/liar/prelude.liar (hierarchical)
 ;; For now, just append .liar
 
 ;; Get string name from symbol or return as-is

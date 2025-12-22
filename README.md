@@ -254,7 +254,7 @@ A 1:1 mapping to LLVM IR with parentheses:
 Libraries in `lib/` use namespaced naming (`liar.{name}.liar`):
 
 ```lisp
-;; Core utilities (liar.core)
+;; Core utilities (liar.prelude)
 (inc x)           ; (+ x 1)
 (dec x)           ; (- x 1)
 (min a b)         ; smaller of a, b

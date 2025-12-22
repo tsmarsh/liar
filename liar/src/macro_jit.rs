@@ -3,8 +3,8 @@
 //! This module provides JIT compilation for macro bodies, allowing macros
 //! to call any liar function that's been defined before them.
 //!
-//! The stdlib is automatically loaded when the JIT is created, so macros
-//! can use all stdlib functions without any special handling.
+//! The prelude is automatically loaded when the JIT is created, so macros
+//! can use the macro-safe stdlib functions without any special handling.
 //!
 //! Requires the `jit-macros` feature.
 
@@ -18,8 +18,8 @@ use crate::error::{CompileError, Result};
 use crate::eval::Value;
 use crate::span::Span;
 
-/// Embedded stdlib source - loaded automatically by MacroJit
-const STDLIB_SOURCE: &str = include_str!("../../lib/liar.core.liar");
+/// Embedded prelude source - loaded automatically by MacroJit
+const STDLIB_SOURCE: &str = include_str!("../../lib/liar.prelude.liar");
 
 /// JIT context for macro evaluation
 ///
@@ -40,9 +40,9 @@ pub struct MacroJit<'ctx> {
 }
 
 impl<'ctx> MacroJit<'ctx> {
-    /// Create a new macro JIT context with stdlib pre-loaded
+    /// Create a new macro JIT context with the prelude pre-loaded
     ///
-    /// The stdlib is automatically compiled and available for macros to use.
+    /// The prelude is automatically compiled and available for macros to use.
     pub fn new(context: &'ctx Context) -> Result<Self> {
         let jit = IncrementalJit::new(context)
             .map_err(|e| CompileError::macro_error(Span::default(), format!("JIT init: {}", e)))?;
@@ -61,9 +61,9 @@ impl<'ctx> MacroJit<'ctx> {
         Ok(instance)
     }
 
-    /// Bootstrap the stdlib into the JIT
+    /// Bootstrap the prelude into the JIT
     ///
-    /// This compiles the stdlib functions so they're available to macros.
+    /// This compiles the prelude functions so they're available to macros.
     /// Functions that can't be JIT compiled (macros, closures) are skipped.
     fn bootstrap_stdlib(&mut self) -> Result<()> {
         // Filter out macros and closure-returning functions from stdlib

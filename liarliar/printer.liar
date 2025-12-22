@@ -4,7 +4,7 @@
 ;; Inverse of reader.liar: reader parses text -> SCons, printer prints SCons -> text.
 
 (ns liarliar.printer
-  (:require [liar.core :refer :all]
+  (:require [liar.prelude :refer :all]
             [liarliar.strings :refer :all]
             [liarliar.symbols :refer :all]
             [liarliar.value :refer :all]))
