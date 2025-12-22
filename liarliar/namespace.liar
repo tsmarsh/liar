@@ -272,13 +272,18 @@
 ;; Uses a simple list of symbol names for now
 (defstruct LoaderState
   (loader-lib-path: ptr       ;; Path to lib directory
-   loader-loaded: ptr))       ;; List of loaded module names (as strings)
+   loader-loaded: ptr         ;; List of loaded module names (as strings)
+   loader-macros: ptr))       ;; ExpandContext for macros/structs
 
-(defun make-loader-state (lib-path: ptr) -> ptr
-  (share (LoaderState lib-path nil)))
+(defun make-loader-state (lib-path: ptr macros: ptr) -> ptr
+  (share (LoaderState lib-path nil macros)))
 
 (defun loader-lib-path (ls: ptr) -> ptr (. ls loader-lib-path))
 (defun loader-loaded (ls: ptr) -> ptr (. ls loader-loaded))
+(defun loader-macros (ls: ptr) -> ptr (. ls loader-macros))
+
+(defun loader-set-macros (ls: ptr macros: ptr) -> ptr
+  (share (LoaderState (loader-lib-path ls) (loader-loaded ls) macros)))
 
 (defun loader-is-loaded? (ls: ptr name: ptr) -> i64
   (loader-is-loaded-loop (loader-loaded ls) name))
@@ -293,7 +298,7 @@
 (defun loader-mark-loaded (ls: ptr name: ptr) -> ptr
   (let ((old-loaded (loader-loaded ls))
         (new-loaded (pcons name old-loaded)))
-    (share (LoaderState (loader-lib-path ls) new-loaded))))
+    (share (LoaderState (loader-lib-path ls) new-loaded (loader-macros ls)))))
 
 ;; ============================================================
 ;; Check for ns form

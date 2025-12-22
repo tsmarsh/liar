@@ -75,13 +75,16 @@
                           (loader2 (val/pcons-head deps-result))
                           (deps-lir (val/pcons-tail deps-result)))
                       ;; Now compile this module
-                      (let ((expand-result (expand/expand-toplevel syms forms)))
+                      (let ((macro-ctx (nsp/loader-macros loader2))
+                            (expand-result (expand/expand-toplevel-with-ctx macro-ctx forms)))
                         (if (nil? expand-result)
                             (pcons loader2 deps-lir)
-                            (let ((expanded (val/pcons-tail expand-result))
+                            (let ((new-ctx (val/pcons-head expand-result))
+                                  (expanded (val/pcons-tail expand-result))
+                                  (loader3 (nsp/loader-set-macros loader2 new-ctx))
                                   (mod-lir (codegen/codegen-module expanded syms))
                                   (combined-lir (append-lir deps-lir mod-lir)))
-                              (pcons loader2 combined-lir))))))))))))
+                              (pcons loader3 combined-lir))))))))))))
 
 ;; Load multiple requires, returning (loader . lir)
 (defun load-requires (loader: ptr requires: ptr syms: ptr) -> ptr
@@ -117,11 +120,13 @@
         (do (println "Error: Failed to parse source") nil)
         ;; Load dependencies first
         (let ((requires (extract-requires forms))
-              (loader (nsp/make-loader-state "lib"))
+              (macro-ctx (expand/make-expand-context syms))
+              (loader (nsp/make-loader-state "lib" macro-ctx))
               (deps-result (load-requires loader requires syms))
+              (loader2 (val/pcons-head deps-result))
               (deps-lir (val/pcons-tail deps-result)))
           ;; Now compile main module
-          (let ((expand-result (expand/expand-toplevel syms forms)))
+          (let ((expand-result (expand/expand-toplevel-with-ctx (nsp/loader-macros loader2) forms)))
             (if (nil? expand-result)
                 (do (println "Error: Failed to expand macros") nil)
                 (let ((expanded (val/pcons-tail expand-result))
